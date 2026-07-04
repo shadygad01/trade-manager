@@ -398,6 +398,16 @@ Direct user follow-up: ORWE showed "Verified" in Import (its existing 89-share p
 - 2 new tests in `ImportPage.test.tsx` (`TickerGroupCard` shows "Confirm {ticker}" and fires the callback once matched; the button is absent while still unmatched) — 314 total.
 - Verified end-to-end against a real production build: seeded a batch with ORWE (matched: 89 existing + 88 new = 177, reconciling with a fresh broker screenshot) alongside ORHD (a genuine, unrelated 99-vs-74 mismatch) — confirmed the global button read "Confirm All Verified (1)" and was enabled (previously fully disabled), and that clicking "Confirm ORWE" committed exactly ORWE's 3 buys (89+20+45+23 = 177 shares total) while leaving ORHD completely untouched and still blocked.
 
+### Post-sprint-8 fix — a successfully committed row showed a false "Duplicate" badge against itself
+
+Direct user follow-up with screenshots: rows already marked "Added" (SKPC, ORWE — both freshly confirmed via the per-ticker Confirm button above) also showed a red "Duplicate" badge, which read as a contradiction — if it's genuinely a duplicate, why did it commit at all? Root cause: the per-row `duplicateMatch` check re-runs on every render against the live `existingTrades` list, which by the time a row shows "Added" already includes the real `Trade` that row's own commit just created — with identical ticker/date/shares/price by construction, so the row's own candidate always found an "exact" match against *itself*, not a genuine separate duplicate.
+
+- `duplicateMatch` (`ImportPage.tsx`) now accepts an optional `ownTradeId` and excludes that specific trade from the comparison pool. `TickerGroupCard` passes each Buy row's own `addedTradeIds[entry.key]` (already tracked for the auto-added-row delete feature) so a row only ever compares against *other* trades, never the one it just became.
+- Scoped to Buys, where this was confirmed and reproducible (`addedTradeIds` already exists for exactly this purpose). Sells don't track an equivalent allocation id yet, so this fix doesn't touch `CandidateRow` — no report of the same symptom there yet.
+- A genuine "possible duplicate" (different price, same ticker/date/shares as some *other* already-recorded trade) still keeps showing its badge after commit, unchanged — that persistence was always intentional, flagging a real look-alike worth a second look, not a false self-match.
+- 1 new test in `ImportPage.test.tsx` (asserts `duplicateMatch` is called with the row's own committed trade id, and that an added row shows no "Duplicate" text) — 315 total.
+- Verified end-to-end against a real production build: seeded and confirmed a closed-position SKPC-shaped ticker (two Buys + a Sell, matching the reported screenshot) and confirmed both committed Buy rows read "Added" with no "Duplicate" text anywhere on the card.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
