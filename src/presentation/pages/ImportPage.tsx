@@ -1417,7 +1417,15 @@ export function AutoCommitRow({
   /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
   suspectedDuplicate?: boolean;
   onDelete: () => void;
-  /** Discards this row from the pending pool outright — only relevant while it's still suspectedDuplicate and not yet added/skipped/dismissed. */
+  /**
+   * Discards this row from the pending pool outright — available on every
+   * still-pending row, not just ones auto-flagged as a suspected duplicate.
+   * A Mismatch banner's cause isn't always machine-detectable (see
+   * checkTickerMatch's alreadyFullyRecorded and the sibling/existing-trade
+   * duplicate checks — none catch every shape), so the user can manually
+   * try removing whichever row they judge to be the wrong/extra one and see
+   * if the ticker's total then reconciles against its broker screenshot.
+   */
   onDiscardPending?: () => void;
 }) {
   const c = entry.candidate;
@@ -1495,16 +1503,28 @@ export function AutoCommitRow({
           >
             <Trash2 size={12} /> Discard
           </button>
-        ) : !matched ? (
-          <span className="text-xs text-amber-300">Blocked — needs verification</span>
-        ) : !portfolioResolved ? (
-          <span className="text-xs text-slate-500">Waiting for portfolio</span>
-        ) : distributing ? (
-          <span className="flex items-center gap-1 text-xs text-slate-500">
-            <Loader2 size={13} className="animate-spin" /> Adding…
-          </span>
         ) : (
-          <span className="text-xs text-slate-500">Ready — click Confirm above</span>
+          <span className="flex items-center gap-1.5">
+            {!matched ? (
+              <span className="text-xs text-amber-300">Blocked — needs verification</span>
+            ) : !portfolioResolved ? (
+              <span className="text-xs text-slate-500">Waiting for portfolio</span>
+            ) : distributing ? (
+              <span className="flex items-center gap-1 text-xs text-slate-500">
+                <Loader2 size={13} className="animate-spin" /> Adding…
+              </span>
+            ) : (
+              <span className="text-xs text-slate-500">Ready — click Confirm above</span>
+            )}
+            <button
+              onClick={onDiscardPending}
+              disabled={distributing}
+              title="Remove this row from the pending list — nothing was committed, so there's nothing to refund. Useful when you suspect this specific row is the extra/wrong one behind a Mismatch."
+              className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 size={12} />
+            </button>
+          </span>
         )}
       </div>
       {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
@@ -1546,7 +1566,7 @@ export function CandidateRow({
   disabledReason?: string;
   /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
   suspectedDuplicate?: boolean;
-  /** Discards this row from the pending pool outright — only relevant while it's still suspectedDuplicate and not yet added. */
+  /** Discards this row from the pending pool outright — available on every still-pending row, not just ones auto-flagged as a suspected duplicate (see AutoCommitRow's onDiscardPending). */
   onDiscardPending?: () => void;
 }) {
   const c = entry.candidate;
@@ -1605,15 +1625,17 @@ export function CandidateRow({
           </span>
         ) : (
           <span className="flex items-center gap-1.5">
-            {canDiscard ? (
-              <button
-                onClick={onDiscardPending}
-                title="Discard this duplicate row — it was never committed, so there's nothing to refund"
-                className="rounded p-1 text-rose-300 hover:bg-rose-500/10"
-              >
-                <Trash2 size={13} />
-              </button>
-            ) : null}
+            <button
+              onClick={onDiscardPending}
+              title={
+                canDiscard
+                  ? "Discard this duplicate row — it was never committed, so there's nothing to refund"
+                  : "Remove this row from the pending list — nothing was committed, so there's nothing to refund. Useful when you suspect this specific row is the extra/wrong one behind a Mismatch."
+              }
+              className={`rounded p-1 hover:bg-rose-500/10 ${canDiscard ? "text-rose-300" : "text-slate-500 hover:text-rose-400"}`}
+            >
+              <Trash2 size={13} />
+            </button>
             <button
               onClick={onAction}
               disabled={disabled}

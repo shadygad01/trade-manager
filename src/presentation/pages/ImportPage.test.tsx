@@ -391,6 +391,44 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
     expect(screen.queryByText("Suspected duplicate")).not.toBeInTheDocument();
     expect(screen.queryByText("Discard")).not.toBeInTheDocument();
   });
+
+  it("lets the user manually remove any unflagged pending row on an otherwise-unresolvable Mismatch (the ORHD case)", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
+    const entry = buyEntry("orhd-suspect");
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [entry], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 99, verifiedUnits: 74 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={onDiscardPending}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.queryByText("Suspected duplicate")).not.toBeInTheDocument();
+    const removeButton = screen.getByTitle(/remove this row from the pending list/i);
+    await user.click(removeButton);
+    expect(onDiscardPending).toHaveBeenCalledWith(entry);
+  });
 });
 
 describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (the EAST/ORAS mismatch case)", () => {
