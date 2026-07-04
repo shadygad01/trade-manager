@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reconcilePositions } from "./reconciliation";
+import { reconcilePositions, suggestDuplicateTradeId } from "./reconciliation";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
@@ -90,5 +90,33 @@ describe("reconcilePositions", () => {
   it("skips tickers with no verification at all", () => {
     const results = reconcilePositions([position("HRHO", 10)], [], [], []);
     expect(results).toHaveLength(0);
+  });
+});
+
+describe("suggestDuplicateTradeId", () => {
+  it("picks the lowest-priced deletable trade as the suspected duplicate", () => {
+    const suggested = suggestDuplicateTradeId([
+      { id: "t1", entryPrice: 50, shares: 100, remainingShares: 100 },
+      { id: "t2", entryPrice: 48, shares: 100, remainingShares: 100 },
+      { id: "t3", entryPrice: 55, shares: 100, remainingShares: 100 },
+    ]);
+    expect(suggested).toBe("t2");
+  });
+
+  it("never suggests a trade that already has shares sold against it", () => {
+    const suggested = suggestDuplicateTradeId([
+      { id: "t1", entryPrice: 10, shares: 100, remainingShares: 40 },
+      { id: "t2", entryPrice: 50, shares: 100, remainingShares: 100 },
+    ]);
+    expect(suggested).toBe("t2");
+  });
+
+  it("returns undefined when nothing is deletable", () => {
+    const suggested = suggestDuplicateTradeId([{ id: "t1", entryPrice: 10, shares: 100, remainingShares: 40 }]);
+    expect(suggested).toBeUndefined();
+  });
+
+  it("returns undefined for an empty list", () => {
+    expect(suggestDuplicateTradeId([])).toBeUndefined();
   });
 });

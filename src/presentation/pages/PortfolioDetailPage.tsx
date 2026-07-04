@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2 } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { computePositions, deleteTrade } from "@application/services/TradeService";
 import {
@@ -13,8 +13,10 @@ import {
   recordRightsIssue,
   archivePortfolio,
   unarchivePortfolio,
+  renamePortfolio,
 } from "@application/services/PortfolioService";
-import { reconcilePositions } from "@application/services/reconciliation";
+import { reconcilePositions, suggestDuplicateTradeId } from "@application/services/reconciliation";
+import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
@@ -30,6 +32,7 @@ export function PortfolioDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [cashModal, setCashModal] = useState<CashModalKind>(null);
   const [corporateActionOpen, setCorporateActionOpen] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<{ tradeId: string; message: string } | null>(null);
   // Deleting a trade doesn't reliably retrigger dexie-react-hooks' liveQuery
   // for this page's positions/reconciliation (a pre-existing gap, not
@@ -88,6 +91,12 @@ export function PortfolioDetailPage() {
         description={`${portfolio.kind === "Custom" ? portfolio.customKindLabel || "Custom" : portfolio.kind} · ${portfolio.currency}`}
         actions={
           <>
+            <button
+              onClick={() => setRenameOpen(true)}
+              className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+            >
+              <Pencil size={16} /> Rename
+            </button>
             <button
               onClick={() => setCashModal("deposit")}
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
@@ -216,42 +225,58 @@ export function PortfolioDetailPage() {
                       ) : r.verificationStale ? (
                         <span className="text-xs text-slate-500">Verification outdated</span>
                       ) : r.quantityMismatch ? (
-                        <div className="flex flex-col gap-1.5">
-                          <span className="flex items-center gap-1 text-xs text-rose-400">
-                            <ShieldAlert size={13} /> {formatShares(p.totalShares)} vs {formatShares(r.verifiedUnits)} verified
-                          </span>
-                          <p className="text-[11px] text-slate-500">
-                            Likely a duplicate import — delete the offending buy below, then this should match on its own.
-                          </p>
-                          <ul className="space-y-1">
-                            {p.openTrades.map((t) => {
-                              const deletable = t.remainingShares === t.shares;
-                              return (
-                                <li key={t.id} className="flex items-center gap-2 text-[11px] text-slate-400">
-                                  <span className="tabular-nums">
-                                    {formatShares(t.shares)} sh @ {formatMoney(t.entryPrice)} · {formatDate(t.executionDate)}
-                                  </span>
-                                  {deletable ? (
-                                    <button
-                                      onClick={() => void handleDeleteTrade(t.id)}
-                                      title="Delete this trade and refund its cost"
-                                      className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
+                        (() => {
+                          const suggestedId = suggestDuplicateTradeId(p.openTrades);
+                          return (
+                            <div className="flex flex-col gap-1.5">
+                              <span className="flex items-center gap-1 text-xs text-rose-400">
+                                <ShieldAlert size={13} /> {formatShares(p.totalShares)} vs {formatShares(r.verifiedUnits)} verified
+                              </span>
+                              <p className="text-[11px] text-slate-500">
+                                Likely a duplicate import — delete the suspected duplicate below, then this should match on its own.
+                              </p>
+                              <ul className="space-y-1">
+                                {p.openTrades.map((t) => {
+                                  const deletable = t.remainingShares === t.shares;
+                                  const suspected = t.id === suggestedId;
+                                  return (
+                                    <li
+                                      key={t.id}
+                                      className={`flex items-center gap-2 rounded px-1 py-0.5 text-[11px] ${
+                                        suspected ? "bg-rose-500/10 text-rose-300" : "text-slate-400"
+                                      }`}
                                     >
-                                      <Trash2 size={12} />
-                                    </button>
-                                  ) : (
-                                    <span title="Has shares sold against it — can't be deleted" className="text-slate-700">
-                                      <Trash2 size={12} />
-                                    </span>
-                                  )}
-                                </li>
-                              );
-                            })}
-                          </ul>
-                          {deleteError && p.openTrades.some((t) => t.id === deleteError.tradeId) ? (
-                            <p className="text-[11px] text-rose-400">{deleteError.message}</p>
-                          ) : null}
-                        </div>
+                                      <span className="tabular-nums">
+                                        {formatShares(t.shares)} sh @ {formatMoney(t.entryPrice)} · {formatDate(t.executionDate)}
+                                      </span>
+                                      {suspected ? (
+                                        <span className="flex items-center gap-1 font-medium">
+                                          <ShieldAlert size={11} /> Suspected duplicate
+                                        </span>
+                                      ) : null}
+                                      {deletable ? (
+                                        <button
+                                          onClick={() => void handleDeleteTrade(t.id)}
+                                          title="Delete this trade and refund its cost"
+                                          className={`rounded p-1 hover:bg-rose-500/10 hover:text-rose-400 ${suspected ? "text-rose-400" : "text-slate-500"}`}
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
+                                      ) : (
+                                        <span title="Has shares sold against it — can't be deleted" className="text-slate-700">
+                                          <Trash2 size={12} />
+                                        </span>
+                                      )}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                              {deleteError && p.openTrades.some((t) => t.id === deleteError.tradeId) ? (
+                                <p className="text-[11px] text-rose-400">{deleteError.message}</p>
+                              ) : null}
+                            </div>
+                          );
+                        })()
                       ) : r.quantityShortfall ? (
                         <span className="flex items-center gap-1 text-xs text-amber-400">
                           <ShieldAlert size={13} /> Missing {formatShares(r.verifiedUnits - p.totalShares)} shares
@@ -291,7 +316,90 @@ export function PortfolioDetailPage() {
 
       <CashModal kind={cashModal} portfolioId={portfolio.id} onClose={() => setCashModal(null)} />
       <CorporateActionModal open={corporateActionOpen} portfolioId={portfolio.id} onClose={() => setCorporateActionOpen(false)} />
+      <RenamePortfolioModal
+        open={renameOpen}
+        portfolioId={portfolio.id}
+        currentName={portfolio.name}
+        onClose={() => setRenameOpen(false)}
+      />
     </div>
+  );
+}
+
+function RenamePortfolioModal({
+  open,
+  portfolioId,
+  currentName,
+  onClose,
+}: {
+  open: boolean;
+  portfolioId: string;
+  currentName: string;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(currentName);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) setName(currentName);
+  }, [open, currentName]);
+
+  async function handleSubmit() {
+    if (!name.trim()) {
+      setError("Enter a name.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await renamePortfolio(repos, portfolioId, name);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Rename failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="Rename Portfolio"
+      open={open}
+      onClose={() => {
+        setName(currentName);
+        setError(null);
+        onClose();
+      }}
+    >
+      <div className="space-y-3">
+        <label className="block text-xs text-slate-400 space-y-1">
+          Name
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleSubmit();
+            }}
+            className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+          />
+        </label>
+        {error ? <p className="text-sm text-rose-400">{error}</p> : null}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
+            Cancel
+          </button>
+          <button
+            onClick={() => void handleSubmit()}
+            disabled={submitting}
+            className="rounded-md bg-cyan-500 px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -381,6 +489,7 @@ function CashModal({
               Date paid (optional — defaults to now)
               <input
                 type="date"
+                min={TRACKING_START_DATE}
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"

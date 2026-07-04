@@ -79,3 +79,19 @@ export function reconcilePositions(
   }
   return results;
 }
+
+/**
+ * When a ticker's computed share count exceeds the broker's verified units
+ * (quantityMismatch), one of the open trades is almost always the extra fill
+ * from a duplicate import. The same real trade parsed from two documents
+ * tends to differ only by which one's price rounding won, so the
+ * lower-priced read is the more likely duplicate to delete, leaving the
+ * higher (more plausible, post-commission) price on the ledger. Only
+ * considers trades with nothing sold against them yet — a partially/fully
+ * closed trade can't be deleted outright.
+ */
+export function suggestDuplicateTradeId(openTrades: { id: string; entryPrice: number; shares: number; remainingShares: number }[]): string | undefined {
+  const deletable = openTrades.filter((t) => t.remainingShares === t.shares);
+  if (deletable.length === 0) return undefined;
+  return deletable.reduce((lowest, t) => (t.entryPrice < lowest.entryPrice ? t : lowest)).id;
+}

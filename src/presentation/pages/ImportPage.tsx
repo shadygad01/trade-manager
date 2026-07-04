@@ -4,13 +4,11 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, Pencil, Trash2, XCircle } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
-import { recordDividend, deposit } from "@application/services/PortfolioService";
-import { InsufficientCashError } from "@application/services/errors";
+import { recordDividend } from "@application/services/PortfolioService";
 import { findDuplicateBuyMatch, findDuplicateSellMatch } from "@application/services/duplicateDetection";
 import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
-import { Money } from "@domain/value-objects/Money";
 import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
 import {
   importSession,
@@ -89,7 +87,6 @@ export function ImportPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [sellCandidate, setSellCandidate] = useState<{ key: string; ticker: string; portfolioId: string; candidate: ParsedTradeCandidate } | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
-  const [cashShortfalls, setCashShortfalls] = useState<Record<string, { portfolioId: string; shortfall: number }>>({});
   const [distributing, setDistributing] = useState(false);
 
   const session = useImportSession();
@@ -287,29 +284,9 @@ export function ImportPage() {
       delete next[key];
       return next;
     });
-    setCashShortfalls((prev) => {
-      if (!(key in prev)) return prev;
-      const next = { ...prev };
-      delete next[key];
-      return next;
-    });
   }
 
   function setRowError(key: string, e: unknown) {
-    if (e instanceof InsufficientCashError) {
-      // A structured shortfall gets its own recovery action (deposit + retry)
-      // instead of just a dead-end message — most common when backfilling
-      // historical trades into a portfolio whose deposits aren't all in yet.
-      const shortfall = Money.from(e.required).subtract(Money.from(e.available)).toNumber();
-      setCashShortfalls((prev) => ({ ...prev, [key]: { portfolioId: e.portfolioId, shortfall } }));
-      setRowErrors((prev) => {
-        if (!(key in prev)) return prev;
-        const next = { ...prev };
-        delete next[key];
-        return next;
-      });
-      return;
-    }
     setRowErrors((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : "Something went wrong." }));
   }
 
@@ -337,18 +314,6 @@ export function ImportPage() {
     } catch (e) {
       setRowError(entry.key, e);
     }
-  }
-
-  async function depositShortfallAndRetry(entry: CandidateEntry, ticker: string) {
-    const info = cashShortfalls[entry.key];
-    if (!info) return;
-    try {
-      await deposit(repos, info.portfolioId, info.shortfall, "Auto top-up for historical import");
-    } catch (e) {
-      setRowError(entry.key, e);
-      return;
-    }
-    await addBuyCandidate(entry, ticker);
   }
 
   /**
@@ -829,10 +794,7 @@ export function ImportPage() {
                 skippedKeys={skippedKeys}
                 dismissedKeys={dismissedKeys}
                 rowErrors={rowErrors}
-                cashShortfalls={cashShortfalls}
-                portfolioName={(id) => portfolios.find((p) => p.id === id)?.name ?? "this portfolio"}
                 duplicateMatch={duplicateMatch}
-                onDepositShortfallAndRetry={(entry) => void depositShortfallAndRetry(entry, ticker)}
                 onDeleteAutoAdded={(entry) => void deleteAutoAddedTrade(entry)}
                 onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
                 onRenameTicker={(newTicker) => void renameTickerGroup(ticker, newTicker)}
@@ -889,10 +851,7 @@ function TickerGroupCard({
   skippedKeys,
   dismissedKeys,
   rowErrors,
-  cashShortfalls,
-  portfolioName,
   duplicateMatch,
-  onDepositShortfallAndRetry,
   onDeleteAutoAdded,
   onAllocateSell,
   onRenameTicker,
@@ -915,10 +874,7 @@ function TickerGroupCard({
   skippedKeys: Set<string>;
   dismissedKeys: Set<string>;
   rowErrors: Record<string, string>;
-  cashShortfalls: Record<string, { portfolioId: string; shortfall: number }>;
-  portfolioName: (portfolioId: string) => string;
   duplicateMatch: (candidate: ParsedTradeCandidate) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
-  onDepositShortfallAndRetry: (entry: CandidateEntry) => void;
   onDeleteAutoAdded: (entry: CandidateEntry) => void;
   onAllocateSell: (entry: CandidateEntry) => void;
   onRenameTicker: (newTicker: string) => void;
@@ -1052,15 +1008,6 @@ function TickerGroupCard({
               matched={matched}
               distributing={distributing}
               error={rowErrors[entry.key]}
-              shortfall={
-                cashShortfalls[entry.key]
-                  ? {
-                      amount: cashShortfalls[entry.key].shortfall,
-                      portfolioName: portfolioName(cashShortfalls[entry.key].portfolioId),
-                      onDepositAndRetry: () => onDepositShortfallAndRetry(entry),
-                    }
-                  : undefined
-              }
               onDelete={() => onDeleteAutoAdded(entry)}
             />
           );
@@ -1156,6 +1103,13 @@ function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
       </span>
     );
   }
+  if (status.reason === "closed-position") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+        <ShieldCheck size={11} /> Sold out — no screenshot needed
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
       <ShieldCheck size={11} /> Verified
@@ -1183,7 +1137,6 @@ export function AutoCommitRow({
   matched,
   distributing,
   error,
-  shortfall,
   onDelete,
 }: {
   entry: CandidateEntry;
@@ -1197,7 +1150,6 @@ export function AutoCommitRow({
   /** True while confirmAndDistributeAll is actively committing this row's batch. */
   distributing: boolean;
   error?: string;
-  shortfall?: { amount: number; portfolioName: string; onDepositAndRetry: () => void };
   onDelete: () => void;
 }) {
   const c = entry.candidate;
@@ -1271,19 +1223,6 @@ export function AutoCommitRow({
         )}
       </div>
       {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
-      {shortfall ? (
-        <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
-          <p className="text-xs text-amber-300">
-            {shortfall.portfolioName} is short {formatMoney(shortfall.amount)} for this buy.
-          </p>
-          <button
-            onClick={shortfall.onDepositAndRetry}
-            className="rounded-md border border-amber-400/40 px-2 py-0.5 text-xs font-medium text-amber-300 hover:bg-amber-500/10"
-          >
-            Deposit {formatMoney(shortfall.amount)} &amp; add
-          </button>
-        </div>
-      ) : null}
     </div>
   );
 }

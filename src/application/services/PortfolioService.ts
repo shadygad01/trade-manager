@@ -3,7 +3,7 @@ import { createTimelineEvent } from "@domain/entities/TimelineEvent";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
-import { InsufficientCashError } from "./errors";
+import { TRACKING_START_DATE, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
 
 export interface CreatePortfolioInput {
@@ -48,6 +48,25 @@ export async function unarchivePortfolio(repos: AppRepositories, portfolioId: st
   return updated;
 }
 
+/** Renaming is just a label change — trades, cash, and history are untouched, and it works the same whether or not the portfolio already has recorded transactions. */
+export async function renamePortfolio(repos: AppRepositories, portfolioId: string, name: string): Promise<Portfolio> {
+  const trimmed = name.trim();
+  if (!trimmed) {
+    throw new Error("portfolio name must not be empty");
+  }
+  const portfolio = await requirePortfolio(repos, portfolioId);
+  const updated = { ...portfolio, name: trimmed };
+  await repos.portfolios.save(updated);
+  return updated;
+}
+
+/**
+ * Cash is a supplementary figure, not a gate: it can go negative rather than
+ * blocking a withdrawal, deposit, buy, or portfolio move. It exists to show
+ * the balance an investor intends to work with, not to verify that a trade
+ * actually happened — the broker screenshot/invoice is the source of truth
+ * for that.
+ */
 export async function deposit(
   repos: AppRepositories,
   portfolioId: string,
@@ -85,14 +104,6 @@ export async function withdraw(
   const portfolio = await requirePortfolio(repos, portfolioId);
   const currentCash = Money.from(portfolio.cash);
   const withdrawAmount = Money.from(amount);
-  if (withdrawAmount.greaterThan(currentCash)) {
-    throw new InsufficientCashError(
-      portfolioId,
-      withdrawAmount.toNumber(),
-      currentCash.toNumber(),
-      `Insufficient cash in portfolio ${portfolioId}: have ${currentCash.toFixed()}, want ${withdrawAmount.toFixed()}`
-    );
-  }
   const updated = { ...portfolio, cash: currentCash.subtract(withdrawAmount).toNumber() };
   await repos.portfolios.save(updated);
   await repos.timeline.save(
@@ -123,6 +134,9 @@ export async function recordDividend(
 ): Promise<Portfolio> {
   if (input.amount <= 0) {
     throw new Error("dividend amount must be positive");
+  }
+  if (input.date && isBeforeTrackingStart(input.date)) {
+    throw new Error(`Transactions before ${TRACKING_START_DATE} are not tracked: got ${input.date}`);
   }
   const portfolio = await requirePortfolio(repos, portfolioId);
   const updated = { ...portfolio, cash: Money.from(portfolio.cash).add(Money.from(input.amount)).toNumber() };
