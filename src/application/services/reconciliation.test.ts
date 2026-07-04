@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reconcilePositions, suggestDuplicateTradeId } from "./reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds } from "./reconciliation";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
@@ -93,30 +93,72 @@ describe("reconcilePositions", () => {
   });
 });
 
-describe("suggestDuplicateTradeId", () => {
-  it("picks the lowest-priced deletable trade as the suspected duplicate", () => {
-    const suggested = suggestDuplicateTradeId([
-      { id: "t1", entryPrice: 50, shares: 100, remainingShares: 100 },
-      { id: "t2", entryPrice: 48, shares: 100, remainingShares: 100 },
-      { id: "t3", entryPrice: 55, shares: 100, remainingShares: 100 },
-    ]);
-    expect(suggested).toBe("t2");
+describe("suggestDuplicateTradeIds", () => {
+  it("picks the single lowest-priced deletable trade when only one duplicate exists", () => {
+    const suggested = suggestDuplicateTradeIds({
+      openTrades: [
+        { id: "t1", entryPrice: 50, shares: 100, remainingShares: 100 },
+        { id: "t2", entryPrice: 48, shares: 100, remainingShares: 100 },
+        { id: "t3", entryPrice: 55, shares: 100, remainingShares: 100 },
+      ],
+      computedShares: 300,
+      verifiedUnits: 200,
+    });
+    expect(suggested).toEqual(["t2"]);
+  });
+
+  it("returns every trade needed to close a gap spanning more than one duplicate", () => {
+    // Three 100-share buys (t1 kept, t2/t3 duplicates) computed at 300 vs. a
+    // broker-verified 100 — both duplicates must go in one pass, not just one.
+    const suggested = suggestDuplicateTradeIds({
+      openTrades: [
+        { id: "t1", entryPrice: 50, shares: 100, remainingShares: 100 },
+        { id: "t2", entryPrice: 48, shares: 100, remainingShares: 100 },
+        { id: "t3", entryPrice: 47, shares: 100, remainingShares: 100 },
+      ],
+      computedShares: 300,
+      verifiedUnits: 100,
+    });
+    expect(suggested.sort()).toEqual(["t2", "t3"]);
   });
 
   it("never suggests a trade that already has shares sold against it", () => {
-    const suggested = suggestDuplicateTradeId([
-      { id: "t1", entryPrice: 10, shares: 100, remainingShares: 40 },
-      { id: "t2", entryPrice: 50, shares: 100, remainingShares: 100 },
-    ]);
-    expect(suggested).toBe("t2");
+    const suggested = suggestDuplicateTradeIds({
+      openTrades: [
+        { id: "t1", entryPrice: 10, shares: 100, remainingShares: 40 },
+        { id: "t2", entryPrice: 50, shares: 100, remainingShares: 100 },
+      ],
+      computedShares: 200,
+      verifiedUnits: 100,
+    });
+    expect(suggested).toEqual(["t2"]);
   });
 
-  it("returns undefined when nothing is deletable", () => {
-    const suggested = suggestDuplicateTradeId([{ id: "t1", entryPrice: 10, shares: 100, remainingShares: 40 }]);
-    expect(suggested).toBeUndefined();
+  it("skips a trade that would undershoot into a shortfall, trying a different one instead", () => {
+    // Gap is 50, but the lowest-priced trade is 100 shares — removing it
+    // would leave 250 computed vs. 300 verified (a new shortfall), so it's
+    // skipped in favor of the 50-share trade that closes the gap exactly.
+    const suggested = suggestDuplicateTradeIds({
+      openTrades: [
+        { id: "big", entryPrice: 10, shares: 100, remainingShares: 100 },
+        { id: "exact", entryPrice: 20, shares: 50, remainingShares: 50 },
+      ],
+      computedShares: 350,
+      verifiedUnits: 300,
+    });
+    expect(suggested).toEqual(["exact"]);
   });
 
-  it("returns undefined for an empty list", () => {
-    expect(suggestDuplicateTradeId([])).toBeUndefined();
+  it("returns an empty list when nothing is deletable", () => {
+    const suggested = suggestDuplicateTradeIds({
+      openTrades: [{ id: "t1", entryPrice: 10, shares: 100, remainingShares: 40 }],
+      computedShares: 100,
+      verifiedUnits: 0,
+    });
+    expect(suggested).toEqual([]);
+  });
+
+  it("returns an empty list for an empty trade list", () => {
+    expect(suggestDuplicateTradeIds({ openTrades: [], computedShares: 0, verifiedUnits: 0 })).toEqual([]);
   });
 });

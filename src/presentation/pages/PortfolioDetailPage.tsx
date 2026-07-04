@@ -15,7 +15,7 @@ import {
   unarchivePortfolio,
   renamePortfolio,
 } from "@application/services/PortfolioService";
-import { reconcilePositions, suggestDuplicateTradeId } from "@application/services/reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds } from "@application/services/reconciliation";
 import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
@@ -86,17 +86,22 @@ export function PortfolioDetailPage() {
   const unrealizedPnl = positions.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
   const unrealizedPnlPct = costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0;
 
-  // Every ticker currently showing a quantityMismatch has (at most) one
-  // suggested duplicate (see suggestDuplicateTradeId) — collecting all of
-  // them lets "Clear all suspected duplicates" resolve every mismatched
-  // ticker in one click instead of one delete per ticker.
-  const suspectedDuplicateIds = positions
-    .map((p) => {
+  // A mismatched ticker can have more than one duplicate (the same statement
+  // re-uploaded more than twice) — suggestDuplicateTradeIds returns every
+  // trade needed to close that ticker's whole gap, not just one, so this map
+  // (and therefore "Clear all suspected duplicates") fully resolves every
+  // mismatched ticker in a single pass rather than needing repeated clicks.
+  const suspectedDuplicateIdsByTicker = new Map(
+    positions.map((p) => {
       const r = reconciliationByTicker.get(p.ticker);
-      if (!r || r.verificationStale || !r.quantityMismatch) return undefined;
-      return suggestDuplicateTradeId(p.openTrades);
+      const ids =
+        r && !r.verificationStale && r.quantityMismatch
+          ? suggestDuplicateTradeIds({ openTrades: p.openTrades, computedShares: r.computedShares, verifiedUnits: r.verifiedUnits })
+          : [];
+      return [p.ticker, ids] as const;
     })
-    .filter((tradeId): tradeId is string => tradeId !== undefined);
+  );
+  const suspectedDuplicateIds = [...suspectedDuplicateIdsByTicker.values()].flat();
 
   async function handleClearAllSuspectedDuplicates() {
     if (suspectedDuplicateIds.length === 0) return;
@@ -281,19 +286,19 @@ export function PortfolioDetailPage() {
                         <span className="text-xs text-slate-500">Verification outdated</span>
                       ) : r.quantityMismatch ? (
                         (() => {
-                          const suggestedId = suggestDuplicateTradeId(p.openTrades);
+                          const suggestedIds = new Set(suspectedDuplicateIdsByTicker.get(p.ticker) ?? []);
                           return (
                             <div className="flex flex-col gap-1.5">
                               <span className="flex items-center gap-1 text-xs text-rose-400">
                                 <ShieldAlert size={13} /> {formatShares(p.totalShares)} vs {formatShares(r.verifiedUnits)} verified
                               </span>
                               <p className="text-[11px] text-slate-500">
-                                Likely a duplicate import — delete the suspected duplicate below, then this should match on its own.
+                                Likely a duplicate import — delete the suspected duplicate{suggestedIds.size === 1 ? "" : "s"} below, then this should match on its own.
                               </p>
                               <ul className="space-y-1">
                                 {p.openTrades.map((t) => {
                                   const deletable = t.remainingShares === t.shares;
-                                  const suspected = t.id === suggestedId;
+                                  const suspected = suggestedIds.has(t.id);
                                   return (
                                     <li
                                       key={t.id}

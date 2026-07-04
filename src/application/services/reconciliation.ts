@@ -82,16 +82,38 @@ export function reconcilePositions(
 
 /**
  * When a ticker's computed share count exceeds the broker's verified units
- * (quantityMismatch), one of the open trades is almost always the extra fill
- * from a duplicate import. The same real trade parsed from two documents
- * tends to differ only by which one's price rounding won, so the
- * lower-priced read is the more likely duplicate to delete, leaving the
- * higher (more plausible, post-commission) price on the ledger. Only
- * considers trades with nothing sold against them yet — a partially/fully
- * closed trade can't be deleted outright.
+ * (quantityMismatch), one or more of the open trades is almost always an
+ * extra fill from a duplicate import — the same statement re-uploaded more
+ * than once produces more than one duplicate of the same real trade, not
+ * just one. The same real trade parsed from two documents tends to differ
+ * only by which one's price rounding won, so the lower-priced reads are the
+ * more likely duplicates to delete, leaving the highest (most plausible,
+ * post-commission) price on the ledger.
+ *
+ * Returns every trade needed to close the whole gap in one pass — not just
+ * the single lowest-priced one — by removing lowest-priced deletable trades
+ * (nothing sold against them yet) until computed shares reach the verified
+ * count. Skips a trade that would remove more shares than the remaining gap
+ * (which would turn the mismatch into a shortfall instead of resolving it)
+ * and tries the next-lowest-priced one instead, so a caller can safely
+ * delete every returned id without ever overshooting.
  */
-export function suggestDuplicateTradeId(openTrades: { id: string; entryPrice: number; shares: number; remainingShares: number }[]): string | undefined {
-  const deletable = openTrades.filter((t) => t.remainingShares === t.shares);
-  if (deletable.length === 0) return undefined;
-  return deletable.reduce((lowest, t) => (t.entryPrice < lowest.entryPrice ? t : lowest)).id;
+export function suggestDuplicateTradeIds(params: {
+  openTrades: { id: string; entryPrice: number; shares: number; remainingShares: number }[];
+  computedShares: number;
+  verifiedUnits: number;
+}): string[] {
+  const deletable = [...params.openTrades]
+    .filter((t) => t.remainingShares === t.shares)
+    .sort((a, b) => a.entryPrice - b.entryPrice);
+
+  const ids: string[] = [];
+  let remaining = params.computedShares;
+  for (const t of deletable) {
+    if (remaining <= params.verifiedUnits) break;
+    if (remaining - t.shares < params.verifiedUnits) continue;
+    ids.push(t.id);
+    remaining -= t.shares;
+  }
+  return ids;
 }
