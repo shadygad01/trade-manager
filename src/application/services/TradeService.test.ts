@@ -1,7 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
-import { recordBuy, recordSell, computePositions, moveTrade, deleteTrade, renameTickerEverywhere } from "./TradeService";
+import {
+  recordBuy,
+  recordSell,
+  computePositions,
+  moveTrade,
+  deleteTrade,
+  renameTickerEverywhere,
+  findTickersSplitAcrossPortfolios,
+  consolidateTicker,
+} from "./TradeService";
 
 function seedPortfolio(cash: number) {
   return createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: cash });
@@ -643,5 +652,79 @@ describe("moveTrade", () => {
   it("throws for an unknown trade", async () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
     await expect(moveTrade(repos, "missing", "p1")).rejects.toThrow(/not found/i);
+  });
+});
+
+describe("findTickersSplitAcrossPortfolios", () => {
+  it("flags a ticker held (nonzero remaining shares) in more than one portfolio", async () => {
+    const repos = createFakeRepositories({
+      portfolios: [seedPortfolio(10_000), createPortfolio({ id: "p2", name: "Other", kind: "Trading", initialCash: 10_000 })],
+    });
+    await recordBuy(repos, { portfolioId: "p1", ticker: "COMI", shares: 50, entryPrice: 40, executionDate: "2026-01-05", executionTime: "10:00" });
+    await recordBuy(repos, { portfolioId: "p2", ticker: "COMI", shares: 30, entryPrice: 42, executionDate: "2026-01-06", executionTime: "10:00" });
+    await recordBuy(repos, { portfolioId: "p1", ticker: "HRHO", shares: 20, entryPrice: 15, executionDate: "2026-01-05", executionTime: "10:00" });
+
+    const trades = await repos.trades.getAll();
+    const splits = findTickersSplitAcrossPortfolios(trades);
+
+    expect(splits).toHaveLength(1);
+    expect(splits[0].ticker).toBe("COMI");
+    expect(new Map(splits[0].portfolios.map((p) => [p.portfolioId, p.shares]))).toEqual(
+      new Map([
+        ["p1", 50],
+        ["p2", 30],
+      ])
+    );
+  });
+
+  it("does not flag a ticker that's fully closed in one of the two portfolios", async () => {
+    const repos = createFakeRepositories({
+      portfolios: [seedPortfolio(10_000), createPortfolio({ id: "p2", name: "Other", kind: "Trading", initialCash: 10_000 })],
+    });
+    const { trade } = await recordBuy(repos, { portfolioId: "p1", ticker: "COMI", shares: 50, entryPrice: 40, executionDate: "2026-01-05", executionTime: "10:00" });
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [{ tradeId: trade.id, shares: 50, exitPrice: 45 }],
+      executionDate: "2026-02-01",
+      executionTime: "10:00",
+    });
+    await recordBuy(repos, { portfolioId: "p2", ticker: "COMI", shares: 30, entryPrice: 42, executionDate: "2026-01-06", executionTime: "10:00" });
+
+    const trades = await repos.trades.getAll();
+    expect(findTickersSplitAcrossPortfolios(trades)).toHaveLength(0);
+  });
+});
+
+describe("consolidateTicker", () => {
+  it("moves every trade and verification for a ticker into the target portfolio", async () => {
+    const repos = createFakeRepositories({
+      portfolios: [seedPortfolio(10_000), createPortfolio({ id: "p2", name: "Other", kind: "Trading", initialCash: 10_000 })],
+    });
+    const first = await recordBuy(repos, { portfolioId: "p1", ticker: "COMI", shares: 50, entryPrice: 40, executionDate: "2026-01-05", executionTime: "10:00" });
+    const second = await recordBuy(repos, { portfolioId: "p2", ticker: "COMI", shares: 30, entryPrice: 42, executionDate: "2026-01-06", executionTime: "10:00" });
+    await repos.verifications.save({ id: "v1", portfolioId: "p2", ticker: "COMI", units: 80, capturedAt: "2026-06-01T00:00", source: "screenshot" });
+
+    const result = await consolidateTicker(repos, "COMI", "p1");
+
+    expect(new Set(result.movedTradeIds)).toEqual(new Set([second.trade.id]));
+    expect(result.movedVerificationIds).toEqual(["v1"]);
+
+    const allTrades = await repos.trades.getAll();
+    expect(allTrades.every((t) => t.portfolioId === "p1")).toBe(true);
+    expect((await repos.trades.getById(first.trade.id))?.portfolioId).toBe("p1");
+    expect((await repos.trades.getById(second.trade.id))?.portfolioId).toBe("p1");
+
+    const verifications = await repos.verifications.getAll();
+    expect(verifications[0].portfolioId).toBe("p1");
+  });
+
+  it("is a no-op for trades/verifications already in the target portfolio", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    await recordBuy(repos, { portfolioId: "p1", ticker: "COMI", shares: 50, entryPrice: 40, executionDate: "2026-01-05", executionTime: "10:00" });
+
+    const result = await consolidateTicker(repos, "COMI", "p1");
+    expect(result.movedTradeIds).toEqual([]);
+    expect(result.movedVerificationIds).toEqual([]);
   });
 });

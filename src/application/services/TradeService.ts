@@ -448,6 +448,88 @@ export async function moveTrade(
   return { movedTradeIds: [...moveSet] };
 }
 
+export interface SplitTickerEntry {
+  ticker: string;
+  portfolios: { portfolioId: string; shares: number }[];
+}
+
+/**
+ * A ticker held (nonzero remaining shares) in more than one portfolio is
+ * usually a mistake, not intent — a broker account is one real position
+ * regardless of which app-side portfolio bucket a given buy landed in, and a
+ * position split this way makes any single portfolio's own broker-screenshot
+ * reconciliation compare an incomplete subset against the real total. This
+ * surfaces every such ticker so it can be pointed at `consolidateTicker`.
+ */
+export function findTickersSplitAcrossPortfolios(trades: Trade[]): SplitTickerEntry[] {
+  const byTicker = new Map<string, Map<string, number>>();
+  for (const t of trades) {
+    if (t.remainingShares <= 0) continue;
+    const ticker = normalizeTicker(t.ticker);
+    const byPortfolio = byTicker.get(ticker) ?? new Map<string, number>();
+    byPortfolio.set(t.portfolioId, (byPortfolio.get(t.portfolioId) ?? 0) + t.remainingShares);
+    byTicker.set(ticker, byPortfolio);
+  }
+
+  const result: SplitTickerEntry[] = [];
+  for (const [ticker, byPortfolio] of byTicker) {
+    if (byPortfolio.size > 1) {
+      result.push({
+        ticker,
+        portfolios: [...byPortfolio.entries()].map(([portfolioId, shares]) => ({ portfolioId, shares })),
+      });
+    }
+  }
+  return result.sort((a, b) => a.ticker.localeCompare(b.ticker));
+}
+
+export interface ConsolidateTickerResult {
+  movedTradeIds: string[];
+  movedVerificationIds: string[];
+}
+
+/**
+ * Reunites a ticker scattered across portfolios into one, for exactly the
+ * mistake findTickersSplitAcrossPortfolios detects. Moves every trade for
+ * the ticker (via moveTrade, so cash/sell-groups/timeline stay correct) plus
+ * any broker-position verification recorded for it under a different
+ * portfolio — a screenshot showing the real total belongs with wherever
+ * that total's trades now live, not wherever it happened to be imported.
+ */
+export async function consolidateTicker(
+  repos: AppRepositories,
+  ticker: string,
+  targetPortfolioId: string
+): Promise<ConsolidateTickerResult> {
+  const normalizedTicker = normalizeTicker(ticker);
+
+  const allTrades = await repos.trades.getAll();
+  const tradeIdsToMove = allTrades
+    .filter((t) => normalizeTicker(t.ticker) === normalizedTicker && t.portfolioId !== targetPortfolioId)
+    .map((t) => t.id);
+
+  const moved = new Set<string>();
+  for (const tradeId of tradeIdsToMove) {
+    if (moved.has(tradeId)) continue;
+    const current = await repos.trades.getById(tradeId);
+    if (!current || current.portfolioId === targetPortfolioId) continue;
+    const result = await moveTrade(repos, tradeId, targetPortfolioId);
+    for (const id of result.movedTradeIds) moved.add(id);
+  }
+
+  const allVerifications = await repos.verifications.getAll();
+  const verificationsToMove = allVerifications.filter(
+    (v) => normalizeTicker(v.ticker) === normalizedTicker && v.portfolioId !== targetPortfolioId
+  );
+  const movedVerificationIds: string[] = [];
+  for (const v of verificationsToMove) {
+    await repos.verifications.save({ ...v, portfolioId: targetPortfolioId });
+    movedVerificationIds.push(v.id);
+  }
+
+  return { movedTradeIds: [...moved], movedVerificationIds };
+}
+
 export interface PositionAggregate {
   ticker: string;
   totalShares: number;
