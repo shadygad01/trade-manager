@@ -68,6 +68,10 @@ Follow-up user feedback refined the order further: extract everything first and 
 - Each ticker card has exactly **one** portfolio picker shared by every buy, sell, and verification row for that ticker — assigning a ticker to a portfolio carries its sells along automatically, since a sell can only allocate against lots that exist in a specific portfolio.
 - Buys within a ticker group are listed before sells, so the natural click order (add buys, then allocate sells) always has open lots to allocate against by the time the user reaches them.
 
+### Post-sprint-4 fix #3 — batch multi-file selection
+
+Immediate follow-up: Step 1 still required choosing and extracting one file at a time. The file input now accepts multiple files (`multiple` attribute) and the drop handler reads the whole `FileList`/drop payload, not just the first entry — selecting or dropping several files at once queues and processes them sequentially through one Tesseract worker (a "Processing X of N: filename" indicator tracks progress), with each file's outcome (extracted / duplicate / warnings) shown once the batch finishes and its transactions folded into the same running Step 1 pool.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

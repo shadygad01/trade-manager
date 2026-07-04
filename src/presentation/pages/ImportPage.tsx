@@ -43,13 +43,13 @@ interface VerificationEntry {
  * same portfolio (they're the same decision, not two).
  */
 export function ImportPage() {
-  const [file, setFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
-  const [statusMessage, setStatusMessage] = useState("");
+  const [queueProgress, setQueueProgress] = useState<{ index: number; total: number; fileName: string } | null>(null);
   const [uploadSeq, setUploadSeq] = useState(0);
   const [filesProcessed, setFilesProcessed] = useState(0);
-  const [lastFileWarnings, setLastFileWarnings] = useState<{ fileName: string; warnings: string[]; duplicate: boolean } | null>(null);
+  const [recentFileResults, setRecentFileResults] = useState<{ fileName: string; warnings: string[]; duplicate: boolean }[]>([]);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const [pendingCandidates, setPendingCandidates] = useState<CandidateEntry[]>([]);
   const [pendingVerifications, setPendingVerifications] = useState<VerificationEntry[]>([]);
@@ -79,50 +79,62 @@ export function ImportPage() {
     return tickerPortfolio[ticker] ?? portfolios[0]?.id ?? "";
   }
 
-  async function runImport() {
-    if (!file) return;
+  async function processFiles(files: File[]) {
+    if (files.length === 0) return;
     setStage("reading");
-    setStatusMessage("Running OCR and parsing document…");
+    setErrorMessage("");
+    let seq = uploadSeq;
+    const batchResults: typeof recentFileResults = [];
+
     try {
       const orchestrator = await getImportOrchestrator();
-      const result = await orchestrator.importFile(file);
-      const existingUpload = await repos.uploads.getByHash(result.fileHash);
-      const isDuplicateFile = Boolean(existingUpload);
+      for (let i = 0; i < files.length; i++) {
+        const currentFile = files[i];
+        setQueueProgress({ index: i + 1, total: files.length, fileName: currentFile.name });
 
-      if (!isDuplicateFile) {
-        const upload: Upload = {
-          id: generateId(),
-          fileName: file.name,
-          fileHash: result.fileHash,
-          contentType: file.type || "application/octet-stream",
-          status: result.status === "failed" ? "failed" : "parsed",
-          candidates: result.candidates,
-          rawText: result.rawText,
-          createdAt: new Date().toISOString(),
-          parsedAt: new Date().toISOString(),
-        };
-        await repos.uploads.save(upload);
+        const result = await orchestrator.importFile(currentFile);
+        const existingUpload = await repos.uploads.getByHash(result.fileHash);
+        const isDuplicateFile = Boolean(existingUpload);
 
-        const seq = uploadSeq;
-        setUploadSeq((s) => s + 1);
-        setPendingCandidates((prev) => [
-          ...prev,
-          ...result.candidates.map((candidate, i) => ({ key: `${seq}-c${i}`, candidate })),
-        ]);
-        setPendingVerifications((prev) => [
-          ...prev,
-          ...result.verifications.map((verification, i) => ({ key: `${seq}-v${i}`, verification })),
-        ]);
+        if (!isDuplicateFile) {
+          const upload: Upload = {
+            id: generateId(),
+            fileName: currentFile.name,
+            fileHash: result.fileHash,
+            contentType: currentFile.type || "application/octet-stream",
+            status: result.status === "failed" ? "failed" : "parsed",
+            candidates: result.candidates,
+            rawText: result.rawText,
+            createdAt: new Date().toISOString(),
+            parsedAt: new Date().toISOString(),
+          };
+          await repos.uploads.save(upload);
+
+          const fileSeq = seq;
+          seq += 1;
+          setPendingCandidates((prev) => [
+            ...prev,
+            ...result.candidates.map((candidate, ci) => ({ key: `${fileSeq}-c${ci}`, candidate })),
+          ]);
+          setPendingVerifications((prev) => [
+            ...prev,
+            ...result.verifications.map((verification, vi) => ({ key: `${fileSeq}-v${vi}`, verification })),
+          ]);
+        }
+
+        batchResults.push({ fileName: currentFile.name, warnings: result.warnings, duplicate: isDuplicateFile });
+        setFilesProcessed((n) => n + 1);
       }
 
-      setFilesProcessed((n) => n + 1);
-      setLastFileWarnings({ fileName: file.name, warnings: result.warnings, duplicate: isDuplicateFile });
-      setFile(null);
+      setUploadSeq(seq);
+      setRecentFileResults(batchResults);
       setStage("idle");
-      setStatusMessage("");
+      setQueueProgress(null);
     } catch (e) {
+      setUploadSeq(seq);
       setStage("error");
-      setStatusMessage(e instanceof Error ? e.message : "Import failed.");
+      setErrorMessage(e instanceof Error ? e.message : "Import failed.");
+      setQueueProgress(null);
     }
   }
 
@@ -204,69 +216,65 @@ export function ImportPage() {
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            const dropped = e.dataTransfer.files?.[0];
-            if (dropped) setFile(dropped);
+            const dropped = Array.from(e.dataTransfer.files ?? []);
+            if (dropped.length > 0) void processFiles(dropped);
           }}
           className={`flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
             dragOver ? "border-cyan-400 bg-cyan-500/5" : "border-slate-800 bg-slate-950/40"
           }`}
         >
           <UploadCloud size={28} className="text-slate-500" />
-          <p className="text-sm font-medium text-slate-200">Drag & drop a screenshot, PDF, or CSV here</p>
+          <p className="text-sm font-medium text-slate-200">Drag & drop screenshots, PDFs, or CSVs here — select as many at once as you like</p>
           <p className="text-xs text-slate-500">or</p>
           <label className="cursor-pointer rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400">
-            Choose file
+            Choose files
             <input
               type="file"
+              multiple
               accept="image/*,application/pdf,text/csv,.csv"
               className="hidden"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) setFile(f);
+                const chosen = Array.from(e.target.files ?? []);
+                if (chosen.length > 0) void processFiles(chosen);
                 e.target.value = "";
               }}
             />
           </label>
-          {file ? (
+          {queueProgress ? (
             <div className="mt-1 flex items-center gap-2 text-sm text-slate-300">
-              <FileText size={14} /> {file.name}
+              <Loader2 size={14} className="animate-spin" />
+              <FileText size={14} /> Processing {queueProgress.index} of {queueProgress.total}: {queueProgress.fileName}
             </div>
           ) : null}
-          {file ? (
-            <button
-              onClick={() => void runImport()}
-              disabled={stage === "reading"}
-              className="mt-1 flex items-center gap-2 rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
-            >
-              {stage === "reading" ? <Loader2 size={14} className="animate-spin" /> : null}
-              {stage === "reading" ? statusMessage || "Processing…" : "Extract transactions"}
-            </button>
-          ) : null}
-          {stage === "error" ? <p className="text-sm text-rose-400">{statusMessage}</p> : null}
+          {stage === "error" ? <p className="text-sm text-rose-400">{errorMessage}</p> : null}
         </div>
 
-        {lastFileWarnings ? (
-          <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">
-            <span className="font-medium text-slate-300">{lastFileWarnings.fileName}</span>
-            {lastFileWarnings.duplicate ? (
-              <span className="ml-2 text-cyan-400">already imported before — skipped as a duplicate file.</span>
-            ) : lastFileWarnings.warnings.length > 0 ? (
-              <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-300/80">
-                {lastFileWarnings.warnings.map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
-              </ul>
-            ) : (
-              <span className="ml-2 text-emerald-400">extracted successfully.</span>
-            )}
+        {recentFileResults.length > 0 && stage !== "reading" ? (
+          <div className="mt-3 space-y-1.5">
+            {recentFileResults.map((r, i) => (
+              <div key={i} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">
+                <span className="font-medium text-slate-300">{r.fileName}</span>
+                {r.duplicate ? (
+                  <span className="ml-2 text-cyan-400">already imported before — skipped as a duplicate file.</span>
+                ) : r.warnings.length > 0 ? (
+                  <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-300/80">
+                    {r.warnings.map((w, wi) => (
+                      <li key={wi}>{w}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <span className="ml-2 text-emerald-400">extracted successfully.</span>
+                )}
+              </div>
+            ))}
           </div>
         ) : null}
 
         <p className="mt-3 flex items-center gap-2 text-sm text-slate-300">
           {totalPending > 0 ? <CheckCircle2 size={15} className="text-emerald-400" /> : null}
           <span className="font-medium">{totalPending}</span> transaction{totalPending === 1 ? "" : "s"} extracted so far
-          {filesProcessed > 0 ? ` from ${filesProcessed} file${filesProcessed === 1 ? "" : "s"}` : ""}. Drop another file, or
-          move on to Step 2 once you're done.
+          {filesProcessed > 0 ? ` from ${filesProcessed} file${filesProcessed === 1 ? "" : "s"}` : ""}. Drop more files anytime,
+          or move on to Step 2 once you're done.
         </p>
       </div>
 
