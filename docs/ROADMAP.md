@@ -312,6 +312,15 @@ Direct user report, two-part: (1) some stocks (named examples: CSAG, COMI) ended
 - Verified end-to-end against a real running build: recorded CSAG buys under two different portfolios (50 sh in one, 30 in the other) exactly reproducing the reported scenario, confirmed the banner surfaced it correctly, clicked "Consolidate," and confirmed both trades landed in the target portfolio with the other portfolio's cash fully refunded and the banner gone.
 - 6 new tests (281 total): `findTickersSplitAcrossPortfolios` (flags a split, doesn't flag a ticker closed out in one of the two portfolios) and `consolidateTicker` (moves trades + verifications, no-op when everything's already in the target) in `TradeService.test.ts`; the banner's presence/consolidate action and its absence when nothing is split, in `PortfoliosPage.test.tsx`.
 
+### Post-sprint-8 — Prevent duplicate dividends across import sessions
+
+Direct user report: "many dividends duplicated." Root cause: a dividend candidate's only in-session dedup (`seenDividendKeys` in `ImportPage.tsx`) checked the *current batch's pending pool*, never the dividends already recorded from an earlier session — so a broker statement re-uploaded later (its dividend history overlapping what's already on the ledger, e.g. a monthly PDF that always includes the last several months) silently re-recorded the same real payment, inflating cash every time.
+
+- Moved `dividendContentKey` into `duplicateDetection.ts` and added `buildExistingDividendKeys`/`isDividendAlreadyRecorded` alongside it (ticker+date+amount, global across portfolios like the existing buy-duplicate check — a real dividend payment happened once regardless of which portfolio it's filed under).
+- `ImportPage` now seeds its in-session dedup set with these already-recorded keys too (loaded via a new `repos.timeline.getAll()` live query, added to the same `initialDataLoaded` gate the other existing-data queries already use), so a dividend matching one already on the ledger is silently skipped with the same "not added again" messaging the in-session case already used.
+- Verified end-to-end against a real running build with genuine OCR (not mocked): uploaded a synthetic "My Position" screenshot with a dividend history, confirmed it (cash went from 1,000 to 1,114), then uploaded a *different* file with the same overlapping dividend content — the app correctly reported "1 dividend already in the list or already recorded — not added again" and cash stayed at 1,114 instead of double-counting.
+- 5 new tests (284 total, plus the moved `dividendContentKey`): `buildExistingDividendKeys`/`isDividendAlreadyRecorded` matching by ticker/date/amount, ignoring non-Dividend events and events missing a ticker/amount, and not false-flagging a different amount/date/ticker.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

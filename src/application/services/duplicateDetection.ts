@@ -1,5 +1,6 @@
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
+import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 import type { ParsedTradeCandidate } from "@domain/entities/Upload";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 
@@ -57,4 +58,33 @@ export function findDuplicateSellMatch(
     candidate.price,
     existingAllocations.map((a) => ({ id: a.id, ticker: a.ticker, date: a.executionDate, shares: a.sharesClosed, price: a.exitPrice }))
   );
+}
+
+/**
+ * A dividend candidate has no in-app identity of its own to dedupe against
+ * (unlike a Buy/Sell, whose ticker+date+shares+price already distinguishes
+ * one execution from another) — the same broker statement re-uploaded
+ * weeks later, with its dividend history overlapping what's already
+ * recorded, would otherwise silently double-count real cash every time.
+ * Global across portfolios, like findDuplicateBuyMatch — a real dividend
+ * payment happened once regardless of which portfolio it's filed under.
+ */
+export function dividendContentKey(d: { ticker: string; date: string; amount: number }): string {
+  return `${normalizeTicker(d.ticker)}|${d.date}|${d.amount}`;
+}
+
+export function buildExistingDividendKeys(events: TimelineEvent[]): Set<string> {
+  const keys = new Set<string>();
+  for (const e of events) {
+    if (e.type !== "Dividend" || !e.ticker || e.amount === undefined) continue;
+    keys.add(dividendContentKey({ ticker: e.ticker, date: e.timestamp.slice(0, 10), amount: e.amount }));
+  }
+  return keys;
+}
+
+export function isDividendAlreadyRecorded(
+  dividend: { ticker: string; date: string; amount: number },
+  existingDividendKeys: Set<string>
+): boolean {
+  return existingDividendKeys.has(dividendContentKey(dividend));
 }
