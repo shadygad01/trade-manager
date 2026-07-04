@@ -11,6 +11,8 @@ export interface Trade {
   portfolioId: string;
   ticker: string;
   companyName?: string;
+  /** Market sector/industry (e.g. "Banking", "Real Estate") — undefined when the ticker isn't in the known-sector map and no manual value was given; never fabricated to fill a chart (see sectorAllocation calculator). */
+  sector?: string;
   shares: number;
   entryPrice: number;
   fees: number;
@@ -29,6 +31,7 @@ export function createTrade(input: {
   portfolioId: string;
   ticker: string;
   companyName?: string;
+  sector?: string;
   shares: number;
   entryPrice: number;
   fees?: number;
@@ -49,6 +52,7 @@ export function createTrade(input: {
     portfolioId: input.portfolioId,
     ticker: input.ticker,
     companyName: input.companyName,
+    sector: input.sector,
     shares: input.shares,
     entryPrice: input.entryPrice,
     fees: input.fees ?? 0,

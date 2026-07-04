@@ -161,10 +161,18 @@ Item 3 of the next-recommended-sprint list below: a `confidence: "low"` candidat
 
 - 2 new component tests (215 total).
 
+### Post-sprint-7 — Sector Allocation
+
+Item 2 of the next-recommended-sprint list below: a real user decision (asked directly, not assumed) chose "add sector to Trade" over the portfolio-level or leave-unmodeled alternatives. `Trade.sector` is optional and auto-assigned at buy time from a new `src/domain/value-objects/knownSectors.ts` ticker→sector map (the same 20-ticker known universe as `knownTickers.ts`, kept as a separate map on purpose), unless the caller supplies an explicit override; a ticker outside that map is left `undefined` rather than guessed at. The manual "Record Buy" form (`TradesPage`) suggests a sector as soon as a known ticker is typed, but only while the field is still blank — never overwriting a value the user already typed. `ImportPage`'s OCR-driven buys get the same auto-assignment for free since they go through the same `recordBuy`.
+
+The new `sectorAllocation` calculator groups open-position market value (falling back to cost basis pre-price-snapshot, same convention as the existing Portfolio Allocation pie) by sector as a % of total invested value, folding anything with no resolvable sector into an "Unclassified" bucket that's always sorted last regardless of size — an honest catch-all, never a fabricated slice. `DashboardPage`'s Sector Allocation panel now renders this as a pie chart (categorical colors in the app's validated fixed order; the Unclassified slice specifically reuses the neutral `CHART_AXIS` token rather than a categorical hue, the same "not a real category" convention `BuyZoneChart` already established for its "closed" state) instead of the previous static "not yet modeled" empty state.
+
+- 10 new tests (5 sectorAllocation, 3 recordBuy sector-assignment, 2 knownSectors) — 225 total.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
-2. **Sector Allocation**: still honestly unmodeled (no sector field on `Trade`/`Portfolio`) — either add one deliberately or keep the dashboard's honest "not yet modeled" empty state; don't fabricate data to fill the chart.
+2. ~~**Sector Allocation**~~ — done (see above): `Trade.sector` added, auto-assigned from a known-ticker map, feeding a real Dashboard pie chart.
 3. ~~**OCR confidence-aware UX**~~ — done (see above): low-confidence candidates now require explicit confirmation before they can be added.
 4. **A real second broker's screenshot format**: `CsvStatementParser` validated the interface with a non-OCR input; the OCR-specific parts of the interface (`parseOrdersScreenText`, `parseOrderRowsText`, `resolveHeaderTicker`) still only have one real implementation (Thndr) — worth validating against an actual second brokerage app's screenshots if/when real sample data is available.
 

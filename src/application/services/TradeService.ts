@@ -4,6 +4,7 @@ import { createTimelineEvent } from "@domain/entities/TimelineEvent";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { InsufficientCashError } from "./errors";
 import type { AppRepositories } from "./types";
 
@@ -19,6 +20,8 @@ export interface RecordBuyInput {
   portfolioId: string;
   ticker: string;
   companyName?: string;
+  /** Explicit sector override. When omitted, falls back to the known-ticker sector lookup — never fabricated for an unmapped ticker. */
+  sector?: string;
   shares: number;
   entryPrice: number;
   fees?: number;
@@ -52,11 +55,13 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
     );
   }
 
+  const normalizedTicker = normalizeTicker(input.ticker);
   const trade = createTrade({
     id: generateId(),
     portfolioId: input.portfolioId,
-    ticker: normalizeTicker(input.ticker),
+    ticker: normalizedTicker,
     companyName: input.companyName,
+    sector: input.sector ?? sectorForTicker(normalizedTicker),
     shares: input.shares,
     entryPrice: input.entryPrice,
     fees,

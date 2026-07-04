@@ -19,6 +19,7 @@
 | Portfolio return | `calculators/portfolioReturn.ts` | (Total equity − net contributions) ÷ net contributions |
 | Portfolio health | `calculators/portfolioHealth.ts` | Cash ratio, largest position %, Herfindahl-index concentration score, diversification score, largest realized winner/loser, composite 0-100 health score |
 | Strategy attribution | `calculators/strategyAttribution.ts` | Win rate / profit factor / total realized P/L grouped by the union of `Trade.strategyTags` (set at fill time) and that trade's `JournalEntry.strategyTags` (set or edited later) — a trade with multiple tags attributes its P/L to every tag it carries, and a tag added in the Journal after the fact counts exactly like one set at buy time |
+| Sector allocation | `calculators/sectorAllocation.ts` | Open-position market value (falling back to cost basis before a price snapshot exists) grouped by `Trade.sector`, as a % of total invested value; positions with no resolvable sector fold into an "Unclassified" bucket that's always sorted last, never fabricated |
 
 ## Known limitation: equity curve is marked to *today's* price
 

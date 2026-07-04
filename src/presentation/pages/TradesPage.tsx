@@ -5,6 +5,7 @@ import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink } from "
 import { repos } from "@presentation/lib/data";
 import { recordBuy, moveTrade } from "@application/services/TradeService";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { getTradeStatus } from "@domain/entities/Trade";
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
@@ -328,6 +329,7 @@ function MoveTradeModal({
 function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; open: boolean; onClose: () => void }) {
   const [ticker, setTicker] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [sector, setSector] = useState("");
   const [shares, setShares] = useState("");
   const [entryPrice, setEntryPrice] = useState("");
   const [fees, setFees] = useState("0");
@@ -342,6 +344,7 @@ function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; o
   function reset() {
     setTicker("");
     setCompanyName("");
+    setSector("");
     setShares("");
     setEntryPrice("");
     setFees("0");
@@ -376,6 +379,7 @@ function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; o
         portfolioId,
         ticker: normalizedTicker,
         companyName: companyName.trim() || undefined,
+        sector: sector.trim() || undefined,
         shares: sharesN,
         entryPrice: priceN,
         fees: Number.parseFloat(fees) || 0,
@@ -412,7 +416,16 @@ function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; o
             Ticker
             <input
               value={ticker}
-              onChange={(e) => setTicker(e.target.value.toUpperCase())}
+              onChange={(e) => {
+                const next = e.target.value.toUpperCase();
+                setTicker(next);
+                // Only auto-fill while the user hasn't typed a sector of
+                // their own — this is a suggestion, never an overwrite.
+                if (!sector) {
+                  const guess = sectorForTicker(normalizeTicker(next));
+                  if (guess) setSector(guess);
+                }
+              }}
               className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               placeholder="COMI"
             />
@@ -424,6 +437,15 @@ function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; o
               onChange={(e) => setCompanyName(e.target.value)}
               className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
               placeholder="Commercial International Bank"
+            />
+          </label>
+          <label className="text-xs text-slate-400 space-y-1">
+            Sector (optional)
+            <input
+              value={sector}
+              onChange={(e) => setSector(e.target.value)}
+              className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              placeholder="Banking"
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">

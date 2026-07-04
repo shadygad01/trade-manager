@@ -20,6 +20,8 @@ import { TrendingUp, TrendingDown, Wallet, PieChart as PieChartIcon, Layers, Cir
 import { repos } from "@presentation/lib/data";
 import { computePositions, type PositionAggregate } from "@application/services/TradeService";
 import { computeAnalytics } from "@application/analytics/AnalyticsEngine";
+import { sectorAllocation } from "@application/analytics/calculators/sectorAllocation";
+import { UNCLASSIFIED_SECTOR } from "@domain/value-objects/knownSectors";
 import { realizedPnlMicros } from "@domain/entities/TradeAllocation";
 import type { AnalyticsResult, EquityPoint, PeriodReturn } from "@presentation/lib/types";
 import type { Portfolio } from "@domain/entities/Portfolio";
@@ -27,7 +29,7 @@ import { StatTile } from "@presentation/components/StatTile";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatMoney, formatMoneyCompact, formatPercent, signClass } from "@presentation/lib/format";
-import { CATEGORICAL, categoricalColor, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
+import { CATEGORICAL, categoricalColor, CHART_AXIS, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
 
 const MAX_COMPARED_PORTFOLIOS = CATEGORICAL.length;
 
@@ -155,6 +157,11 @@ export function DashboardPage() {
     const comparisonData = mergeIndexedCurves(
       comparedPortfolios.map((d) => ({ name: d.portfolio.name, curve: d.analytics.equityCurve })),
     );
+    const sectorSlices = sectorAllocation(
+      dashboard.flatMap((d) =>
+        d.positions.map((p) => ({ sector: p.openTrades[0]?.sector, marketValue: p.marketValue, costBasis: p.costBasis })),
+      ),
+    );
     return {
       totalCash,
       totalMarketValue,
@@ -171,6 +178,7 @@ export function DashboardPage() {
       monthlyReturn,
       comparedPortfolios,
       comparisonData,
+      sectorSlices,
     };
   }, [dashboard]);
 
@@ -403,10 +411,44 @@ export function DashboardPage() {
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
           <h3 className="mb-3 text-sm font-semibold text-slate-200">Sector Allocation</h3>
-          <EmptyState
-            title="Sector data not yet modeled"
-            description="Trade and Portfolio entities don't carry a sector/industry field, so sector allocation can't be computed honestly yet."
-          />
+          {totals.sectorSlices.length > 0 ? (
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie
+                  data={totals.sectorSlices}
+                  dataKey="marketValue"
+                  nameKey="sector"
+                  innerRadius={60}
+                  outerRadius={95}
+                  paddingAngle={2}
+                >
+                  {totals.sectorSlices.map((entry, i) => (
+                    <Cell
+                      key={entry.sector}
+                      fill={entry.sector === UNCLASSIFIED_SECTOR ? CHART_AXIS : CATEGORICAL[i % CATEGORICAL.length]}
+                      stroke={CHART_SURFACE}
+                      strokeWidth={2}
+                    />
+                  ))}
+                </Pie>
+                <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+                <Tooltip
+                  contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
+                  formatter={(v: number) => formatMoney(v)}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyState
+              title="No open positions yet"
+              description="Sector allocation fills in once a portfolio holds open positions."
+            />
+          )}
+          {totals.sectorSlices.some((s) => s.sector === UNCLASSIFIED_SECTOR) ? (
+            <p className="mt-2 text-[11px] text-slate-500">
+              &ldquo;Unclassified&rdquo; covers tickers outside the known-sector map — never guessed at.
+            </p>
+          ) : null}
         </div>
       </div>
     </div>

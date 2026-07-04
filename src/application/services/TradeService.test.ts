@@ -34,6 +34,46 @@ describe("recordBuy", () => {
     expect(events[0].relatedTradeIds).toEqual([trade.id]);
   });
 
+  it("auto-assigns sector from the known-ticker lookup when none is given", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    expect(trade.sector).toBe("Banking");
+  });
+
+  it("leaves sector undefined for a ticker outside the known-sector map", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "ZZZZ",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    expect(trade.sector).toBeUndefined();
+  });
+
+  it("honors an explicit sector override instead of the known-ticker default", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      sector: "Custom Sector",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    expect(trade.sector).toBe("Custom Sector");
+  });
+
   it("rejects a buy when portfolio cash is insufficient", async () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(100)] });
 
