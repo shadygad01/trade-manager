@@ -476,6 +476,14 @@ Direct user request: use TradingView and/or Yahoo Finance for every current-pric
 - 6 tests net (352 total): 2 new in `SnapshotPriceRepository.test.ts` (v2 quotes parsing + latest-quote-time; null on failed fetch), 3 in `PriceFreshness.test.tsx` (last-close line, stale escalation, no-prices warning), and the existing repo tests migrated from `getSnapshotTimestamp`.
 - Verified end-to-end against a real production build with all three states: the real placeholder snapshot showed the no-prices warning; a routed fresh v2 snapshot showed "Prices as of 04 Jul 2026, 18:23 (last market close)…"; a routed 10-day-old snapshot showed the outdated warning.
 
+### Post-sprint-8 fix — the first real price run exposed two more pipeline traps
+
+Dispatching the price workflow for the first time (see above) succeeded — and immediately proved out the new quote-time capture: every Yahoo quote came back stamped **July 2024**. Yahoo's EGX coverage returns 200 with two-year-old data (ORHD at 13.59 vs its real ~23), so the error-only fallback chain happily wrote a full snapshot of stale prices and never consulted TradingView at all. Separately: the snapshot commit produced no site deploy — pushes made with `GITHUB_TOKEN` never trigger other workflows, so scheduled price updates would land on main but never reach the deployed site (which serves the snapshot as a static file).
+
+- **Freshness-aware provider chain** (`fetch-prices`): a provider can fail by erroring *or* by "succeeding" with stale data. TradingView (which actively covers the EGX) is now asked first, with a `time` column for the last bar's market time (graceful retry without it if the column is rejected); Yahoo second. The first quote whose market time is within 7 days (the EGX's longest normal quiet stretch, with margin) wins; if neither is provably fresh, unknown-freshness beats known-stale, and the newest stale quote still gets written rather than nothing — the in-app PriceFreshness indicator is what tells the user it's outdated.
+- **Auto-deploy after a snapshot commit** (`update-prices.yml`): the commit step now reports whether it pushed, and a new step dispatches `deploy-pages.yml` via `gh workflow run` (workflow_dispatch is exempt from the GITHUB_TOKEN recursion guard) so every snapshot change actually goes live.
+- Script + workflow change only — no app code, no new tests; verified operationally by re-dispatching the workflow and inspecting the committed snapshot and the deploy it triggered.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
