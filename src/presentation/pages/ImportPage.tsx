@@ -642,12 +642,15 @@ export function ImportPage() {
   const tickerMatchStatuses = useMemo(() => {
     const map = new Map<string, TickerMatchStatus>();
     for (const [ticker, group] of tickerGroups) {
-      const pendingBuyShares = group.buys
-        .filter((e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key))
-        .reduce((sum, e) => sum + e.candidate.shares, 0);
-      const pendingSellShares = group.sells
-        .filter((e) => !addedKeys.has(e.key))
-        .reduce((sum, e) => sum + e.candidate.shares, 0);
+      const remainingBuys = group.buys.filter(
+        (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+      );
+      const remainingSells = group.sells.filter((e) => !addedKeys.has(e.key));
+      const pendingBuyShares = remainingBuys.reduce((sum, e) => sum + e.candidate.shares, 0);
+      const pendingSellShares = remainingSells.reduce((sum, e) => sum + e.candidate.shares, 0);
+      const remainingBuysAndSells = [...remainingBuys, ...remainingSells];
+      const allPendingFromInvoice =
+        remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
       const existingRemainingShares = existingTrades
         .filter((t) => normalizeTicker(t.ticker) === ticker)
         .reduce((sum, t) => sum + t.remainingShares, 0);
@@ -668,6 +671,7 @@ export function ImportPage() {
           pendingSellShares,
           existingRemainingShares,
           verifiedUnits: latestVerification?.units,
+          allPendingFromInvoice,
         }),
       );
     }
@@ -1227,6 +1231,13 @@ function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
         <ShieldCheck size={11} /> Sold out — no screenshot needed
+      </span>
+    );
+  }
+  if (status.reason === "invoice-verified") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+        <ShieldCheck size={11} /> Verified by invoice
       </span>
     );
   }

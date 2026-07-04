@@ -21,6 +21,15 @@ export interface ParsedTradeCandidate {
    * just with a cue to double-check it before confirming.
    */
   confidence?: ParseConfidence;
+  /**
+   * "invoice" marks a candidate read from a standardized per-trade Invoice
+   * document (see ThndrParser's Invoice format) rather than an OCR'd
+   * screenshot/statement — trusted as sufficient verification for its own
+   * transaction on its own, without needing a broker "My Position"
+   * screenshot too (see importVerification's checkTickerMatch). Undefined
+   * for every other source.
+   */
+  source?: "invoice";
 }
 
 /** A dividend payout read from a broker's "My Position" / dividends history screen. */

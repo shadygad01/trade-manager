@@ -65,6 +65,7 @@ describe("ThndrParser.parseStatementText", () => {
     expect(candidates).toHaveLength(2);
     expect(candidates[0]).toMatchObject({ ticker: "EAST", side: "BUY", shares: 50, date: "2026-02-02" });
     expect(candidates[1]).toMatchObject({ ticker: "HRHO", side: "SELL", shares: 45, date: "2026-02-19" });
+    expect(candidates[0].source).toBeUndefined();
   });
 
   it("derives price from the Value column instead of the printed per-share price (commission adjustment)", () => {
@@ -213,6 +214,7 @@ describe("ThndrParser.parseStatementText — per-trade Invoice PDF", () => {
       fees: 4.32,
       date: "2026-06-24",
       confidence: "high",
+      source: "invoice",
     });
   });
 
