@@ -508,6 +508,83 @@ describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (
   });
 });
 
+describe("TickerGroupCard — mismatch auto-reconcile suggestion (the ORHD 99-vs-74 case)", () => {
+  it("highlights the solver's suggested rows and removes exactly them on one click", async () => {
+    const user = userEvent.setup();
+    const onDiscardPendingKeys = vi.fn();
+    const keep = buyEntry("keep");
+    const remove = buyEntry("remove");
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [keep, remove], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 60, verifiedUnits: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        reconcileSuggestion={{ keysToRemove: ["remove"], alternatives: 1, rankedByAvgCost: true }}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardPendingKeys={onDiscardPendingKeys}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/lands closest to the broker's avg cost/)).toBeInTheDocument();
+    expect(screen.getByText(/1 other combination would also reconcile/)).toBeInTheDocument();
+    expect(screen.getByText("Suggested removal")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Remove suggested row/ }));
+    expect(onDiscardPendingKeys).toHaveBeenCalledWith(["remove"]);
+  });
+
+  it("badges a pending row that looks like another ticker's transaction read under a wrong ticker guess (the HRHO/Delta Sugar case)", () => {
+    render(
+      <TickerGroupCard
+        ticker="HRHO"
+        group={{ buys: [buyEntry("phantom")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        wrongTickerHints={new Map([["phantom", "SUGR"]])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Likely SUGR's transaction")).toBeInTheDocument();
+  });
+});
+
 describe("TickerGroupCard — per-ticker Confirm (the ORWE case: verified but blocked by an unrelated stuck ticker)", () => {
   it("shows a Confirm {ticker} button once matched and portfolio-resolved, independent of any other ticker", async () => {
     const user = userEvent.setup();

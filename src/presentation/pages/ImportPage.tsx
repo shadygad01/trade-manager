@@ -12,8 +12,11 @@ import {
   buildExistingDividendKeys,
   suggestDuplicatePendingCandidateKeysToDelete,
   findCrossSourceVerifiedKeys,
+  findWrongTickerCandidateKeys,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
+import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "@application/services/mismatchResolver";
+import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
@@ -535,6 +538,15 @@ export function ImportPage() {
     }));
   }
 
+  /** Discards a named set of still-pending candidates in one shot — used by the mismatch auto-reconcile suggestion (see reconcileSuggestions). */
+  function discardPendingCandidateKeys(keys: string[]) {
+    const keySet = new Set(keys);
+    importSession.update((prev) => ({
+      ...prev,
+      pendingCandidates: prev.pendingCandidates.filter((e) => !keySet.has(e.key)),
+    }));
+  }
+
   /**
    * For a ticker flagged alreadyFullyRecorded (see checkTickerMatch): the
    * broker independently confirms the ledger was already correct before
@@ -759,6 +771,63 @@ export function ImportPage() {
   const allTickersMatched = tickerGroups.length > 0 && unmatchedTickerCount === 0;
 
   /**
+   * The one duplicate shape every per-ticker check above is blind to: the
+   * same physical execution OCR'd twice under two different guessed tickers
+   * (an unmapped company-name fallback filed the real transaction under one
+   * name, a fuzzy guess filed its phantom under another). Key -> the ticker
+   * the row most likely belongs to, driving a badge on the phantom row.
+   */
+  const wrongTickerHints = useMemo(() => {
+    const stillPending = pendingCandidates.filter(
+      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    );
+    return findWrongTickerCandidateKeys(stillPending, existingTrades, existingAllocations);
+  }, [pendingCandidates, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingAllocations]);
+
+  /**
+   * For a mismatch none of the row-level checks can explain, the share
+   * arithmetic itself often can: which subset of pending rows, removed,
+   * leaves exactly the broker's verified count — ranked by the broker's own
+   * avg cost when it was captured (see suggestRemovalsToReconcile). Ticker ->
+   * the suggested removal, driving the banner's one-click fix. Skips
+   * alreadyFullyRecorded tickers, which have their own bulk-discard action.
+   */
+  const reconcileSuggestions = useMemo(() => {
+    const map = new Map<string, ReconcileSuggestion>();
+    for (const [ticker, group] of tickerGroups) {
+      const status = tickerMatchStatuses.get(ticker);
+      if (!status || status.reason !== "mismatch" || status.alreadyFullyRecorded) continue;
+      const stillPending = [...group.buys, ...group.sells].filter(
+        (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+      );
+      const existingForTicker = existingTrades.filter((t) => normalizeTicker(t.ticker) === ticker);
+      const verificationCandidates = [
+        ...existingVerifications.filter((v) => normalizeTicker(v.ticker) === ticker),
+        ...group.verifications.map((e) => e.verification),
+      ];
+      if (verificationCandidates.length === 0) continue;
+      const latestVerification = verificationCandidates.reduce((a, b) => (a.capturedAt > b.capturedAt ? a : b));
+      const suggestion = suggestRemovalsToReconcile({
+        rows: stillPending.map((e) => ({
+          key: e.key,
+          side: e.candidate.side,
+          shares: e.candidate.shares,
+          price: e.candidate.price,
+          confidence: e.candidate.confidence,
+        })),
+        existingRemainingShares: existingForTicker.reduce((sum, t) => sum + t.remainingShares, 0),
+        existingCostBasis: Money.sum(
+          existingForTicker.map((t) => Money.from(t.entryPrice).multiply(t.remainingShares)),
+        ).toNumber(),
+        verifiedUnits: latestVerification.units,
+        verifiedAvgCost: latestVerification.avgCost,
+      });
+      if (suggestion) map.set(ticker, suggestion);
+    }
+    return map;
+  }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications]);
+
+  /**
    * A ticker resolved from an unmapped company name (see ThndrParser's
    * header fallback) can still land on the wrong 4-letter guess, or the same
    * real stock can OCR to a different guess on a different upload — the
@@ -980,8 +1049,11 @@ export function ImportPage() {
                 duplicateMatch={duplicateMatch}
                 addedTradeIds={session.addedTradeIds}
                 suspectedDuplicateKeys={pendingDuplicateCandidateKeySet}
+                wrongTickerHints={wrongTickerHints}
+                reconcileSuggestion={reconcileSuggestions.get(ticker)}
                 onDeleteAutoAdded={(entry) => void deleteAutoAddedTrade(entry)}
                 onDiscardPending={(entry) => discardPendingCandidate(entry.key)}
+                onDiscardPendingKeys={discardPendingCandidateKeys}
                 onDiscardAllPending={() => discardAllPendingForTicker(ticker)}
                 onConfirmTicker={() => void confirmTicker(ticker)}
                 onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
@@ -1042,8 +1114,11 @@ export function TickerGroupCard({
   duplicateMatch,
   addedTradeIds,
   suspectedDuplicateKeys,
+  wrongTickerHints,
+  reconcileSuggestion,
   onDeleteAutoAdded,
   onDiscardPending,
+  onDiscardPendingKeys,
   onDiscardAllPending,
   onConfirmTicker,
   onAllocateSell,
@@ -1072,8 +1147,14 @@ export function TickerGroupCard({
   addedTradeIds: Record<string, string>;
   /** Keys of pending (not yet added/skipped/dismissed) candidates suggested for discard — either a duplicate of a sibling in this same batch, or of a trade already committed to the ledger. See ImportPage's pendingDuplicateCandidateKeys. */
   suspectedDuplicateKeys: Set<string>;
+  /** Pending key -> the ticker a phantom wrong-ticker read most likely belongs to (see findWrongTickerCandidateKeys) — drives the "likely {other}'s transaction" badge. */
+  wrongTickerHints?: Map<string, string>;
+  /** The mismatch auto-reconcile solver's suggested removal for this ticker, when one exists (see suggestRemovalsToReconcile) — drives the banner's one-click fix and the per-row highlight. */
+  reconcileSuggestion?: ReconcileSuggestion;
   onDeleteAutoAdded: (entry: CandidateEntry) => void;
   onDiscardPending: (entry: CandidateEntry) => void;
+  /** Discards a named set of still-pending rows in one shot — the reconcile suggestion's "Remove suggested rows" action. */
+  onDiscardPendingKeys?: (keys: string[]) => void;
   /** Discards every still-pending Buy/Sell for this ticker in one shot — only surfaced when matchStatus.alreadyFullyRecorded is true (see checkTickerMatch). */
   onDiscardAllPending: () => void;
   /** Confirms and distributes just this ticker, independent of any other ticker in the batch still stuck — see ImportPage's confirmTicker. */
@@ -1218,6 +1299,25 @@ export function TickerGroupCard({
             Discard all pending for {ticker}
           </button>
         </div>
+      ) : matchStatus?.reason === "mismatch" && reconcileSuggestion ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
+          <span>
+            Mismatch: extracted transactions total {formatShares(matchStatus.netShares)} shares, but the broker's "My
+            Position" screenshot — the trusted source — shows {formatShares(matchStatus.verifiedUnits ?? 0)}. Removing
+            the {reconcileSuggestion.keysToRemove.length === 1 ? "highlighted row" : `${reconcileSuggestion.keysToRemove.length} highlighted rows`}{" "}
+            below leaves exactly {formatShares(matchStatus.verifiedUnits ?? 0)}
+            {reconcileSuggestion.rankedByAvgCost ? " and lands closest to the broker's avg cost" : ""}.
+            {reconcileSuggestion.alternatives > 0
+              ? ` ${reconcileSuggestion.alternatives} other combination${reconcileSuggestion.alternatives === 1 ? "" : "s"} would also reconcile — double-check before removing.`
+              : ""}
+          </span>
+          <button
+            onClick={() => onDiscardPendingKeys?.(reconcileSuggestion.keysToRemove)}
+            className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
+          >
+            Remove suggested {reconcileSuggestion.keysToRemove.length === 1 ? "row" : `rows (${reconcileSuggestion.keysToRemove.length})`}
+          </button>
+        </div>
       ) : matchStatus?.reason === "mismatch" ? (
         <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
           Mismatch: extracted transactions total {formatShares(matchStatus.netShares)} shares, but the broker's "My
@@ -1248,6 +1348,8 @@ export function TickerGroupCard({
               distributing={distributing}
               error={rowErrors[entry.key]}
               suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
+              suggestedRemoval={reconcileSuggestion?.keysToRemove.includes(entry.key) ?? false}
+              wrongTickerHint={wrongTickerHints?.get(entry.key)}
               onDelete={() => onDeleteAutoAdded(entry)}
               onDiscardPending={() => onDiscardPending(entry)}
             />
@@ -1275,6 +1377,8 @@ export function TickerGroupCard({
                     : undefined
               }
               suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
+              suggestedRemoval={reconcileSuggestion?.keysToRemove.includes(entry.key) ?? false}
+              wrongTickerHint={wrongTickerHints?.get(entry.key)}
               onDiscardPending={() => onDiscardPending(entry)}
             />
           );
@@ -1402,6 +1506,8 @@ export function AutoCommitRow({
   distributing,
   error,
   suspectedDuplicate = false,
+  suggestedRemoval = false,
+  wrongTickerHint,
   onDelete,
   onDiscardPending,
 }: {
@@ -1418,6 +1524,10 @@ export function AutoCommitRow({
   error?: string;
   /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
   suspectedDuplicate?: boolean;
+  /** True when the mismatch auto-reconcile solver picked this row for removal (see suggestRemovalsToReconcile) — highlights the row the banner's one-click fix would discard. */
+  suggestedRemoval?: boolean;
+  /** The ticker this row most likely belongs to, when it looks like a phantom wrong-ticker read of another ticker's transaction (see findWrongTickerCandidateKeys). */
+  wrongTickerHint?: string;
   onDelete: () => void;
   /**
    * Discards this row from the pending pool outright — available on every
@@ -1432,9 +1542,13 @@ export function AutoCommitRow({
 }) {
   const c = entry.candidate;
   const isLowConfidence = c.confidence === "low";
-  const canDiscard = suspectedDuplicate && !added && !skipped && !dismissed;
+  const stillPending = !added && !skipped && !dismissed;
+  const canDiscard = suspectedDuplicate && stillPending;
+  const flaggedForRemoval = stillPending && (suggestedRemoval || wrongTickerHint !== undefined);
   return (
-    <div className={`px-4 py-2.5 text-sm ${canDiscard ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}>
+    <div
+      className={`px-4 py-2.5 text-sm ${canDiscard || flaggedForRemoval ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
@@ -1473,6 +1587,22 @@ export function AutoCommitRow({
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
               <ShieldAlert size={11} /> Suspected duplicate
+            </span>
+          ) : null}
+          {stillPending && wrongTickerHint ? (
+            <span
+              title={`Same side, date, share count and a near-identical price as a ${wrongTickerHint} transaction — very likely the same execution read under a wrong ticker guess.`}
+              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
+            >
+              <ShieldAlert size={11} /> Likely {wrongTickerHint}'s transaction
+            </span>
+          ) : null}
+          {stillPending && suggestedRemoval ? (
+            <span
+              title="Removing this row would leave exactly the broker's verified share count — see the Mismatch banner above."
+              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
+            >
+              <ShieldAlert size={11} /> Suggested removal
             </span>
           ) : null}
         </div>
@@ -1556,6 +1686,8 @@ export function CandidateRow({
   disabled = false,
   disabledReason,
   suspectedDuplicate = false,
+  suggestedRemoval = false,
+  wrongTickerHint,
   onDiscardPending,
 }: {
   entry: CandidateEntry;
@@ -1568,14 +1700,21 @@ export function CandidateRow({
   disabledReason?: string;
   /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
   suspectedDuplicate?: boolean;
+  /** True when the mismatch auto-reconcile solver picked this row for removal (see suggestRemovalsToReconcile and AutoCommitRow's twin prop). */
+  suggestedRemoval?: boolean;
+  /** The ticker this row most likely belongs to, when it looks like a phantom wrong-ticker read (see findWrongTickerCandidateKeys and AutoCommitRow's twin prop). */
+  wrongTickerHint?: string;
   /** Discards this row from the pending pool outright — available on every still-pending row, not just ones auto-flagged as a suspected duplicate (see AutoCommitRow's onDiscardPending). */
   onDiscardPending?: () => void;
 }) {
   const c = entry.candidate;
   const isLowConfidence = c.confidence === "low";
   const canDiscard = suspectedDuplicate && !added;
+  const flaggedForRemoval = !added && (suggestedRemoval || wrongTickerHint !== undefined);
   return (
-    <div className={`px-4 py-2.5 text-sm ${canDiscard ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}>
+    <div
+      className={`px-4 py-2.5 text-sm ${canDiscard || flaggedForRemoval ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <span
@@ -1618,6 +1757,22 @@ export function CandidateRow({
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
               <ShieldAlert size={11} /> Suspected duplicate
+            </span>
+          ) : null}
+          {!added && wrongTickerHint ? (
+            <span
+              title={`Same side, date, share count and a near-identical price as a ${wrongTickerHint} transaction — very likely the same execution read under a wrong ticker guess.`}
+              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
+            >
+              <ShieldAlert size={11} /> Likely {wrongTickerHint}'s transaction
+            </span>
+          ) : null}
+          {!added && suggestedRemoval ? (
+            <span
+              title="Removing this row would leave exactly the broker's verified share count — see the Mismatch banner above."
+              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
+            >
+              <ShieldAlert size={11} /> Suggested removal
             </span>
           ) : null}
         </div>

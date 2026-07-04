@@ -178,6 +178,84 @@ export function findCrossSourceVerifiedKeys(entries: { key: string; candidate: P
 }
 
 /**
+ * The same physical execution read under two different guessed tickers keeps
+ * its side, date, share count and (roughly) its price — only the ticker
+ * differs. This is the one duplicate shape none of the checks above can see:
+ * they all group within a ticker, so a low-confidence OCR read filed under
+ * the wrong ticker (an unmapped company-name fallback, a fuzzy guess) shows
+ * up as a phantom row inflating the wrong ticker's total while the real
+ * transaction sits, committed or pending, under another name.
+ *
+ * The price-proximity requirement is the discriminator against coincidence:
+ * two genuinely different stocks trading the same share count on the same
+ * day would carry unrelated prices, while two OCR reads of the same
+ * execution land within OCR noise of each other. A pending row is flagged
+ * when a close-priced copy exists under a different ticker and that copy
+ * outranks it — already committed to the ledger (and the pending read isn't
+ * a high-confidence anchored match), or still pending but with strictly
+ * higher OCR confidence. Returns pending key -> the ticker the row most
+ * likely belongs to. Only ever a hint driving a badge + the existing manual
+ * remove button — nothing is discarded without the user's click.
+ */
+const WRONG_TICKER_PRICE_TOLERANCE = 0.1;
+
+function wrongTickerConfidenceRank(c?: ParsedTradeCandidate["confidence"]): number {
+  if (c === "low") return 0;
+  if (c === "medium") return 1;
+  return 2;
+}
+
+export function findWrongTickerCandidateKeys(
+  pendingEntries: { key: string; candidate: ParsedTradeCandidate }[],
+  committedTrades: { ticker: string; executionDate: string; shares: number; entryPrice: number }[],
+  committedAllocations: { ticker: string; executionDate: string; sharesClosed: number; exitPrice: number }[],
+): Map<string, string> {
+  const hints = new Map<string, string>();
+  const pricesClose = (a: number, b: number) => Math.abs(a - b) <= Math.max(a, b) * WRONG_TICKER_PRICE_TOLERANCE;
+
+  for (const e of pendingEntries) {
+    const ticker = normalizeTicker(e.candidate.ticker);
+    const c = e.candidate;
+
+    if (wrongTickerConfidenceRank(c.confidence) < 2) {
+      const committed =
+        c.side === "BUY"
+          ? committedTrades.find(
+              (t) =>
+                normalizeTicker(t.ticker) !== ticker &&
+                t.executionDate === c.date &&
+                t.shares === c.shares &&
+                pricesClose(t.entryPrice, c.price),
+            )
+          : committedAllocations.find(
+              (a) =>
+                normalizeTicker(a.ticker) !== ticker &&
+                a.executionDate === c.date &&
+                a.sharesClosed === c.shares &&
+                pricesClose(a.exitPrice, c.price),
+            );
+      if (committed) {
+        hints.set(e.key, normalizeTicker(committed.ticker));
+        continue;
+      }
+    }
+
+    const betterPendingCopy = pendingEntries.find(
+      (o) =>
+        o.key !== e.key &&
+        normalizeTicker(o.candidate.ticker) !== ticker &&
+        o.candidate.side === c.side &&
+        o.candidate.date === c.date &&
+        o.candidate.shares === c.shares &&
+        pricesClose(o.candidate.price, c.price) &&
+        wrongTickerConfidenceRank(o.candidate.confidence) > wrongTickerConfidenceRank(c.confidence),
+    );
+    if (betterPendingCopy) hints.set(e.key, normalizeTicker(betterPendingCopy.candidate.ticker));
+  }
+  return hints;
+}
+
+/**
  * Finds Dividend events already sitting on the ledger that duplicate each
  * other — the cross-session import dedup (isDividendAlreadyRecorded) only
  * stops *new* duplicates; this is for the ones recorded before that guard

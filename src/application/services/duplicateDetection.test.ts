@@ -7,6 +7,7 @@ import {
   suggestDuplicateDividendIdsToDelete,
   suggestDuplicatePendingCandidateKeysToDelete,
   findCrossSourceVerifiedKeys,
+  findWrongTickerCandidateKeys,
 } from "./duplicateDetection";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
@@ -235,5 +236,82 @@ describe("findCrossSourceVerifiedKeys", () => {
       { key: "b", candidate: buyCandidate({ shares: 11, date: "2026-01-14", source: "invoice" as const }) },
     ];
     expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+});
+
+describe("findWrongTickerCandidateKeys", () => {
+  const sugarTrade = createTrade({
+    id: "t-sugr",
+    portfolioId: "p1",
+    ticker: "SUGR",
+    shares: 8,
+    entryPrice: 47.09,
+    executionDate: "2026-01-06",
+    executionTime: "10:00",
+  });
+
+  it("flags a low-confidence pending Buy matching another ticker's committed trade at a near-identical price (the HRHO/Delta Sugar case)", () => {
+    const phantom = {
+      key: "hrho-1",
+      candidate: buyCandidate({ ticker: "HRHO", shares: 8, price: 46.66, date: "2026-01-06", confidence: "low" as const }),
+    };
+    const hints = findWrongTickerCandidateKeys([phantom], [sugarTrade], []);
+    expect(hints.get("hrho-1")).toBe("SUGR");
+  });
+
+  it("does not flag when the prices are unrelated — same shares/date on different tickers is a coincidence without price proximity", () => {
+    const coincidence = {
+      key: "hrho-1",
+      candidate: buyCandidate({ ticker: "HRHO", shares: 8, price: 24.9, date: "2026-01-06", confidence: "low" as const }),
+    };
+    expect(findWrongTickerCandidateKeys([coincidence], [sugarTrade], []).size).toBe(0);
+  });
+
+  it("does not flag a high-confidence pending read against a committed trade — an anchored ticker match is trusted", () => {
+    const anchored = {
+      key: "hrho-1",
+      candidate: buyCandidate({ ticker: "HRHO", shares: 8, price: 46.66, date: "2026-01-06", confidence: "high" as const }),
+    };
+    expect(findWrongTickerCandidateKeys([anchored], [sugarTrade], []).size).toBe(0);
+  });
+
+  it("flags the strictly-lower-confidence copy of a pending pair under two different tickers, never the better one", () => {
+    const real = {
+      key: "sugr-1",
+      candidate: buyCandidate({ ticker: "SUGR", shares: 6, price: 46.48, date: "2026-01-11", confidence: "high" as const }),
+    };
+    const phantom = {
+      key: "hrho-2",
+      candidate: buyCandidate({ ticker: "HRHO", shares: 6, price: 45.92, date: "2026-01-11", confidence: "low" as const }),
+    };
+    const hints = findWrongTickerCandidateKeys([real, phantom], [], []);
+    expect(hints.get("hrho-2")).toBe("SUGR");
+    expect(hints.has("sugr-1")).toBe(false);
+  });
+
+  it("flags neither of an equal-confidence pending pair — no basis to pick which ticker is the wrong guess", () => {
+    const a = { key: "a", candidate: buyCandidate({ ticker: "SUGR", shares: 6, price: 46.48, date: "2026-01-11", confidence: "low" as const }) };
+    const b = { key: "b", candidate: buyCandidate({ ticker: "HRHO", shares: 6, price: 45.92, date: "2026-01-11", confidence: "low" as const }) };
+    expect(findWrongTickerCandidateKeys([a, b], [], []).size).toBe(0);
+  });
+
+  it("flags a pending Sell matching another ticker's committed allocation the same way", () => {
+    const allocation = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "sg1",
+      tradeId: "t-sugr",
+      portfolioId: "p1",
+      ticker: "SUGR",
+      sharesClosed: 22,
+      exitPrice: 50.42,
+      executionDate: "2026-01-27",
+      executionTime: "10:00",
+    });
+    const phantomSell = {
+      key: "hrho-s1",
+      candidate: buyCandidate({ ticker: "HRHO", side: "SELL" as const, shares: 22, price: 50.1, date: "2026-01-27", confidence: "low" as const }),
+    };
+    const hints = findWrongTickerCandidateKeys([phantomSell], [], [allocation]);
+    expect(hints.get("hrho-s1")).toBe("SUGR");
   });
 });
