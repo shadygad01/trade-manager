@@ -139,10 +139,19 @@ export function ImportPage() {
     existingVerificationsRaw !== undefined &&
     existingTimelineRaw !== undefined;
 
-  function duplicateMatch(candidate: ParsedTradeCandidate) {
-    return candidate.side === "BUY"
-      ? findDuplicateBuyMatch(candidate, existingTrades)
-      : findDuplicateSellMatch(candidate, existingAllocations);
+  /**
+   * `ownTradeId` excludes a candidate's own already-committed trade from the
+   * comparison pool — without it, a row that was itself just added (via
+   * addedTradeIds) would "match" the exact Trade it just became (identical
+   * ticker/date/shares/price by construction), showing a false "Duplicate"
+   * badge on a perfectly successful, non-duplicate commit. Only matters for
+   * the per-row display after commit; the pre-commit skip check in
+   * commitTickerGroup runs before this candidate's own trade exists, so it
+   * never needs an exclusion.
+   */
+  function duplicateMatch(candidate: ParsedTradeCandidate, ownTradeId?: string) {
+    const trades = ownTradeId ? existingTrades.filter((t) => t.id !== ownTradeId) : existingTrades;
+    return candidate.side === "BUY" ? findDuplicateBuyMatch(candidate, trades) : findDuplicateSellMatch(candidate, existingAllocations);
   }
 
   /**
@@ -938,6 +947,7 @@ export function ImportPage() {
                 dismissedKeys={dismissedKeys}
                 rowErrors={rowErrors}
                 duplicateMatch={duplicateMatch}
+                addedTradeIds={session.addedTradeIds}
                 suspectedDuplicateKeys={pendingDuplicateCandidateKeySet}
                 onDeleteAutoAdded={(entry) => void deleteAutoAddedTrade(entry)}
                 onDiscardPending={(entry) => discardPendingCandidate(entry.key)}
@@ -999,6 +1009,7 @@ export function TickerGroupCard({
   dismissedKeys,
   rowErrors,
   duplicateMatch,
+  addedTradeIds,
   suspectedDuplicateKeys,
   onDeleteAutoAdded,
   onDiscardPending,
@@ -1025,7 +1036,9 @@ export function TickerGroupCard({
   skippedKeys: Set<string>;
   dismissedKeys: Set<string>;
   rowErrors: Record<string, string>;
-  duplicateMatch: (candidate: ParsedTradeCandidate) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
+  duplicateMatch: (candidate: ParsedTradeCandidate, ownTradeId?: string) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
+  /** Entry key -> the real Trade.id an added Buy became — excludes a row's own committed trade from its duplicateMatch check so a successful commit never shows a false "Duplicate" badge against itself. */
+  addedTradeIds: Record<string, string>;
   /** Keys of pending (not yet added/skipped/dismissed) candidates suggested for discard — either a duplicate of a sibling in this same batch, or of a trade already committed to the ledger. See ImportPage's pendingDuplicateCandidateKeys. */
   suspectedDuplicateKeys: Set<string>;
   onDeleteAutoAdded: (entry: CandidateEntry) => void;
@@ -1188,7 +1201,7 @@ export function TickerGroupCard({
 
       <div className="divide-y divide-slate-800">
         {group.buys.map((entry) => {
-          const match = duplicateMatch(entry.candidate);
+          const match = duplicateMatch(entry.candidate, addedTradeIds[entry.key]);
           return (
             <AutoCommitRow
               key={entry.key}

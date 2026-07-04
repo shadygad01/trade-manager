@@ -42,6 +42,7 @@ describe("TickerGroupCard — invoice-sourced Buy needs no separate broker scree
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -79,6 +80,7 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -116,6 +118,7 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -149,6 +152,7 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -182,6 +186,7 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -222,6 +227,7 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set(["dupe"])}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={onDiscardPending}
@@ -259,6 +265,7 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set(["s-dupe"])}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={onDiscardPending}
@@ -296,6 +303,7 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => ({ matchType: "possible", matchedId: "existing-trade-1" })}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set(["arcc-1"])}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={onDiscardPending}
@@ -331,6 +339,7 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -372,6 +381,7 @@ describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -406,6 +416,7 @@ describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -442,6 +453,7 @@ describe("TickerGroupCard — per-ticker Confirm (the ORWE case: verified but bl
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -475,6 +487,7 @@ describe("TickerGroupCard — per-ticker Confirm (the ORWE case: verified but bl
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        addedTradeIds={{}}
         suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
@@ -487,5 +500,43 @@ describe("TickerGroupCard — per-ticker Confirm (the ORWE case: verified but bl
       />,
     );
     expect(screen.queryByRole("button", { name: "Confirm ORHD" })).not.toBeInTheDocument();
+  });
+});
+
+describe("TickerGroupCard — an added Buy never shows a false self-duplicate badge", () => {
+  it("passes the row's own committed trade id to duplicateMatch, so a successful commit excludes itself from the comparison", () => {
+    const duplicateMatch = vi.fn(() => undefined);
+    const added = buyEntry("added-1");
+    render(
+      <TickerGroupCard
+        ticker="ORWE"
+        group={{ buys: [added], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 177, verifiedUnits: 177 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set(["added-1"])}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={duplicateMatch}
+        addedTradeIds={{ "added-1": "trade-abc" }}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(duplicateMatch).toHaveBeenCalledWith(added.candidate, "trade-abc");
+    expect(screen.getByText("Added")).toBeInTheDocument();
+    expect(screen.queryByText("Duplicate")).not.toBeInTheDocument();
   });
 });
