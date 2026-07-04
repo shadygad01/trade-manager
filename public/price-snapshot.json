@@ -1,4 +1,157 @@
 {
-  "asOf": null,
-  "prices": {}
+  "asOf": "2026-07-04T21:25:58.895Z",
+  "prices": {
+    "COMI": 81.2,
+    "HRHO": 21.55,
+    "TMGH": 58,
+    "SWDY": 47.69,
+    "EAST": 21.8,
+    "ETEL": 32.77,
+    "ABUK": 58.32,
+    "AMOC": 9.08,
+    "ORWE": 25.01,
+    "EFIH": 25.15,
+    "CIEB": 20.28,
+    "ADIB": 37.89,
+    "SKPC": 27.29,
+    "EKHO": 0.78,
+    "MFPC": 43.8,
+    "ISPH": 3.01,
+    "PHAR": 40,
+    "CSAG": 19.05,
+    "JUFO": 18.71,
+    "EMFD": 7.12,
+    "ORAS": 71.05,
+    "ARCC": 10.5,
+    "ORHD": 13.59,
+    "SUGR": 63.31,
+    "MASR": 4.25
+  },
+  "quotes": {
+    "COMI": {
+      "price": 81.2,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "HRHO": {
+      "price": 21.55,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "TMGH": {
+      "price": 58,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "SWDY": {
+      "price": 47.69,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "EAST": {
+      "price": 21.8,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "ETEL": {
+      "price": 32.77,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "ABUK": {
+      "price": 58.32,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "AMOC": {
+      "price": 9.08,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "ORWE": {
+      "price": 25.01,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "EFIH": {
+      "price": 25.15,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "CIEB": {
+      "price": 20.28,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "ADIB": {
+      "price": 37.89,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "SKPC": {
+      "price": 27.29,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "EKHO": {
+      "price": 0.78,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "MFPC": {
+      "price": 43.8,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "ISPH": {
+      "price": 3.01,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "PHAR": {
+      "price": 40,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "CSAG": {
+      "price": 19.05,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "JUFO": {
+      "price": 18.71,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "EMFD": {
+      "price": 7.12,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "ORAS": {
+      "price": 71.05,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "ARCC": {
+      "price": 10.5,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "ORHD": {
+      "price": 13.59,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "SUGR": {
+      "price": 63.31,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    },
+    "MASR": {
+      "price": 4.25,
+      "quotedAt": "2024-07-23T20:00:00.000Z",
+      "source": "yahoo"
+    }
+  }
 }
