@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, Pencil, Trash2, XCircle, Eraser } from "lucide-react";
@@ -16,6 +16,7 @@ import {
 import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
 import {
   importSession,
@@ -95,6 +96,30 @@ export function ImportPage() {
 
   const session = useImportSession();
   const { pendingCandidates, pendingVerifications, pendingDividends, tickerPortfolio, filesProcessed } = session;
+
+  /**
+   * Every extraction path already filters a Buy/Sell candidate dated before
+   * TRACKING_START_DATE at parse time (see trackedDateRange.ts) — but
+   * ThndrParser's dividend extraction didn't, until a real out-of-range
+   * dividend (a 2024 payout, tracking starts 2026-01-01) reached this pool,
+   * sat there looking normal, and only surfaced as a thrown error the
+   * moment the user tried to confirm it. Silently dropping any out-of-range
+   * candidate/dividend still sitting in the pool — regardless of which
+   * extraction path let it through, including ones already stuck in a
+   * session from before this fix — means there's never a row that can only
+   * ever fail to commit.
+   */
+  useEffect(() => {
+    const hasStaleCandidates = pendingCandidates.some((e) => isBeforeTrackingStart(e.candidate.date));
+    const hasStaleDividends = pendingDividends.some((e) => isBeforeTrackingStart(e.dividend.date));
+    if (!hasStaleCandidates && !hasStaleDividends) return;
+    importSession.update((prev) => ({
+      ...prev,
+      pendingCandidates: prev.pendingCandidates.filter((e) => !isBeforeTrackingStart(e.candidate.date)),
+      pendingDividends: prev.pendingDividends.filter((e) => !isBeforeTrackingStart(e.dividend.date)),
+    }));
+  }, [pendingCandidates, pendingDividends]);
+
   const addedKeys = useMemo(() => new Set(session.addedKeys), [session.addedKeys]);
   const acceptedKeys = useMemo(() => new Set(session.acceptedKeys), [session.acceptedKeys]);
   const skippedKeys = useMemo(() => new Set(session.skippedKeys), [session.skippedKeys]);

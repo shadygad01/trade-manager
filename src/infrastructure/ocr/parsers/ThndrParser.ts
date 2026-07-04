@@ -677,7 +677,9 @@ export class ThndrParser implements BrokerParser {
   parseDividends(text: string): ParsedDividendCandidate[] {
     const header = resolveHeaderTickerImpl(text);
     if (!header) return [];
-    return parseDividendsTextImpl(text, header.ticker);
+    const raw = parseDividendsTextImpl(text, header.ticker);
+    const { inRange } = partitionByRange(raw, (d) => this.isWithinTrackedRange(d));
+    return inRange;
   }
 
   resolveHeaderTicker(text: string): string | null {
