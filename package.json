@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit && npm run arch:check",
+    "arch:check": "depcruise --config .dependency-cruiser.cjs src",
     "fetch-prices": "tsx scripts/fetch-prices/index.ts"
   },
   "dependencies": {
@@ -31,6 +32,7 @@
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "dependency-cruiser": "^18.0.0",
     "fake-indexeddb": "^6.2.5",
     "tailwindcss": "^4.0.0",
     "tsx": "^4.19.2",

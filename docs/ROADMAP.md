@@ -126,6 +126,10 @@ User-reported real bug, from real (test) screenshots: the same underlying positi
 - Since OCR ticker resolution can't be made perfect for every company outside the known list, `ImportPage` also gained a direct correction tool: clicking a ticker group's heading in Step 2 turns it into an editable field, and confirming a new ticker moves every pending row (buys, sells, verifications, dividends) from the wrong ticker to the corrected one — a `renameTickerGroup` operation on the pending pool only, before anything is added as a real trade.
 - Also explained in-app terminology to the reporting user: "Add as Trade" records a parsed Buy candidate as a real `Trade`; "Allocate Sell" opens the lot-picker so a parsed Sell candidate can specify exactly which open lot(s) it closes (per ADR-002 — this app never assumes FIFO).
 
+### Post-sprint-7 fix — import-boundary enforcement
+
+The Clean Architecture layering (`presentation → application → domain`, `infrastructure → domain`) was real and consistently followed, but only by convention — nothing stopped a stray import from `src/domain` reaching into `@presentation` from compiling and passing every test. Added `dependency-cruiser` (`.dependency-cruiser.cjs`, `npm run arch:check`) encoding the same three inward-only rules the docs already described; wired into `npm run lint` (and therefore CI, with no workflow file changes needed) so a boundary violation now fails the build instead of only failing code review. Verified it actually catches a violation (a throwaway `@presentation` import inside a domain file), not just that it passes on already-clean code.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

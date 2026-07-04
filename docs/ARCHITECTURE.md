@@ -14,11 +14,13 @@ Dependencies only ever point inward. `domain` depends on nothing. `application` 
 | Layer | Path | Contents |
 |---|---|---|
 | Domain | `src/domain/` | `entities/` (Portfolio, Trade, TradeAllocation, TimelineEvent, JournalEntry, PositionVerification, Upload), `value-objects/` (Money, Ticker, id, knownTickers), `repositories/index.ts` (the ports) |
-| Application | `src/application/` | `services/TradeService.ts`, `services/PortfolioService.ts` (use cases), `analytics/` (the analytics engine — see [ANALYTICS_ENGINE.md](ANALYTICS_ENGINE.md)) |
+| Application | `src/application/` | `services/TradeService.ts`, `services/PortfolioService.ts`, `services/BackupService.ts` (use cases), `analytics/` (the analytics engine — see [ANALYTICS_ENGINE.md](ANALYTICS_ENGINE.md)) |
 | Infrastructure | `src/infrastructure/` | `db/` (Dexie adapters), `market-data/` (price snapshot client), `ocr/` (the import pipeline — see [OCR_SUBSYSTEM.md](OCR_SUBSYSTEM.md)) |
 | Presentation | `src/presentation/` | React pages/components, wired to `application` services via `infrastructure` repositories |
 
-This means the entire trade/allocation/analytics logic is testable with in-memory fakes and has zero dependency on IndexedDB, Tesseract, or React — see `src/application/testUtils/fakeRepositories.ts` and the 121 tests across the three inner layers.
+This means the entire trade/allocation/analytics logic is testable with in-memory fakes and has zero dependency on IndexedDB, Tesseract, or React — see `src/application/testUtils/fakeRepositories.ts` and the 197 tests across the three inner layers.
+
+This layering is machine-enforced, not just documented: `.dependency-cruiser.cjs` encodes the same inward-only rules (domain → nothing, application → domain only, infrastructure → domain only) and runs as part of `npm run lint` (`npm run arch:check` to run it alone) — a stray import that reaches outward across a layer boundary fails CI instead of just failing code review.
 
 ## Architectural decisions
 
