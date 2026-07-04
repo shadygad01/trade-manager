@@ -6,6 +6,7 @@ import {
   deposit,
   withdraw,
   recordDividend,
+  deleteDividend,
   recordCashAdjustment,
   recordSplit,
   recordRightsIssue,
@@ -112,6 +113,27 @@ describe("recordDividend", () => {
     await expect(recordDividend(repos, "p1", { ticker: "EAST", amount: 64.98, date: "2025-12-31" })).rejects.toThrow(
       /2026-01-01/
     );
+  });
+});
+
+describe("deleteDividend", () => {
+  it("refunds the dividend amount out of cash and removes the timeline event", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
+    await recordDividend(repos, "p1", { ticker: "COMI", amount: 25 });
+    const [event] = await repos.timeline.getByPortfolio("p1");
+
+    await deleteDividend(repos, event);
+
+    expect((await repos.portfolios.getById("p1"))?.cash).toBe(1000);
+    expect(await repos.timeline.getByPortfolio("p1")).toHaveLength(0);
+  });
+
+  it("rejects a non-Dividend event", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
+    await deposit(repos, "p1", 500);
+    const [event] = await repos.timeline.getByPortfolio("p1");
+
+    await expect(deleteDividend(repos, event)).rejects.toThrow(/non-Dividend/i);
   });
 });
 

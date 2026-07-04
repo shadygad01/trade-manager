@@ -321,6 +321,16 @@ Direct user report: "many dividends duplicated." Root cause: a dividend candidat
 - Verified end-to-end against a real running build with genuine OCR (not mocked): uploaded a synthetic "My Position" screenshot with a dividend history, confirmed it (cash went from 1,000 to 1,114), then uploaded a *different* file with the same overlapping dividend content — the app correctly reported "1 dividend already in the list or already recorded — not added again" and cash stayed at 1,114 instead of double-counting.
 - 5 new tests (284 total, plus the moved `dividendContentKey`): `buildExistingDividendKeys`/`isDividendAlreadyRecorded` matching by ticker/date/amount, ignoring non-Dividend events and events missing a ticker/amount, and not false-flagging a different amount/date/ticker.
 
+### Post-sprint-8 — Delete a dividend, and clear ones already duplicated
+
+Direct user follow-up: the cross-session import dedup only stops *new* duplicates going forward — it does nothing for dividends already sitting on the ledger from before that fix shipped, and there was no way to delete a dividend at all (`TimelinePage` was read-only). The user reported still having duplicates with no way to remove them.
+
+- **`deleteDividend`** (`PortfolioService.ts`, new): reverses a Dividend event's amount out of cash (the same refund pattern `deleteTrade` uses for a buy's cost) and removes the timeline event.
+- **`suggestDuplicateDividendIdsToDelete`** (`duplicateDetection.ts`, new): groups existing Dividend events by the same ticker+date+amount key the import-time dedup uses, and suggests deleting every one but the first in each group — unlike a duplicate buy/sell (where a price difference makes one read more plausible), two dividend events with identical ticker/date/amount are, for all practical purposes, the same real payment recorded twice.
+- **`TimelinePage`** gained: a delete (trash) action on every Dividend row, reusing `deleteDividend`; a "Suspected duplicate" badge on rows `suggestDuplicateDividendIdsToDelete` flags; and a header-level "Clear duplicate dividends (N)" bulk action, mirroring `PortfolioDetailPage`'s "Clear all suspected duplicates" for trades. First test coverage for `TimelinePage` itself (previously untested).
+- Verified end-to-end against a real running build: recorded the same COMI dividend twice plus a genuinely different HRHO one (reproducing "duplicates already on the ledger" rather than relying on the import path), confirmed the duplicate COMI row was flagged and the bulk button read "(1)", cleared it in one click, and confirmed cash was refunded correctly, the HRHO dividend was untouched, and the button disappeared once nothing was left to clear.
+- 8 new tests (292 total): `deleteDividend` (refunds + removes, rejects a non-Dividend event) in `PortfolioService.test.ts`; `suggestDuplicateDividendIdsToDelete` (flags all-but-first in a group, ignores non-matching/non-Dividend events) in `duplicateDetection.test.ts`; the bulk-clear/individual-delete/no-duplicates cases in new `TimelinePage.test.tsx`.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
