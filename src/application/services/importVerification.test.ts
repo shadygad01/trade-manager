@@ -115,6 +115,32 @@ describe("checkTickerMatch", () => {
     expect(result.reason).toBe("mismatch");
   });
 
+  it("flags alreadyFullyRecorded when the ledger alone already reconciles with the broker (a bulk re-upload of an already-imported ticker)", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 175,
+      pendingSellShares: 0,
+      existingRemainingShares: 175,
+      verifiedUnits: 175,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("mismatch");
+    expect(result.netShares).toBe(350);
+    expect(result.alreadyFullyRecorded).toBe(true);
+  });
+
+  it("does not flag alreadyFullyRecorded for a genuine mismatch where the ledger alone doesn't already match the broker", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 99,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 74,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.alreadyFullyRecorded).toBeFalsy();
+  });
+
   it("does not invoice-verify a mixed batch (some candidates not from an invoice)", () => {
     const result = checkTickerMatch({
       hasShares: true,

@@ -11,6 +11,20 @@ export interface TickerMatchStatus {
   reason: TickerMatchReason;
   netShares: number;
   verifiedUnits?: number;
+  /**
+   * True on a "mismatch" whose already-committed shares alone (before this
+   * batch's pending candidates) already reconcile exactly against the
+   * broker's verified count — i.e. the broker independently confirms the
+   * ledger was already correct, and every pending candidate for this ticker
+   * is re-describing shares already accounted for (a bulk re-upload of an
+   * already-fully-imported ticker), not a genuinely new transaction. See
+   * ImportPage's "Discard all pending for {ticker}" action, which this
+   * flag enables — distinct from the row-level duplicate checks, which
+   * require an individual candidate to match a specific existing trade or
+   * sibling by date+shares and miss this case whenever the existing lots
+   * were recorded with a different date/shares split than this new read.
+   */
+  alreadyFullyRecorded?: boolean;
 }
 
 /**
@@ -63,5 +77,9 @@ export function checkTickerMatch(params: {
     return { matched: false, reason: "no-verification", netShares };
   }
   const matched = Math.abs(netShares - params.verifiedUnits) < 1e-6;
-  return { matched, reason: matched ? "matched" : "mismatch", netShares, verifiedUnits: params.verifiedUnits };
+  if (matched) {
+    return { matched: true, reason: "matched", netShares, verifiedUnits: params.verifiedUnits };
+  }
+  const alreadyFullyRecorded = Math.abs(params.existingRemainingShares - params.verifiedUnits) < 1e-6;
+  return { matched: false, reason: "mismatch", netShares, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded };
 }
