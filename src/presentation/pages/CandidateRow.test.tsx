@@ -11,7 +11,7 @@ function makeEntry(confidence: ParsedTradeCandidate["confidence"]): CandidateEnt
     key: "k1",
     candidate: {
       ticker: "COMI",
-      side: "BUY",
+      side: "SELL",
       shares: 10,
       price: 50,
       date: "2026-01-05",
@@ -20,25 +20,30 @@ function makeEntry(confidence: ParsedTradeCandidate["confidence"]): CandidateEnt
   };
 }
 
-describe("CandidateRow — confidence-aware confirmation gate", () => {
-  it("enables the action immediately for a high-confidence candidate", () => {
+// CandidateRow is Sell-only now — Buy/Dividend/Verification auto-commit
+// (see ImportPage's AutoCommitRow instead). Allocating a sell always opens
+// the allocation modal for review, so a low-confidence sell is flagged
+// visually but the action stays clickable rather than gated behind a
+// checkbox — the modal itself is the review step.
+describe("CandidateRow — Sell allocation action", () => {
+  it("is always clickable for a high-confidence candidate, with no low-confidence flag", () => {
     const onAction = vi.fn();
     render(
       <CandidateRow
         entry={makeEntry("high")}
         match={undefined}
         added={false}
-        actionLabel="Add as Trade"
-        actionClassName="bg-emerald-500"
+        actionLabel="Allocate Sell"
+        actionClassName="bg-rose-500"
         onAction={onAction}
       />,
     );
-    const button = screen.getByRole("button", { name: "Add as Trade" });
+    const button = screen.getByRole("button", { name: "Allocate Sell" });
     expect(button).toBeEnabled();
-    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Low-confidence ticker guess")).not.toBeInTheDocument();
   });
 
-  it("disables the action for a low-confidence candidate until the user confirms it", async () => {
+  it("flags a low-confidence candidate visually but keeps the action clickable", async () => {
     const user = userEvent.setup();
     const onAction = vi.fn();
     render(
@@ -46,22 +51,31 @@ describe("CandidateRow — confidence-aware confirmation gate", () => {
         entry={makeEntry("low")}
         match={undefined}
         added={false}
-        actionLabel="Add as Trade"
-        actionClassName="bg-emerald-500"
+        actionLabel="Allocate Sell"
+        actionClassName="bg-rose-500"
         onAction={onAction}
       />,
     );
-    const button = screen.getByRole("button", { name: "Add as Trade" });
-    const checkbox = screen.getByRole("checkbox");
-    expect(button).toBeDisabled();
-
-    await user.click(button);
-    expect(onAction).not.toHaveBeenCalled();
-
-    await user.click(checkbox);
+    expect(screen.getByText("Low-confidence ticker guess")).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Allocate Sell" });
     expect(button).toBeEnabled();
 
     await user.click(button);
     expect(onAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an Added status instead of the action once added", () => {
+    render(
+      <CandidateRow
+        entry={makeEntry("high")}
+        match={undefined}
+        added
+        actionLabel="Allocate Sell"
+        actionClassName="bg-rose-500"
+        onAction={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Added")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Allocate Sell" })).not.toBeInTheDocument();
   });
 });

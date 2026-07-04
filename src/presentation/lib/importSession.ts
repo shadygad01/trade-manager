@@ -21,6 +21,12 @@ export interface ImportSessionState {
   pendingDividends: DividendEntry[];
   addedKeys: string[];
   acceptedKeys: string[];
+  /** Buy candidates auto-skipped as an exact duplicate (same ticker/date/shares/price as an already-recorded trade) — never became a real trade. */
+  skippedKeys: string[];
+  /** Auto-added rows the user explicitly deleted afterward (see PortfolioOS's Import auto-commit) — kept distinct from "never added" so auto-commit never silently re-adds a row the user removed on purpose. */
+  dismissedKeys: string[];
+  /** Entry key -> the real Trade.id it became, so an auto-added row can still be deleted directly from Import. */
+  addedTradeIds: Record<string, string>;
   tickerPortfolio: Record<string, string>;
   uploadSeq: number;
   filesProcessed: number;
@@ -35,6 +41,9 @@ function emptyState(): ImportSessionState {
     pendingDividends: [],
     addedKeys: [],
     acceptedKeys: [],
+    skippedKeys: [],
+    dismissedKeys: [],
+    addedTradeIds: {},
     tickerPortfolio: {},
     uploadSeq: 0,
     filesProcessed: 0,

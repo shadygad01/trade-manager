@@ -5,8 +5,13 @@ import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
+import { KNOWN_EGX_TICKERS } from "@domain/value-objects/knownTickers";
 import { InsufficientCashError } from "./errors";
 import type { AppRepositories } from "./types";
+
+function companyNameForTicker(ticker: string): string | undefined {
+  return KNOWN_EGX_TICKERS.find((t) => t.ticker === ticker)?.companyName;
+}
 
 function toTimestamp(executionDate: string, executionTime: string): string {
   return `${executionDate}T${executionTime}`;
@@ -142,6 +147,83 @@ export async function deleteTrade(repos: AppRepositories, tradeId: string): Prom
   }
 
   await repos.trades.delete(tradeId);
+}
+
+export interface RenameTickerResult {
+  tradesUpdated: number;
+  allocationsUpdated: number;
+  timelineEventsUpdated: number;
+  verificationsUpdated: number;
+}
+
+/**
+ * Corrects a wrong ticker across every already-recorded row, not just the
+ * Import page's pending pool: OCR ticker resolution can still be wrong (see
+ * ThndrParser's confidence tiers), and now that Import auto-commits most
+ * rows instead of waiting for a manual click, the pending-pool-only rename
+ * is no longer the only place a correction is needed — a wrong ticker can
+ * just as easily already be sitting in the real ledger by the time it's
+ * noticed. Touches every table that carries a ticker field: `Trade`
+ * (ticker, companyName, and sector — re-derived from the corrected ticker,
+ * or cleared rather than left stale if the new ticker doesn't resolve),
+ * `TradeAllocation`, `TimelineEvent`, and `PositionVerification`. Never
+ * touches anything else about these rows (shares/price/dates/notes are
+ * untouched) — this is purely a ticker-identity fix.
+ */
+export async function renameTickerEverywhere(
+  repos: AppRepositories,
+  oldTickerRaw: string,
+  newTickerRaw: string
+): Promise<RenameTickerResult> {
+  const oldTicker = normalizeTicker(oldTickerRaw);
+  const newTicker = normalizeTicker(newTickerRaw);
+  const empty: RenameTickerResult = { tradesUpdated: 0, allocationsUpdated: 0, timelineEventsUpdated: 0, verificationsUpdated: 0 };
+  if (!newTicker || newTicker === oldTicker) {
+    return empty;
+  }
+
+  const [trades, allocations, timelineEvents, verifications] = await Promise.all([
+    repos.trades.getAll(),
+    repos.allocations.getAll(),
+    repos.timeline.getAll(),
+    repos.verifications.getAll(),
+  ]);
+
+  const matchingTrades = trades.filter((t) => normalizeTicker(t.ticker) === oldTicker);
+  for (const t of matchingTrades) {
+    await repos.trades.save({
+      ...t,
+      ticker: newTicker,
+      companyName: companyNameForTicker(newTicker) ?? t.companyName,
+      sector: sectorForTicker(newTicker),
+    });
+  }
+
+  const matchingAllocations = allocations.filter((a) => normalizeTicker(a.ticker) === oldTicker);
+  for (const a of matchingAllocations) {
+    await repos.allocations.save({ ...a, ticker: newTicker });
+  }
+
+  const matchingEvents = timelineEvents.filter((e) => e.ticker !== undefined && normalizeTicker(e.ticker) === oldTicker);
+  for (const e of matchingEvents) {
+    await repos.timeline.save({ ...e, ticker: newTicker });
+  }
+
+  const matchingVerifications = verifications.filter((v) => normalizeTicker(v.ticker) === oldTicker);
+  for (const v of matchingVerifications) {
+    await repos.verifications.save({
+      ...v,
+      ticker: newTicker,
+      companyName: companyNameForTicker(newTicker) ?? v.companyName,
+    });
+  }
+
+  return {
+    tradesUpdated: matchingTrades.length,
+    allocationsUpdated: matchingAllocations.length,
+    timelineEventsUpdated: matchingEvents.length,
+    verificationsUpdated: matchingVerifications.length,
+  };
 }
 
 export interface RecordSellAllocationInput {

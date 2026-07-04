@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
-import { recordBuy, recordSell, computePositions, moveTrade, deleteTrade } from "./TradeService";
+import { recordBuy, recordSell, computePositions, moveTrade, deleteTrade, renameTickerEverywhere } from "./TradeService";
 import { InsufficientCashError } from "./errors";
 
 function seedPortfolio(cash: number) {
@@ -173,6 +173,99 @@ describe("deleteTrade", () => {
   it("rejects an unknown trade id", async () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
     await expect(deleteTrade(repos, "nope")).rejects.toThrow(/not found/i);
+  });
+});
+
+describe("renameTickerEverywhere", () => {
+  it("renames Trade.ticker/companyName/sector and its Buy TimelineEvent", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "ZZZZ",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    expect(trade.sector).toBeUndefined();
+
+    const result = await renameTickerEverywhere(repos, "ZZZZ", "COMI");
+    expect(result.tradesUpdated).toBe(1);
+
+    const updated = await repos.trades.getById(trade.id);
+    expect(updated?.ticker).toBe("COMI");
+    expect(updated?.sector).toBe("Banking");
+    expect(updated?.companyName).toBe("COMMERCIAL INTERNATIONAL BANK");
+
+    const events = await repos.timeline.getByPortfolio("p1");
+    const buyEvent = events.find((e) => e.type === "Buy" && e.relatedTradeIds?.includes(trade.id));
+    expect(buyEvent?.ticker).toBe("COMI");
+  });
+
+  it("renames TradeAllocation.ticker for a closed lot", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "ZZZZ",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "ZZZZ",
+      allocations: [{ tradeId: trade.id, shares: 4, exitPrice: 55 }],
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+
+    const result = await renameTickerEverywhere(repos, "ZZZZ", "COMI");
+    expect(result.allocationsUpdated).toBe(1);
+
+    const allocations = await repos.allocations.getByPortfolio("p1");
+    expect(allocations[0].ticker).toBe("COMI");
+  });
+
+  it("renames a PositionVerification's ticker", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    await repos.verifications.save({
+      id: "v1",
+      portfolioId: "p1",
+      ticker: "ZZZZ",
+      units: 10,
+      capturedAt: "2026-01-01T00:00",
+      source: "screenshot",
+    });
+
+    const result = await renameTickerEverywhere(repos, "ZZZZ", "COMI");
+    expect(result.verificationsUpdated).toBe(1);
+
+    const [verification] = await repos.verifications.getByPortfolio("p1");
+    expect(verification.ticker).toBe("COMI");
+  });
+
+  it("clears a trade's sector rather than leaving it stale when the new ticker doesn't resolve", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    expect(trade.sector).toBe("Banking");
+
+    await renameTickerEverywhere(repos, "COMI", "ZZZZ");
+    const updated = await repos.trades.getById(trade.id);
+    expect(updated?.sector).toBeUndefined();
+  });
+
+  it("is a no-op when the new ticker is the same as the old one", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const result = await renameTickerEverywhere(repos, "COMI", "comi");
+    expect(result).toEqual({ tradesUpdated: 0, allocationsUpdated: 0, timelineEventsUpdated: 0, verificationsUpdated: 0 });
   });
 });
 
