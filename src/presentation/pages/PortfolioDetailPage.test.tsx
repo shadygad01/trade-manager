@@ -33,6 +33,12 @@ vi.mock("@presentation/lib/data", () => ({
     trades: {
       getByPortfolio: (portfolioId: string) => Promise.resolve(state.trades.filter((t) => t.portfolioId === portfolioId)),
       getById: (id: string) => Promise.resolve(state.trades.find((t) => t.id === id)),
+      save: (t: Trade) => {
+        const i = state.trades.findIndex((existing) => existing.id === t.id);
+        if (i >= 0) state.trades[i] = t;
+        else state.trades.push(t);
+        return Promise.resolve();
+      },
       delete: (id: string) => {
         state.trades = state.trades.filter((t) => t.id !== id);
         return Promise.resolve();
@@ -44,6 +50,7 @@ vi.mock("@presentation/lib/data", () => ({
     },
     timeline: {
       getByPortfolio: () => Promise.resolve([]),
+      save: () => Promise.resolve(),
       delete: () => Promise.resolve(),
     },
     journal: { getByTrade: () => Promise.resolve(undefined) },
@@ -134,5 +141,46 @@ describe("PortfolioDetailPage — Clear all suspected duplicates", () => {
 
     await screen.findByText("COMI");
     expect(screen.queryByRole("button", { name: /clear all suspected duplicates/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("PortfolioDetailPage — Record opening balance for a verified-but-untracked position", () => {
+  beforeEach(() => {
+    state.portfolios = [createPortfolio({ id: "p1", name: "Opening Balance Test", kind: "Trading", initialCash: 1_000 })];
+    state.trades = [];
+    state.verifications = [
+      { id: "v1", portfolioId: "p1", ticker: "TMGH", units: 35, avgCost: 76.68, capturedAt: "2026-06-01T00:00", source: "screenshot" },
+    ];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+  });
+
+  it("books a Trade at the tracking floor using the broker's units/avg cost", async () => {
+    const user = userEvent.setup();
+    renderPage("p1");
+
+    const recordButton = await screen.findByRole("button", { name: /record as opening balance/i });
+    await user.click(recordButton);
+
+    await waitFor(() => {
+      expect(state.trades).toHaveLength(1);
+    });
+    const [trade] = state.trades;
+    expect(trade.ticker).toBe("TMGH");
+    expect(trade.shares).toBe(35);
+    expect(trade.entryPrice).toBeCloseTo(76.68);
+    expect(trade.executionDate).toBe("2026-01-01");
+    expect(state.portfolios[0].cash).toBeCloseTo(1_000 - 35 * 76.68);
+    expect(screen.queryByRole("button", { name: /record as opening balance/i })).not.toBeInTheDocument();
+  });
+
+  it("has no action when the broker screenshot didn't include an average cost", async () => {
+    state.verifications = [
+      { id: "v1", portfolioId: "p1", ticker: "TMGH", units: 35, capturedAt: "2026-06-01T00:00", source: "screenshot" },
+    ];
+    renderPage("p1");
+
+    await screen.findByText(/TMGH/);
+    expect(screen.queryByRole("button", { name: /record as opening balance/i })).not.toBeInTheDocument();
+    expect(await screen.findByText(/no average cost/i)).toBeInTheDocument();
   });
 });
