@@ -1,0 +1,33 @@
+name: Update Price Snapshot
+
+on:
+  schedule:
+    # EGX trades ~10:00-14:30 Cairo time (UTC+2/+3) Sun-Thu.
+    # Runs every 30 minutes across 07:00-12:30 UTC to cover the session with margin.
+    - cron: "*/30 7-12 * * 0-4"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-prices:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run fetch-prices
+
+      - name: Commit and push snapshot if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/price-snapshot.json
+          git diff --staged --quiet || (git commit -m "chore: update price snapshot" && git push)
