@@ -331,6 +331,14 @@ Direct user follow-up: the cross-session import dedup only stops *new* duplicate
 - Verified end-to-end against a real running build: recorded the same COMI dividend twice plus a genuinely different HRHO one (reproducing "duplicates already on the ledger" rather than relying on the import path), confirmed the duplicate COMI row was flagged and the bulk button read "(1)", cleared it in one click, and confirmed cash was refunded correctly, the HRHO dividend was untouched, and the button disappeared once nothing was left to clear.
 - 8 new tests (292 total): `deleteDividend` (refunds + removes, rejects a non-Dividend event) in `PortfolioService.test.ts`; `suggestDuplicateDividendIdsToDelete` (flags all-but-first in a group, ignores non-matching/non-Dividend events) in `duplicateDetection.test.ts`; the bulk-clear/individual-delete/no-duplicates cases in new `TimelinePage.test.tsx`.
 
+### Post-sprint-8 fix — Timeline (and every other portfolio-scoped nav link) invisible on a portfolio's own home page
+
+Direct user follow-up: "iam in portofolio and cant see timeline". Root cause was in `Sidebar.tsx`: `useRoute("/portfolios/:id/:rest*")` was meant to match both a bare portfolio URL (`/portfolios/:id`) and its sub-pages (`/portfolios/:id/trades`, etc.), but wouter's underlying `regexparam` (v3) does not treat a trailing `*` on a named param as "optional" — it's parsed as a literal, mandatory path segment. So the pattern only ever matched when a sub-path segment was present, and the entire "PORTFOLIO" nav section (Holdings/Trades/Timeline/Journal/Analytics) silently fell back to "Select a portfolio..." on the portfolio's own Holdings page — both on first client-side navigation into a portfolio and on a hard reload of that same bare URL. Confirmed via direct `regexparam.parse()` testing before touching any code, not guessed at.
+
+- Fix: `useRoute("/portfolios/:id/:rest?")` — `regexparam` special-cases the `?` suffix into a real optional non-capturing group, matching both the bare URL and any sub-page while still correctly excluding the top-level `/portfolios` list page.
+- Verified end-to-end against a real production build with Playwright: created a portfolio, clicked into it (client-side nav) and confirmed the full PORTFOLIO nav section including Timeline appeared; then did a hard `page.reload()` on that same bare URL and confirmed it still appeared (this was the exact failure mode the user hit — a fresh/reloaded view of their portfolio's home page).
+- No behavior or test changes needed beyond the one-line route pattern; full suite (292 tests, 44 files), `tsc --noEmit`, and `arch:check` all stayed clean.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
