@@ -175,6 +175,12 @@ With both remaining next-recommended-sprint items deferred pending a real trigge
 
 - 3 new component tests (228 total).
 
+### Post-sprint-7 fix — GitHub Pages deep-link/refresh 404
+
+Live user bug report: Import wouldn't load, and refreshing "made the whole project disappear." Root cause was a static-hosting/client-routing mismatch, not data loss — GitHub Pages only has a real file at `/trade-manager/index.html`, so any other `wouter` route (`/import`, `/portfolios/:id`, etc.) 404s on a hard refresh or direct link, since there's no server-side rewrite rule. IndexedDB was never touched by this; it just looked like data loss because the response was a bare 404 page.
+
+Fixed with the standard [spa-github-pages](https://github.com/rafgraph/spa-github-pages) redirect trick (see [ARCHITECTURE.md](ARCHITECTURE.md#adr-001-fully-client-side-no-backend)): `public/404.html` re-encodes the requested path into a query string and redirects to the site root; a matching inline script in `index.html` decodes it and restores the real path via `history.replaceState` before `wouter` reads `window.location`. Verified end-to-end with a Playwright script against a GitHub-Pages-accurate static server (one that serves `404.html`'s body with a 404 status for any unmatched path, unlike a plain file server) — confirmed a direct request to `/trade-manager/import` and `/trade-manager/data` both land back on the correct rendered page instead of a 404.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
