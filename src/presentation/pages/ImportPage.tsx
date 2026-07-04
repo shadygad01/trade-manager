@@ -483,6 +483,25 @@ export function ImportPage() {
     }));
   }
 
+  /**
+   * For a ticker flagged alreadyFullyRecorded (see checkTickerMatch): the
+   * broker independently confirms the ledger was already correct before
+   * this batch, so every pending Buy/Sell for this ticker is re-describing
+   * shares already accounted for — not a genuinely new transaction. Unlike
+   * clearPendingDuplicateCandidates, this doesn't rely on any individual row
+   * matching a specific sibling or existing trade by date+shares, since the
+   * whole point is that the existing lots were recorded with a different
+   * split than this new read. Never touches verifications (that's the
+   * ground truth this decision rests on) or dividends (already deduped
+   * separately at extraction time).
+   */
+  function discardAllPendingForTicker(ticker: string) {
+    importSession.update((prev) => ({
+      ...prev,
+      pendingCandidates: prev.pendingCandidates.filter((e) => normalizeTicker(e.candidate.ticker) !== ticker),
+    }));
+  }
+
   async function addDividend(entry: DividendEntry, ticker: string) {
     try {
       const portfolioId = portfolioForTicker(ticker);
@@ -895,6 +914,7 @@ export function ImportPage() {
                 suspectedDuplicateKeys={pendingDuplicateCandidateKeySet}
                 onDeleteAutoAdded={(entry) => void deleteAutoAddedTrade(entry)}
                 onDiscardPending={(entry) => discardPendingCandidate(entry.key)}
+                onDiscardAllPending={() => discardAllPendingForTicker(ticker)}
                 onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
                 onRenameTicker={(newTicker) => void renameTickerGroup(ticker, newTicker)}
                 existingPortfolioHint={
@@ -954,6 +974,7 @@ export function TickerGroupCard({
   suspectedDuplicateKeys,
   onDeleteAutoAdded,
   onDiscardPending,
+  onDiscardAllPending,
   onAllocateSell,
   onRenameTicker,
   existingPortfolioHint,
@@ -980,6 +1001,8 @@ export function TickerGroupCard({
   suspectedDuplicateKeys: Set<string>;
   onDeleteAutoAdded: (entry: CandidateEntry) => void;
   onDiscardPending: (entry: CandidateEntry) => void;
+  /** Discards every still-pending Buy/Sell for this ticker in one shot — only surfaced when matchStatus.alreadyFullyRecorded is true (see checkTickerMatch). */
+  onDiscardAllPending: () => void;
   onAllocateSell: (entry: CandidateEntry) => void;
   onRenameTicker: (newTicker: string) => void;
   existingPortfolioHint: { multiple: boolean; names: string[] } | undefined;
@@ -1093,6 +1116,21 @@ export function TickerGroupCard({
         <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
           No broker "My Position" screenshot uploaded for {ticker} yet — upload one in Step 1 so its share count can be
           verified before anything is allocated to a portfolio.
+        </div>
+      ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
+          <span>
+            {ticker}'s existing position already matches the broker's count on its own — every transaction extracted in
+            this batch looks like it's re-describing shares already on the ledger, just split into different
+            dates/lots than before. Discard all {formatShares(matchStatus.netShares - matchStatus.verifiedUnits!)} extra
+            shares' worth of pending rows for {ticker}?
+          </span>
+          <button
+            onClick={onDiscardAllPending}
+            className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
+          >
+            Discard all pending for {ticker}
+          </button>
         </div>
       ) : matchStatus?.reason === "mismatch" ? (
         <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
