@@ -1,14 +1,14 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
-import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2 } from "lucide-react";
+import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy } from "@application/services/TradeService";
 import { findDuplicateBuyMatch, findDuplicateSellMatch } from "@application/services/duplicateDetection";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
-import type { PositionVerification } from "@domain/entities/PositionVerification";
+import { importSession, useImportSession, type CandidateEntry, type VerificationEntry } from "@presentation/lib/importSession";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { Modal } from "@presentation/components/Modal";
 import { EmptyState } from "@presentation/components/EmptyState";
@@ -23,16 +23,6 @@ const CONFIDENCE_STYLE: Record<"high" | "medium" | "low", { label: string; color
 };
 
 type Stage = "idle" | "reading" | "error";
-type VerificationDraft = Omit<PositionVerification, "id" | "portfolioId">;
-
-interface CandidateEntry {
-  key: string;
-  candidate: ParsedTradeCandidate;
-}
-interface VerificationEntry {
-  key: string;
-  verification: VerificationDraft;
-}
 
 /**
  * Import runs as a strict two-phase workflow: (1) extract — drop as many
@@ -41,26 +31,24 @@ interface VerificationEntry {
  * then (2) distribute — group everything by ticker and assign ONE portfolio
  * per ticker, so a stock's sells automatically travel with its buys to the
  * same portfolio (they're the same decision, not two).
+ *
+ * The pool itself lives in `importSession` (module-level, localStorage-backed),
+ * not component state — a user often needs to leave this page mid-import to
+ * create a portfolio to distribute into, and plain useState would have thrown
+ * away everything extracted so far the moment the page unmounted.
  */
 export function ImportPage() {
   const [dragOver, setDragOver] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
   const [queueProgress, setQueueProgress] = useState<{ index: number; total: number; fileName: string } | null>(null);
-  const [uploadSeq, setUploadSeq] = useState(0);
-  const [filesProcessed, setFilesProcessed] = useState(0);
   const [recentFileResults, setRecentFileResults] = useState<{ fileName: string; warnings: string[]; duplicate: boolean }[]>([]);
   const [errorMessage, setErrorMessage] = useState("");
-
-  const [pendingCandidates, setPendingCandidates] = useState<CandidateEntry[]>([]);
-  const [pendingVerifications, setPendingVerifications] = useState<VerificationEntry[]>([]);
-  const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set());
-  const [acceptedKeys, setAcceptedKeys] = useState<Set<string>>(new Set());
   const [sellCandidate, setSellCandidate] = useState<{ key: string; ticker: string; portfolioId: string; candidate: ParsedTradeCandidate } | null>(null);
 
-  // One portfolio choice per ticker — shared by every buy, sell and
-  // verification row for that ticker, so assigning a ticker's buys to a
-  // portfolio automatically carries its sells along.
-  const [tickerPortfolio, setTickerPortfolio] = useState<Record<string, string>>({});
+  const session = useImportSession();
+  const { pendingCandidates, pendingVerifications, tickerPortfolio, filesProcessed } = session;
+  const addedKeys = useMemo(() => new Set(session.addedKeys), [session.addedKeys]);
+  const acceptedKeys = useMemo(() => new Set(session.acceptedKeys), [session.acceptedKeys]);
 
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []) ?? [];
 
@@ -79,11 +67,15 @@ export function ImportPage() {
     return tickerPortfolio[ticker] ?? portfolios[0]?.id ?? "";
   }
 
+  function setTickerPortfolio(ticker: string, portfolioId: string) {
+    importSession.update((prev) => ({ ...prev, tickerPortfolio: { ...prev.tickerPortfolio, [ticker]: portfolioId } }));
+  }
+
   async function processFiles(files: File[]) {
     if (files.length === 0) return;
     setStage("reading");
     setErrorMessage("");
-    let seq = uploadSeq;
+    let seq = importSession.getState().uploadSeq;
     const batchResults: typeof recentFileResults = [];
 
     try {
@@ -112,26 +104,25 @@ export function ImportPage() {
 
           const fileSeq = seq;
           seq += 1;
-          setPendingCandidates((prev) => [
+          const newCandidates = result.candidates.map((candidate, ci) => ({ key: `${fileSeq}-c${ci}`, candidate }));
+          const newVerifications = result.verifications.map((verification, vi) => ({ key: `${fileSeq}-v${vi}`, verification }));
+          importSession.update((prev) => ({
             ...prev,
-            ...result.candidates.map((candidate, ci) => ({ key: `${fileSeq}-c${ci}`, candidate })),
-          ]);
-          setPendingVerifications((prev) => [
-            ...prev,
-            ...result.verifications.map((verification, vi) => ({ key: `${fileSeq}-v${vi}`, verification })),
-          ]);
+            pendingCandidates: [...prev.pendingCandidates, ...newCandidates],
+            pendingVerifications: [...prev.pendingVerifications, ...newVerifications],
+          }));
         }
 
         batchResults.push({ fileName: currentFile.name, warnings: result.warnings, duplicate: isDuplicateFile });
-        setFilesProcessed((n) => n + 1);
+        importSession.update((prev) => ({ ...prev, filesProcessed: prev.filesProcessed + 1 }));
       }
 
-      setUploadSeq(seq);
+      importSession.update((prev) => ({ ...prev, uploadSeq: seq }));
       setRecentFileResults(batchResults);
       setStage("idle");
       setQueueProgress(null);
     } catch (e) {
-      setUploadSeq(seq);
+      importSession.update((prev) => ({ ...prev, uploadSeq: seq }));
       setStage("error");
       setErrorMessage(e instanceof Error ? e.message : "Import failed.");
       setQueueProgress(null);
@@ -152,7 +143,7 @@ export function ImportPage() {
       executionTime: entry.candidate.time ?? "00:00",
       notes: "Imported from screenshot/PDF",
     });
-    setAddedKeys((prev) => new Set(prev).add(entry.key));
+    importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
   }
 
   async function acceptVerification(entry: VerificationEntry, ticker: string) {
@@ -163,7 +154,7 @@ export function ImportPage() {
       portfolioId,
       ticker: normalizeTicker(entry.verification.ticker),
     });
-    setAcceptedKeys((prev) => new Set(prev).add(entry.key));
+    importSession.update((prev) => ({ ...prev, acceptedKeys: [...prev.acceptedKeys, entry.key] }));
   }
 
   const tickerGroups = useMemo(() => {
@@ -191,6 +182,21 @@ export function ImportPage() {
       <PageHeader
         title="Import"
         description="Step 1: extract every transaction from as many screenshots/PDFs/CSVs as you need. Step 2: assign each stock to a portfolio."
+        actions={
+          totalPending > 0 ? (
+            <button
+              onClick={() => {
+                if (confirm("Clear the extracted list? Trades you've already added are not affected.")) {
+                  importSession.clear();
+                  setRecentFileResults([]);
+                }
+              }}
+              className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+            >
+              <RotateCcw size={14} /> Start over
+            </button>
+          ) : undefined
+        }
       />
 
       {portfolios.length === 0 ? (
@@ -288,7 +294,7 @@ export function ImportPage() {
               group={group}
               portfolios={portfolios}
               portfolioId={portfolioForTicker(ticker)}
-              onPortfolioChange={(portfolioId) => setTickerPortfolio((prev) => ({ ...prev, [ticker]: portfolioId }))}
+              onPortfolioChange={(portfolioId) => setTickerPortfolio(ticker, portfolioId)}
               addedKeys={addedKeys}
               acceptedKeys={acceptedKeys}
               duplicateMatch={duplicateMatch}
@@ -318,7 +324,7 @@ export function ImportPage() {
               executionTime: sellCandidate.candidate.time,
             }}
             onDone={() => {
-              setAddedKeys((prev) => new Set(prev).add(sellCandidate.key));
+              importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, sellCandidate.key] }));
               setSellCandidate(null);
             }}
             onCancel={() => setSellCandidate(null)}

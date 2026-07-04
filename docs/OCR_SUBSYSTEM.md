@@ -9,6 +9,8 @@ Import (`/import`) is a global page, not scoped to one portfolio, and runs as an
 
 `Upload.portfolioId` is therefore optional; the file-hash dedup check (`UploadRepository.getByHash`) and the possible-duplicate check against existing trades (`duplicateDetection.ts`) are both global, not per-portfolio, since a re-uploaded file or a duplicated trade is a duplicate regardless of which portfolio it's assigned to.
 
+The Step 1/2 pool itself (`src/presentation/lib/importSession.ts`) deliberately does **not** live in the page component's React state: the two-phase workflow expects a user to leave the Import page mid-session (e.g. to create a portfolio to distribute into) and come back, and plain `useState` is destroyed the moment the page unmounts. It's a module-level store instead, persisted to `localStorage` so it survives both in-app navigation and a full page reload, read via a `useSyncExternalStore`-backed hook (`useImportSession`). A "Start over" action clears it explicitly once a session's distribution is done — it never clears itself automatically.
+
 ## Pipeline (`src/infrastructure/ocr/ImportOrchestrator.ts`)
 
 ```

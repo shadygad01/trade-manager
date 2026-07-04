@@ -72,6 +72,14 @@ Follow-up user feedback refined the order further: extract everything first and 
 
 Immediate follow-up: Step 1 still required choosing and extracting one file at a time. The file input now accepts multiple files (`multiple` attribute) and the drop handler reads the whole `FileList`/drop payload, not just the first entry — selecting or dropping several files at once queues and processes them sequentially through one Tesseract worker (a "Processing X of N: filename" indicator tracks progress), with each file's outcome (extracted / duplicate / warnings) shown once the batch finishes and its transactions folded into the same running Step 1 pool.
 
+### Post-sprint-4 fix #4 — extraction pool lost on navigation (real data-loss bug)
+
+User-reported: after uploading files, navigating to Portfolios to create one, then back to Import — the entire extracted pool was gone. Root cause: `pendingCandidates`/`pendingVerifications`/`tickerPortfolio`/etc. lived in `ImportPage`'s local `useState`, which React discards the moment the component unmounts — exactly what happens when navigating away, even within the same SPA session.
+
+- Extracted `src/presentation/lib/importSession.ts`: a module-level store (not component state) for the Step 1/2 pool, persisted to `localStorage` and read via a `useSyncExternalStore`-backed `useImportSession()` hook — survives both in-app navigation and a full page reload.
+- Added an explicit "Start over" action (`PageHeader` actions slot) to clear the session once a user is done distributing, since it no longer clears itself.
+- This was a genuine data-loss bug in a shipped feature, not a nice-to-have — flagging in case any other page-local state should be audited for the same "does this need to survive navigation" question.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
