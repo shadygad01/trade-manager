@@ -279,6 +279,7 @@ function parseInvoiceTextImpl(text: string): ParsedTradeCandidate[] {
       price,
       fees,
       date,
+      source: "invoice",
     },
   ];
 }

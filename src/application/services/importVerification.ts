@@ -1,4 +1,10 @@
-export type TickerMatchReason = "matched" | "no-shares-to-verify" | "closed-position" | "no-verification" | "mismatch";
+export type TickerMatchReason =
+  | "matched"
+  | "no-shares-to-verify"
+  | "closed-position"
+  | "invoice-verified"
+  | "no-verification"
+  | "mismatch";
 
 export interface TickerMatchStatus {
   matched: boolean;
@@ -21,6 +27,18 @@ export interface TickerMatchStatus {
  * it. The buy/sell invoices already extracted (each carrying its own
  * date/price/shares) are the confirmation in that case — there's no current
  * position left to verify against a screenshot.
+ *
+ * A ticker whose every still-pending Buy/Sell candidate came from a
+ * standardized per-trade Invoice (see ThndrParser's Invoice format,
+ * `ParsedTradeCandidate.source`) rather than an OCR'd screenshot has a third
+ * way out of the same problem: an invoice is a labeled, fixed-layout
+ * document trusted as sufficient proof of its own transaction, so it never
+ * needs a separate "My Position" recount just to confirm one new buy/sell —
+ * requiring one anyway would mean re-screenshotting the whole position on
+ * every single invoice import. Only applies when no broker verification
+ * exists at all; a screenshot that's actually present and mismatches still
+ * blocks, since a real discrepancy (e.g. a duplicate invoice) shouldn't be
+ * silently overridden just because this batch happens to be invoice-sourced.
  */
 export function checkTickerMatch(params: {
   hasShares: boolean;
@@ -28,6 +46,7 @@ export function checkTickerMatch(params: {
   pendingSellShares: number;
   existingRemainingShares: number;
   verifiedUnits?: number;
+  allPendingFromInvoice?: boolean;
 }): TickerMatchStatus {
   const netShares = params.existingRemainingShares + params.pendingBuyShares - params.pendingSellShares;
 
@@ -37,6 +56,9 @@ export function checkTickerMatch(params: {
   if (params.verifiedUnits === undefined) {
     if (Math.abs(netShares) < 1e-6) {
       return { matched: true, reason: "closed-position", netShares };
+    }
+    if (params.allPendingFromInvoice) {
+      return { matched: true, reason: "invoice-verified", netShares };
     }
     return { matched: false, reason: "no-verification", netShares };
   }

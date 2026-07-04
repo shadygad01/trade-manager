@@ -87,4 +87,44 @@ describe("checkTickerMatch", () => {
     expect(result.matched).toBe(false);
     expect(result.reason).toBe("no-verification");
   });
+
+  it("trusts an invoice-sourced batch as its own verification when no broker screenshot exists yet", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: undefined,
+      allPendingFromInvoice: true,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBe("invoice-verified");
+    expect(result.netShares).toBe(37);
+  });
+
+  it("still blocks an invoice-sourced batch if a broker screenshot exists and actually mismatches", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: 30,
+      allPendingFromInvoice: true,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("mismatch");
+  });
+
+  it("does not invoice-verify a mixed batch (some candidates not from an invoice)", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: undefined,
+      allPendingFromInvoice: false,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("no-verification");
+  });
 });

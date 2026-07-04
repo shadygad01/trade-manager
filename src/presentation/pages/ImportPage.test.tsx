@@ -24,6 +24,41 @@ function sellEntry(key: string): CandidateEntry {
   };
 }
 
+describe("TickerGroupCard — invoice-sourced Buy needs no separate broker screenshot", () => {
+  it("shows 'Verified by invoice' and lets the row proceed straight to Ready, with no Mismatch/blocked messaging", () => {
+    render(
+      <TickerGroupCard
+        ticker="ABUK"
+        group={{ buys: [buyEntry("abuk-invoice")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "invoice-verified", netShares: 37 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Verified by invoice")).toBeInTheDocument();
+    expect(screen.getByText("Ready — click Confirm above")).toBeInTheDocument();
+    expect(screen.queryByText(/Mismatch/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No broker "My Position" screenshot/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Blocked — needs verification")).not.toBeInTheDocument();
+  });
+});
+
 describe("TickerGroupCard — portfolio picker for a brand-new ticker in more than one portfolio", () => {
   it("does not silently pre-select the first portfolio — shows an honest placeholder instead", () => {
     render(
