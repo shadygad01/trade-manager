@@ -101,6 +101,13 @@ Two user-reported real gaps from actually using the app: (1) no way to fix a tra
 - **Import "Clear all"** (renamed from "Start over"): now also deletes every persisted `Upload` record (`UploadRepository.getAll`, new), not just the in-memory/localStorage extraction pool — so a cleared session genuinely lets the same file be re-imported without tripping the duplicate-file check. `Upload` rows are dedup-only bookkeeping with no other reader in the app, so wiping them has no effect on trades/portfolios already recorded.
 - 6 new tests (184 total).
 
+### Post-sprint-6 fix — duplicate position-verification/dividend rows during Import
+
+User-reported real bug, from an actual screenshot: uploading the same "My Position" screenshot more than once (a re-take, an accidental double-drop) produced multiple identical "Broker position check" rows in Step 2 — one already accepted, several more sitting redundantly beside it. Unlike a Buy/Sell, a position-verification or dividend reading carries no per-transaction identity (no date+price+shares to distinguish one execution from another), so nothing previously stopped the same reading from being added to the pending pool every time it was re-extracted.
+
+- `ImportPage.processFiles` now content-dedupes incoming verifications (`ticker+units+avgCost`) and dividends (`ticker+date+amount`) against what's already in the pending pool before adding them — a repeated identical reading is silently skipped rather than piling up, with a note added to that file's result ("already in the list — not added again") so it's visible, not silent.
+- Scoped deliberately to verifications/dividends only: Buy/Sell candidates keep their existing duplicate-detection behavior (flagged with a badge, never auto-removed) since those are real transactions where "add anyway" is a legitimate, informed choice — a redundant position reading carries no such decision to make.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

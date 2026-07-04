@@ -32,6 +32,23 @@ const CONFIDENCE_STYLE: Record<"high" | "medium" | "low", { label: string; color
 type Stage = "idle" | "reading" | "error";
 
 /**
+ * Position-verification and dividend candidates carry no per-transaction
+ * identity of their own (unlike a Buy/Sell, which has a date+price+shares
+ * to distinguish one execution from another) — re-uploading the same "My
+ * Position" screenshot (a re-take, an accidental double-drop, or the same
+ * PDF page appearing twice) re-extracts an identical reading every time.
+ * These keys let processFiles() recognize "this is the same observation
+ * already in the pool" and skip adding a redundant duplicate, rather than
+ * piling up N identical "Accept as ground truth" rows for one real position.
+ */
+function verificationContentKey(v: { ticker: string; units: number; avgCost?: number }): string {
+  return `${normalizeTicker(v.ticker)}|${v.units}|${v.avgCost ?? ""}`;
+}
+function dividendContentKey(d: { ticker: string; date: string; amount: number }): string {
+  return `${normalizeTicker(d.ticker)}|${d.date}|${d.amount}`;
+}
+
+/**
  * Import runs as a strict two-phase workflow: (1) extract — drop as many
  * files as needed; every candidate/verification accumulates into one pool,
  * confirmed complete by the running "N transactions from M files" count —
@@ -112,14 +129,53 @@ export function ImportPage() {
           const fileSeq = seq;
           seq += 1;
           const newCandidates = result.candidates.map((candidate, ci) => ({ key: `${fileSeq}-c${ci}`, candidate }));
-          const newVerifications = result.verifications.map((verification, vi) => ({ key: `${fileSeq}-v${vi}`, verification }));
-          const newDividends = result.dividends.map((dividend, di) => ({ key: `${fileSeq}-d${di}`, dividend }));
-          importSession.update((prev) => ({
-            ...prev,
-            pendingCandidates: [...prev.pendingCandidates, ...newCandidates],
-            pendingVerifications: [...prev.pendingVerifications, ...newVerifications],
-            pendingDividends: [...prev.pendingDividends, ...newDividends],
-          }));
+          let skippedVerifications = 0;
+          let skippedDividends = 0;
+          importSession.update((prev) => {
+            const seenVerificationKeys = new Set(prev.pendingVerifications.map((e) => verificationContentKey(e.verification)));
+            const newVerifications: VerificationEntry[] = [];
+            result.verifications.forEach((verification, vi) => {
+              const key = verificationContentKey(verification);
+              if (seenVerificationKeys.has(key)) {
+                skippedVerifications += 1;
+                return;
+              }
+              seenVerificationKeys.add(key);
+              newVerifications.push({ key: `${fileSeq}-v${vi}`, verification });
+            });
+
+            const seenDividendKeys = new Set(prev.pendingDividends.map((e) => dividendContentKey(e.dividend)));
+            const newDividends: DividendEntry[] = [];
+            result.dividends.forEach((dividend, di) => {
+              const key = dividendContentKey(dividend);
+              if (seenDividendKeys.has(key)) {
+                skippedDividends += 1;
+                return;
+              }
+              seenDividendKeys.add(key);
+              newDividends.push({ key: `${fileSeq}-d${di}`, dividend });
+            });
+
+            return {
+              ...prev,
+              pendingCandidates: [...prev.pendingCandidates, ...newCandidates],
+              pendingVerifications: [...prev.pendingVerifications, ...newVerifications],
+              pendingDividends: [...prev.pendingDividends, ...newDividends],
+            };
+          });
+
+          const dedupWarnings: string[] = [];
+          if (skippedVerifications > 0) {
+            dedupWarnings.push("This position reading matches one already in the list — not added again.");
+          }
+          if (skippedDividends > 0) {
+            dedupWarnings.push(
+              `${skippedDividends} dividend${skippedDividends === 1 ? "" : "s"} already in the list — not added again.`,
+            );
+          }
+          if (dedupWarnings.length > 0) {
+            result.warnings = [...result.warnings, ...dedupWarnings];
+          }
         }
 
         batchResults.push({ fileName: currentFile.name, warnings: result.warnings, duplicate: isDuplicateFile });
