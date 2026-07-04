@@ -20,24 +20,8 @@ function makeEntry(confidence: ParsedTradeCandidate["confidence"]): CandidateEnt
   };
 }
 
-describe("AutoCommitRow — Buy auto-commit status (no manual button)", () => {
-  it("shows 'Waiting for portfolio' when the ticker's portfolio isn't resolved yet", () => {
-    render(
-      <AutoCommitRow
-        entry={makeEntry("high")}
-        match={undefined}
-        added={false}
-        skipped={false}
-        dismissed={false}
-        portfolioResolved={false}
-        onDelete={vi.fn()}
-      />,
-    );
-    expect(screen.getByText("Waiting for portfolio")).toBeInTheDocument();
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
-  });
-
-  it("shows an 'Adding…' status once the portfolio resolves, with no button to click", () => {
+describe("AutoCommitRow — Buy batch-commit status (no manual button)", () => {
+  it("shows 'Blocked — needs verification' when the ticker hasn't matched a broker screenshot yet", () => {
     render(
       <AutoCommitRow
         entry={makeEntry("high")}
@@ -46,6 +30,60 @@ describe("AutoCommitRow — Buy auto-commit status (no manual button)", () => {
         skipped={false}
         dismissed={false}
         portfolioResolved
+        matched={false}
+        distributing={false}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Blocked — needs verification")).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Waiting for portfolio' when matched but the ticker's portfolio isn't resolved yet", () => {
+    render(
+      <AutoCommitRow
+        entry={makeEntry("high")}
+        match={undefined}
+        added={false}
+        skipped={false}
+        dismissed={false}
+        portfolioResolved={false}
+        matched
+        distributing={false}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Waiting for portfolio")).toBeInTheDocument();
+  });
+
+  it("shows 'Ready — click Confirm above' once matched and portfolio-resolved, before the Confirm button is clicked", () => {
+    render(
+      <AutoCommitRow
+        entry={makeEntry("high")}
+        match={undefined}
+        added={false}
+        skipped={false}
+        dismissed={false}
+        portfolioResolved
+        matched
+        distributing={false}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Ready — click Confirm above")).toBeInTheDocument();
+  });
+
+  it("shows an 'Adding…' status while confirmAndDistributeAll is committing, with no button to click", () => {
+    render(
+      <AutoCommitRow
+        entry={makeEntry("high")}
+        match={undefined}
+        added={false}
+        skipped={false}
+        dismissed={false}
+        portfolioResolved
+        matched
+        distributing
         onDelete={vi.fn()}
       />,
     );
@@ -63,6 +101,8 @@ describe("AutoCommitRow — Buy auto-commit status (no manual button)", () => {
         skipped={false}
         dismissed={false}
         portfolioResolved
+        matched
+        distributing={false}
         onDelete={onDelete}
       />,
     );
@@ -82,6 +122,8 @@ describe("AutoCommitRow — Buy auto-commit status (no manual button)", () => {
         skipped={false}
         dismissed={false}
         portfolioResolved
+        matched
+        distributing={false}
         onDelete={vi.fn()}
       />,
     );
@@ -98,6 +140,8 @@ describe("AutoCommitRow — Buy auto-commit status (no manual button)", () => {
         skipped
         dismissed={false}
         portfolioResolved
+        matched
+        distributing={false}
         onDelete={vi.fn()}
       />,
     );
@@ -113,6 +157,8 @@ describe("AutoCommitRow — Buy auto-commit status (no manual button)", () => {
         skipped={false}
         dismissed
         portfolioResolved
+        matched
+        distributing={false}
         onDelete={vi.fn()}
       />,
     );

@@ -20,13 +20,14 @@ function makeEntry(confidence: ParsedTradeCandidate["confidence"]): CandidateEnt
   };
 }
 
-// CandidateRow is Sell-only now — Buy/Dividend/Verification auto-commit
+// CandidateRow is Sell-only now — Buy/Dividend/Verification batch-commit
 // (see ImportPage's AutoCommitRow instead). Allocating a sell always opens
 // the allocation modal for review, so a low-confidence sell is flagged
 // visually but the action stays clickable rather than gated behind a
-// checkbox — the modal itself is the review step.
+// checkbox — the modal itself is the review step. It's still gated on the
+// ticker's verification-match status via the `disabled` prop, though.
 describe("CandidateRow — Sell allocation action", () => {
-  it("is always clickable for a high-confidence candidate, with no low-confidence flag", () => {
+  it("is clickable for a high-confidence, matched candidate, with no low-confidence flag", () => {
     const onAction = vi.fn();
     render(
       <CandidateRow
@@ -77,5 +78,27 @@ describe("CandidateRow — Sell allocation action", () => {
     );
     expect(screen.getByText("Added")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Allocate Sell" })).not.toBeInTheDocument();
+  });
+
+  it("disables the action and shows the reason as a tooltip when the ticker hasn't matched a broker screenshot yet", async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    render(
+      <CandidateRow
+        entry={makeEntry("high")}
+        match={undefined}
+        added={false}
+        actionLabel="Allocate Sell"
+        actionClassName="bg-rose-500"
+        onAction={onAction}
+        disabled
+        disabledReason="Verify this ticker's share count against a broker position screenshot first."
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Allocate Sell" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "Verify this ticker's share count against a broker position screenshot first.");
+    await user.click(button);
+    expect(onAction).not.toHaveBeenCalled();
   });
 });
