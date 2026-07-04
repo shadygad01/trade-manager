@@ -68,6 +68,7 @@ export function ImportPage() {
   const [recentFileResults, setRecentFileResults] = useState<{ fileName: string; warnings: string[]; duplicate: boolean }[]>([]);
   const [errorMessage, setErrorMessage] = useState("");
   const [sellCandidate, setSellCandidate] = useState<{ key: string; ticker: string; portfolioId: string; candidate: ParsedTradeCandidate } | null>(null);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
 
   const session = useImportSession();
   const { pendingCandidates, pendingVerifications, pendingDividends, tickerPortfolio, filesProcessed } = session;
@@ -87,8 +88,29 @@ export function ImportPage() {
       : findDuplicateSellMatch(candidate, existingAllocations);
   }
 
+  /**
+   * A ticker that already has trades recorded somewhere shouldn't make the
+   * user re-pick a portfolio every time it's re-imported — this is the
+   * "suggest the portfolio it already lives in" behavior. When it lives in
+   * more than one portfolio, this is deliberately ambiguous (no auto-pick):
+   * the user has to say which one these new rows belong to.
+   */
+  const existingPortfoliosByTicker = useMemo(() => {
+    const map = new Map<string, Set<string>>();
+    for (const t of existingTrades) {
+      const key = normalizeTicker(t.ticker);
+      const set = map.get(key) ?? new Set<string>();
+      set.add(t.portfolioId);
+      map.set(key, set);
+    }
+    return map;
+  }, [existingTrades]);
+
   function portfolioForTicker(ticker: string): string {
-    return tickerPortfolio[ticker] ?? portfolios[0]?.id ?? "";
+    if (tickerPortfolio[ticker]) return tickerPortfolio[ticker];
+    const existing = existingPortfoliosByTicker.get(ticker);
+    if (existing && existing.size === 1) return [...existing][0];
+    return portfolios[0]?.id ?? "";
   }
 
   function setTickerPortfolio(ticker: string, portfolioId: string) {
@@ -194,21 +216,39 @@ export function ImportPage() {
     }
   }
 
-  async function addBuyCandidate(entry: CandidateEntry, ticker: string) {
-    const portfolioId = portfolioForTicker(ticker);
-    await recordBuy(repos, {
-      portfolioId,
-      ticker,
-      companyName: entry.candidate.companyName,
-      shares: entry.candidate.shares,
-      entryPrice: entry.candidate.price,
-      fees: entry.candidate.fees ?? 0,
-      taxes: entry.candidate.taxes ?? 0,
-      executionDate: entry.candidate.date,
-      executionTime: entry.candidate.time ?? "00:00",
-      notes: "Imported from screenshot/PDF",
+  function clearRowError(key: string) {
+    setRowErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
     });
-    importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+  }
+
+  function setRowError(key: string, e: unknown) {
+    setRowErrors((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : "Something went wrong." }));
+  }
+
+  async function addBuyCandidate(entry: CandidateEntry, ticker: string) {
+    try {
+      const portfolioId = portfolioForTicker(ticker);
+      await recordBuy(repos, {
+        portfolioId,
+        ticker,
+        companyName: entry.candidate.companyName,
+        shares: entry.candidate.shares,
+        entryPrice: entry.candidate.price,
+        fees: entry.candidate.fees ?? 0,
+        taxes: entry.candidate.taxes ?? 0,
+        executionDate: entry.candidate.date,
+        executionTime: entry.candidate.time ?? "00:00",
+        notes: "Imported from screenshot/PDF",
+      });
+      importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+      clearRowError(entry.key);
+    } catch (e) {
+      setRowError(entry.key, e);
+    }
   }
 
   async function clearAll() {
@@ -219,14 +259,19 @@ export function ImportPage() {
   }
 
   async function addDividend(entry: DividendEntry, ticker: string) {
-    const portfolioId = portfolioForTicker(ticker);
-    await recordDividend(repos, portfolioId, {
-      ticker,
-      amount: entry.dividend.amount,
-      date: entry.dividend.date,
-      notes: "Imported from screenshot/PDF",
-    });
-    importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+    try {
+      const portfolioId = portfolioForTicker(ticker);
+      await recordDividend(repos, portfolioId, {
+        ticker,
+        amount: entry.dividend.amount,
+        date: entry.dividend.date,
+        notes: "Imported from screenshot/PDF",
+      });
+      importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+      clearRowError(entry.key);
+    } catch (e) {
+      setRowError(entry.key, e);
+    }
   }
 
   /**
@@ -264,14 +309,19 @@ export function ImportPage() {
   }
 
   async function acceptVerification(entry: VerificationEntry, ticker: string) {
-    const portfolioId = portfolioForTicker(ticker);
-    await repos.verifications.save({
-      ...entry.verification,
-      id: generateId(),
-      portfolioId,
-      ticker: normalizeTicker(entry.verification.ticker),
-    });
-    importSession.update((prev) => ({ ...prev, acceptedKeys: [...prev.acceptedKeys, entry.key] }));
+    try {
+      const portfolioId = portfolioForTicker(ticker);
+      await repos.verifications.save({
+        ...entry.verification,
+        id: generateId(),
+        portfolioId,
+        ticker: normalizeTicker(entry.verification.ticker),
+      });
+      importSession.update((prev) => ({ ...prev, acceptedKeys: [...prev.acceptedKeys, entry.key] }));
+      clearRowError(entry.key);
+    } catch (e) {
+      setRowError(entry.key, e);
+    }
   }
 
   const tickerGroups = useMemo(() => {
@@ -297,6 +347,54 @@ export function ImportPage() {
     }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [pendingCandidates, pendingVerifications, pendingDividends]);
+
+  /**
+   * A ticker resolved from an unmapped company name (see ThndrParser's
+   * header fallback) can still land on the wrong 4-letter guess, or the same
+   * real stock can OCR to a different guess on a different upload — the
+   * exact failure mode reported against this page. Rather than requiring a
+   * manual rename for every one of these, this flags it automatically
+   * whenever it can be verified mechanically: two ticker groups whose buy/sell
+   * rows are byte-for-byte identical (same side/shares/price/date) are, for
+   * all practical purposes, the same upload read under two different guessed
+   * tickers. Only ever a suggestion — nothing merges without the user's
+   * click, and a coincidental exact match is vanishingly unlikely for real
+   * trade data.
+   */
+  const mergeSuggestions = useMemo(() => {
+    const signature = (group: (typeof tickerGroups)[number][1]): string =>
+      [...group.buys, ...group.sells]
+        .map((e) => `${e.candidate.side}|${e.candidate.shares}|${e.candidate.price}|${e.candidate.date}`)
+        .sort()
+        .join(";");
+    const allLowConfidence = (group: (typeof tickerGroups)[number][1]): boolean =>
+      [...group.buys, ...group.sells].every((e) => e.candidate.confidence === "low");
+
+    const bySignature = new Map<string, string[]>();
+    for (const [ticker, group] of tickerGroups) {
+      const sig = signature(group);
+      if (!sig) continue;
+      const list = bySignature.get(sig) ?? [];
+      list.push(ticker);
+      bySignature.set(sig, list);
+    }
+
+    const suggestions = new Map<string, string>();
+    for (const [ticker, group] of tickerGroups) {
+      if (!allLowConfidence(group)) continue;
+      const sig = signature(group);
+      if (!sig) continue;
+      const siblings = (bySignature.get(sig) ?? []).filter((t) => t !== ticker);
+      if (siblings.length === 0) continue;
+      const preferred =
+        siblings.find((t) => {
+          const siblingGroup = tickerGroups.find(([tk]) => tk === t)?.[1];
+          return siblingGroup && !allLowConfidence(siblingGroup);
+        }) ?? siblings[0];
+      suggestions.set(ticker, preferred);
+    }
+    return suggestions;
+  }, [tickerGroups]);
 
   const totalPending = pendingCandidates.length + pendingVerifications.length + pendingDividends.length;
 
@@ -411,24 +509,33 @@ export function ImportPage() {
       {tickerGroups.length > 0 ? (
         <div className="mt-4 space-y-4">
           <h3 className="text-sm font-semibold text-slate-200">Step 2 — Distribute to portfolios</h3>
-          {tickerGroups.map(([ticker, group]) => (
-            <TickerGroupCard
-              key={ticker}
-              ticker={ticker}
-              group={group}
-              portfolios={portfolios}
-              portfolioId={portfolioForTicker(ticker)}
-              onPortfolioChange={(portfolioId) => setTickerPortfolio(ticker, portfolioId)}
-              addedKeys={addedKeys}
-              acceptedKeys={acceptedKeys}
-              duplicateMatch={duplicateMatch}
-              onAddBuy={(entry) => void addBuyCandidate(entry, ticker)}
-              onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
-              onAcceptVerification={(entry) => void acceptVerification(entry, ticker)}
-              onAddDividend={(entry) => void addDividend(entry, ticker)}
-              onRenameTicker={(newTicker) => renameTickerGroup(ticker, newTicker)}
-            />
-          ))}
+          {tickerGroups.map(([ticker, group]) => {
+            const existingIds = existingPortfoliosByTicker.get(ticker);
+            const existingNames = existingIds ? [...existingIds].map((id) => portfolios.find((p) => p.id === id)?.name ?? "?") : [];
+            return (
+              <TickerGroupCard
+                key={ticker}
+                ticker={ticker}
+                group={group}
+                portfolios={portfolios}
+                portfolioId={portfolioForTicker(ticker)}
+                onPortfolioChange={(portfolioId) => setTickerPortfolio(ticker, portfolioId)}
+                addedKeys={addedKeys}
+                acceptedKeys={acceptedKeys}
+                rowErrors={rowErrors}
+                duplicateMatch={duplicateMatch}
+                onAddBuy={(entry) => void addBuyCandidate(entry, ticker)}
+                onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
+                onAcceptVerification={(entry) => void acceptVerification(entry, ticker)}
+                onAddDividend={(entry) => void addDividend(entry, ticker)}
+                onRenameTicker={(newTicker) => renameTickerGroup(ticker, newTicker)}
+                existingPortfolioHint={
+                  existingNames.length > 0 ? { multiple: existingNames.length > 1, names: existingNames } : undefined
+                }
+                mergeSuggestion={mergeSuggestions.get(ticker)}
+              />
+            );
+          })}
         </div>
       ) : null}
 
@@ -469,12 +576,15 @@ function TickerGroupCard({
   onPortfolioChange,
   addedKeys,
   acceptedKeys,
+  rowErrors,
   duplicateMatch,
   onAddBuy,
   onAllocateSell,
   onAcceptVerification,
   onAddDividend,
   onRenameTicker,
+  existingPortfolioHint,
+  mergeSuggestion,
 }: {
   ticker: string;
   group: { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[]; dividends: DividendEntry[] };
@@ -483,12 +593,15 @@ function TickerGroupCard({
   onPortfolioChange: (portfolioId: string) => void;
   addedKeys: Set<string>;
   acceptedKeys: Set<string>;
+  rowErrors: Record<string, string>;
   duplicateMatch: (candidate: ParsedTradeCandidate) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
   onAddBuy: (entry: CandidateEntry) => void;
   onAllocateSell: (entry: CandidateEntry) => void;
   onAcceptVerification: (entry: VerificationEntry) => void;
   onAddDividend: (entry: DividendEntry) => void;
   onRenameTicker: (newTicker: string) => void;
+  existingPortfolioHint: { multiple: boolean; names: string[] } | undefined;
+  mergeSuggestion: string | undefined;
 }) {
   const [renaming, setRenaming] = useState(false);
   const [draftTicker, setDraftTicker] = useState(ticker);
@@ -500,6 +613,27 @@ function TickerGroupCard({
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60">
+      {mergeSuggestion ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-amber-500/5 px-4 py-2.5 text-xs text-amber-300">
+          <span>
+            These rows look identical to <strong>{mergeSuggestion}</strong> — likely the same stock read as a different
+            ticker.
+          </span>
+          <button
+            onClick={() => onRenameTicker(mergeSuggestion)}
+            className="rounded-md border border-amber-400/40 px-2.5 py-1 font-medium text-amber-300 hover:bg-amber-500/10"
+          >
+            Merge into {mergeSuggestion}
+          </button>
+        </div>
+      ) : null}
+      {existingPortfolioHint ? (
+        <div className="border-b border-slate-800 bg-slate-950/40 px-4 py-2 text-xs text-slate-400">
+          {existingPortfolioHint.multiple
+            ? `${ticker} already has trades in more than one portfolio (${existingPortfolioHint.names.join(", ")}) — pick where these belong.`
+            : `${ticker} already has trades in ${existingPortfolioHint.names[0]} — selected automatically.`}
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         {renaming ? (
           <div className="flex items-center gap-1.5">
@@ -571,6 +705,7 @@ function TickerGroupCard({
               entry={entry}
               match={match}
               added={added}
+              error={rowErrors[entry.key]}
               actionLabel={match ? "Add anyway" : "Add as Trade"}
               actionClassName="bg-emerald-500 hover:bg-emerald-400"
               onAction={() => onAddBuy(entry)}
@@ -593,44 +728,50 @@ function TickerGroupCard({
           );
         })}
         {group.verifications.map((entry) => (
-          <div key={entry.key} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
-            <span className="flex items-center gap-2 text-slate-300">
-              <ShieldCheck size={14} className="text-cyan-400" />
-              Broker position check: {formatShares(entry.verification.units)} units
-              {entry.verification.avgCost !== undefined ? ` @ ${formatMoney(entry.verification.avgCost)} avg` : ""}
-            </span>
-            {acceptedKeys.has(entry.key) ? (
-              <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircle2 size={14} /> Accepted
+          <div key={entry.key} className="px-4 py-2.5 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-slate-300">
+                <ShieldCheck size={14} className="text-cyan-400" />
+                Broker position check: {formatShares(entry.verification.units)} units
+                {entry.verification.avgCost !== undefined ? ` @ ${formatMoney(entry.verification.avgCost)} avg` : ""}
               </span>
-            ) : (
-              <button
-                onClick={() => onAcceptVerification(entry)}
-                className="rounded-md border border-cyan-500/40 px-3 py-1 text-xs font-medium text-cyan-400 hover:bg-cyan-500/10"
-              >
-                Accept as ground truth
-              </button>
-            )}
+              {acceptedKeys.has(entry.key) ? (
+                <span className="flex items-center gap-1 text-xs text-emerald-400">
+                  <CheckCircle2 size={14} /> Accepted
+                </span>
+              ) : (
+                <button
+                  onClick={() => onAcceptVerification(entry)}
+                  className="rounded-md border border-cyan-500/40 px-3 py-1 text-xs font-medium text-cyan-400 hover:bg-cyan-500/10"
+                >
+                  Accept as ground truth
+                </button>
+              )}
+            </div>
+            {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
           </div>
         ))}
         {group.dividends.map((entry) => (
-          <div key={entry.key} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
-            <span className="flex items-center gap-2 text-slate-300">
-              <CircleDollarSign size={14} className="text-emerald-400" />
-              Dividend: {formatMoney(entry.dividend.amount)} on {formatDate(entry.dividend.date)}
-            </span>
-            {addedKeys.has(entry.key) ? (
-              <span className="flex items-center gap-1 text-xs text-emerald-400">
-                <CheckCircle2 size={14} /> Added
+          <div key={entry.key} className="px-4 py-2.5 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-slate-300">
+                <CircleDollarSign size={14} className="text-emerald-400" />
+                Dividend: {formatMoney(entry.dividend.amount)} on {formatDate(entry.dividend.date)}
               </span>
-            ) : (
-              <button
-                onClick={() => onAddDividend(entry)}
-                className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400"
-              >
-                Add as Dividend
-              </button>
-            )}
+              {addedKeys.has(entry.key) ? (
+                <span className="flex items-center gap-1 text-xs text-emerald-400">
+                  <CheckCircle2 size={14} /> Added
+                </span>
+              ) : (
+                <button
+                  onClick={() => onAddDividend(entry)}
+                  className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400"
+                >
+                  Add as Dividend
+                </button>
+              )}
+            </div>
+            {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
           </div>
         ))}
       </div>
@@ -642,6 +783,7 @@ function CandidateRow({
   entry,
   match,
   added,
+  error,
   actionLabel,
   actionClassName,
   onAction,
@@ -649,54 +791,58 @@ function CandidateRow({
   entry: CandidateEntry;
   match: { matchType: "exact" | "possible"; matchedId: string } | undefined;
   added: boolean;
+  error?: string;
   actionLabel: string;
   actionClassName: string;
   onAction: () => void;
 }) {
   const c = entry.candidate;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 text-sm">
-      <div className="flex flex-wrap items-center gap-3">
-        <span
-          className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-            c.side === "BUY" ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
-          }`}
-        >
-          {c.side}
-        </span>
-        <span className="tabular-nums text-slate-300">{formatShares(c.shares)} sh</span>
-        <span className="tabular-nums text-slate-300">@ {formatMoney(c.price)}</span>
-        <span className="text-slate-400">{formatDate(c.date)}</span>
-        {c.confidence ? (
-          <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
-            <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CONFIDENCE_STYLE[c.confidence].color }} />
-            {CONFIDENCE_STYLE[c.confidence].label}
-          </span>
-        ) : null}
-        {match ? (
+    <div className="px-4 py-2.5 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <span
-            title={
-              match.matchType === "exact"
-                ? "Same ticker, date, shares and price as an existing trade."
-                : "Same ticker, date and shares as an existing trade, but a different price."
-            }
-            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-              match.matchType === "exact" ? "bg-rose-500/10 text-rose-400" : "bg-amber-500/10 text-amber-400"
+            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+              c.side === "BUY" ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
             }`}
           >
-            <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
+            {c.side}
           </span>
-        ) : null}
+          <span className="tabular-nums text-slate-300">{formatShares(c.shares)} sh</span>
+          <span className="tabular-nums text-slate-300">@ {formatMoney(c.price)}</span>
+          <span className="text-slate-400">{formatDate(c.date)}</span>
+          {c.confidence ? (
+            <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
+              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CONFIDENCE_STYLE[c.confidence].color }} />
+              {CONFIDENCE_STYLE[c.confidence].label}
+            </span>
+          ) : null}
+          {match ? (
+            <span
+              title={
+                match.matchType === "exact"
+                  ? "Same ticker, date, shares and price as an existing trade."
+                  : "Same ticker, date and shares as an existing trade, but a different price."
+              }
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                match.matchType === "exact" ? "bg-rose-500/10 text-rose-400" : "bg-amber-500/10 text-amber-400"
+              }`}
+            >
+              <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
+            </span>
+          ) : null}
+        </div>
+        {added ? (
+          <span className="flex items-center gap-1 text-xs text-emerald-400">
+            <CheckCircle2 size={14} /> Added
+          </span>
+        ) : (
+          <button onClick={onAction} className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 ${actionClassName}`}>
+            {actionLabel}
+          </button>
+        )}
       </div>
-      {added ? (
-        <span className="flex items-center gap-1 text-xs text-emerald-400">
-          <CheckCircle2 size={14} /> Added
-        </span>
-      ) : (
-        <button onClick={onAction} className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 ${actionClassName}`}>
-          {actionLabel}
-        </button>
-      )}
+      {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
     </div>
   );
 }
