@@ -5,6 +5,7 @@ import {
   buildExistingDividendKeys,
   isDividendAlreadyRecorded,
   suggestDuplicateDividendIdsToDelete,
+  suggestDuplicatePendingCandidateKeysToDelete,
 } from "./duplicateDetection";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
@@ -154,5 +155,44 @@ describe("suggestDuplicateDividendIdsToDelete", () => {
       createTimelineEvent({ id: "e4", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", amount: 114 }),
     ];
     expect(suggestDuplicateDividendIdsToDelete(events)).toEqual([]);
+  });
+});
+
+describe("suggestDuplicatePendingCandidateKeysToDelete", () => {
+  it("collapses a real PHAR-shaped batch: two same-shares/date/side groups, each read three times at different prices/confidence, down to the single best-priced read per group", () => {
+    const entries = [
+      { key: "b1", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.72, date: "2026-04-15", confidence: "high" as const }) },
+      { key: "b2", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.36, date: "2026-04-15", confidence: "medium" as const }) },
+      { key: "b3", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.30, date: "2026-03-02", confidence: "medium" as const }) },
+      { key: "b4", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.56, date: "2026-03-02", confidence: "high" as const }) },
+      { key: "b5", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.36, date: "2026-04-15", confidence: "medium" as const }) },
+      { key: "b6", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.30, date: "2026-03-02", confidence: "medium" as const }) },
+    ];
+    // Keeps the highest-priced Buy in each group (b1 @86.72, b4 @78.56); everything else is a suggested duplicate.
+    expect(new Set(suggestDuplicatePendingCandidateKeysToDelete(entries))).toEqual(new Set(["b2", "b3", "b5", "b6"]));
+  });
+
+  it("keeps the lower-priced read for duplicate Sells, mirroring the opposite priority the app uses for Buys", () => {
+    const entries = [
+      { key: "s1", candidate: buyCandidate({ side: "SELL", ticker: "COMI", shares: 50, price: 42.1, date: "2026-05-01" }) },
+      { key: "s2", candidate: buyCandidate({ side: "SELL", ticker: "COMI", shares: 50, price: 42.5, date: "2026-05-01" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["s2"]);
+  });
+
+  it("does not flag candidates that differ in ticker, side, date, or shares", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ ticker: "COMI", shares: 10, date: "2026-05-01" }) },
+      { key: "b", candidate: buyCandidate({ ticker: "HRHO", shares: 10, date: "2026-05-01" }) },
+      { key: "c", candidate: buyCandidate({ ticker: "COMI", shares: 10, date: "2026-05-02" }) },
+      { key: "d", candidate: buyCandidate({ ticker: "COMI", shares: 20, date: "2026-05-01" }) },
+      { key: "e", candidate: buyCandidate({ ticker: "COMI", side: "SELL", shares: 10, date: "2026-05-01" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("returns nothing for a single candidate", () => {
+    const entries = [{ key: "a", candidate: buyCandidate() }];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
   });
 });

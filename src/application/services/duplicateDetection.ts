@@ -90,6 +90,50 @@ export function isDividendAlreadyRecorded(
 }
 
 /**
+ * Within one Import batch, nothing dedupes a Buy/Sell candidate against its
+ * own siblings the way processFiles already dedupes verifications and
+ * dividends by content key — findDuplicateBuyMatch/findDuplicateSellMatch
+ * only ever compare against trades already committed to the ledger. So the
+ * same real transaction read more than once in one batch (an overlapping
+ * multi-file drop, or a PDF page repeated) piles up as separate pending
+ * rows, inflating the ticker's extracted share total past what the broker
+ * screenshot shows — a mismatch with no candidate flagged as the cause and
+ * no way to remove one before committing.
+ *
+ * Groups same-side candidates by ticker+date+shares (their scan of "how many
+ * shares moved this day", independent of a possibly re-OCR'd price) and,
+ * within each group of more than one, suggests keeping exactly one and
+ * deleting the rest — applying the same price-priority rule the app already
+ * uses for reconciling duplicate committed trades (suggestDuplicateTradeIds):
+ * a Buy's higher-priced read is the more plausible one (commission-inclusive
+ * OCR beats a rounded/partial read), so lower-priced Buy duplicates are
+ * suggested for deletion; a Sell's lower-priced read is the more plausible
+ * one, so higher-priced Sell duplicates are suggested instead.
+ */
+export function suggestDuplicatePendingCandidateKeysToDelete(
+  entries: { key: string; candidate: ParsedTradeCandidate }[]
+): string[] {
+  const bySignature = new Map<string, { key: string; candidate: ParsedTradeCandidate }[]>();
+  for (const e of entries) {
+    const sig = `${normalizeTicker(e.candidate.ticker)}|${e.candidate.side}|${e.candidate.date}|${e.candidate.shares}`;
+    const list = bySignature.get(sig) ?? [];
+    list.push(e);
+    bySignature.set(sig, list);
+  }
+
+  const keysToDelete: string[] = [];
+  for (const group of bySignature.values()) {
+    if (group.length < 2) continue;
+    const side = group[0].candidate.side;
+    const sorted = [...group].sort((a, b) =>
+      side === "BUY" ? b.candidate.price - a.candidate.price : a.candidate.price - b.candidate.price
+    );
+    for (const e of sorted.slice(1)) keysToDelete.push(e.key);
+  }
+  return keysToDelete;
+}
+
+/**
  * Finds Dividend events already sitting on the ledger that duplicate each
  * other — the cross-session import dedup (isDividendAlreadyRecorded) only
  * stops *new* duplicates; this is for the ones recorded before that guard
