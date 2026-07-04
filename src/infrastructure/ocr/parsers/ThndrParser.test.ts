@@ -132,6 +132,13 @@ describe("ThndrParser.parseStatementText", () => {
     const [candidate] = parser.parseStatementText(text);
     expect(candidate.confidence).toBe("low");
   });
+
+  it("drops a row whose description OCR'd down to an implausibly short fragment rather than fabricating a ticker from it", () => {
+    // Real observed failure: a garbled/truncated description read as just "TE"
+    // (2 characters) produced a bogus "TE" ticker group with no real meaning.
+    const text = "2/2/2026 Buy TE (19@25.3000)";
+    expect(parser.parseStatementText(text)).toHaveLength(0);
+  });
 });
 
 describe("ThndrParser.parseOrdersScreenText", () => {

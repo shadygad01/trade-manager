@@ -22,7 +22,7 @@ const NAV_ITEMS = [
   { key: "analytics", label: "Analytics", icon: BarChart3, suffix: "/analytics" },
 ] as const;
 
-export function Sidebar() {
+export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
   const [, dashboardParams] = useRoute("/");
   const [, portfolioParams] = useRoute("/portfolios/:id/:rest*");
   const [location] = useLocation();
@@ -41,7 +41,11 @@ export function Sidebar() {
   const switcherPortfolios = useMemo(() => portfolios?.filter((p) => !p.archivedAt || p.id === activePortfolioId), [portfolios, activePortfolioId]);
 
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-950 text-slate-300">
+    <aside
+      className={`fixed inset-y-0 left-0 z-50 flex h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-950 text-slate-300 transition-transform duration-200 lg:static lg:translate-x-0 ${
+        open ? "translate-x-0" : "-translate-x-full"
+      }`}
+    >
       <div className="flex items-center gap-2 border-b border-slate-800/80 px-5 py-5">
         <div className="flex h-8 w-8 items-center justify-center rounded-md bg-cyan-500/10 text-cyan-400 font-bold">
           P
@@ -55,6 +59,7 @@ export function Sidebar() {
       <nav className="px-3 py-3">
         <Link
           href="/"
+          onClick={onNavigate}
           className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
             dashboardParams ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
           }`}
@@ -64,6 +69,7 @@ export function Sidebar() {
         </Link>
         <Link
           href="/portfolios"
+          onClick={onNavigate}
           className="mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-900 hover:text-slate-50"
         >
           <Briefcase size={16} />
@@ -71,6 +77,7 @@ export function Sidebar() {
         </Link>
         <Link
           href="/import"
+          onClick={onNavigate}
           className={`mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
             location.startsWith("/import") ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
           }`}
@@ -80,6 +87,7 @@ export function Sidebar() {
         </Link>
         <Link
           href="/data"
+          onClick={onNavigate}
           className={`mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
             location.startsWith("/data") ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
           }`}
@@ -108,7 +116,10 @@ export function Sidebar() {
                     <Link
                       key={p.id}
                       href={`/portfolios/${p.id}`}
-                      onClick={() => setSwitcherOpen(false)}
+                      onClick={() => {
+                        setSwitcherOpen(false);
+                        onNavigate();
+                      }}
                       className={`block truncate px-3 py-2 text-sm hover:bg-slate-800 ${
                         p.id === activePortfolioId ? "text-cyan-400" : "text-slate-300"
                       }`}
@@ -130,6 +141,7 @@ export function Sidebar() {
                 <Link
                   key={item.key}
                   href={href}
+                  onClick={onNavigate}
                   className={`mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                     isActive ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
                   }`}

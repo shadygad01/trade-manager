@@ -1,5 +1,6 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { Route, Switch, Redirect, Router } from "wouter";
+import { Menu } from "lucide-react";
 import { Sidebar } from "@presentation/components/Sidebar";
 
 const DashboardPage = lazy(() => import("@presentation/pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
@@ -22,12 +23,32 @@ const DataPage = lazy(() => import("@presentation/pages/DataPage").then((m) => (
 // wouter needs it without the trailing slash.
 const ROUTER_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 
-export function App() {
+// Below `lg`, the sidebar was a fixed-width flex sibling permanently
+// squeezing every page's content into a sliver (the reported "mobile layout
+// broken" bug) — it now renders as an off-canvas drawer on narrow screens,
+// toggled by this hamburger bar, and reverts to the original always-visible
+// layout at `lg` and up (untouched desktop behavior).
+function AppShell() {
+  const [navOpen, setNavOpen] = useState(false);
+
   return (
-    <Router base={ROUTER_BASE}>
-      <div className="flex min-h-screen bg-slate-950 text-slate-100">
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto px-6 py-6 lg:px-10 lg:py-8">
+    <div className="flex min-h-screen bg-slate-950 text-slate-100">
+      <Sidebar open={navOpen} onNavigate={() => setNavOpen(false)} />
+      {navOpen ? (
+        <div className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setNavOpen(false)} />
+      ) : null}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center gap-3 border-b border-slate-800/80 bg-slate-950 px-4 py-3 lg:hidden">
+          <button
+            onClick={() => setNavOpen(true)}
+            aria-label="Open menu"
+            className="rounded-md p-1.5 text-slate-300 hover:bg-slate-900"
+          >
+            <Menu size={20} />
+          </button>
+          <p className="text-sm font-semibold text-slate-100">Portfolio OS</p>
+        </div>
+        <main className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-10 lg:py-8">
           <Suspense fallback={<p className="text-sm text-slate-500">Loading…</p>}>
             <Switch>
               <Route path="/" component={DashboardPage} />
@@ -46,6 +67,14 @@ export function App() {
           </Suspense>
         </main>
       </div>
+    </div>
+  );
+}
+
+export function App() {
+  return (
+    <Router base={ROUTER_BASE}>
+      <AppShell />
     </Router>
   );
 }

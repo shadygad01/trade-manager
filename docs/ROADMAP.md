@@ -189,6 +189,15 @@ The panel's actual pie/legend rendering is **not** covered at the page level: js
 
 - 2 new component tests (230 total).
 
+### Post-sprint-7 fix — mobile layout, and a second garbled-ticker false positive
+
+Two live user bug reports (screenshots), fixed together:
+
+1. **Sidebar squeezed every page on a phone screen.** `Sidebar` was a permanently-visible `flex` sibling at a fixed `w-64`, with no responsive breakpoint — on a narrow viewport this reserved 256px unconditionally, wrapping every page's content into a sliver a few characters wide. `Sidebar` now renders as an off-canvas drawer below the `lg` breakpoint (`fixed`, translated off-screen, toggled by a hamburger button in a new mobile-only top bar in `App.tsx`, with a tap-to-dismiss backdrop and auto-close on navigation) and is completely unchanged — always visible, `lg:static` — at `lg` and up. Verified with a Playwright script at both a 390×844 and a 1280×800 viewport against a real built bundle (`vite preview`), screenshotted to confirm the drawer visually opens/closes correctly, not just that the right CSS classes are present.
+2. **A second garbled-ticker false positive, in a different code path than the one fixed earlier this sprint.** A live screenshot showed a nonsensical "TE" ticker group with real-looking Buy rows under it. Root cause: `ThndrParser.resolveTicker` (used by the dated-statement parser, not the header-ticker fallback fixed earlier) had two related gaps — its final fallback returned the normalized company-name key verbatim with no length sanity check, and, worse, its prefix-match step let an implausibly short OCR fragment spuriously "prefix-match" an unrelated long company name (`"TELECOM EGYPT".startsWith("TE")` is technically true but meaningless). Both are now gated behind one `MIN_UNMAPPED_NAME_LENGTH` (3 characters): a description that OCRs down to something this short is dropped as a row entirely rather than turned into a bogus low-confidence candidate.
+
+- 1 new test (231 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

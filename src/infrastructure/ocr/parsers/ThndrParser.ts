@@ -89,6 +89,15 @@ export function fuzzyMatchTicker(key: string): string | null {
   return null;
 }
 
+// A normalized company name shorter than this carries no real
+// distinguishing information — real company names (mapped or not) are
+// always multi-character words, so anything this short is far more likely
+// an OCR-garbled/truncated fragment (the observed real failure: a
+// statement row's description misread down to just "TE") than an actual
+// unmapped company. Rejected outright rather than turned into a fallback
+// "ticker" group around noise.
+const MIN_UNMAPPED_NAME_LENGTH = 3;
+
 /**
  * Resolves a Description-column company name to a ticker symbol: exact
  * normalized match ("high" confidence), then prefix match ("medium" — the
@@ -96,17 +105,24 @@ export function fuzzyMatchTicker(key: string): string | null {
  * differently), then fuzzy match ("medium" — tolerates a couple of
  * OCR-garbled letters, but is still a guess). Falls back to the normalized
  * company name itself when nothing matches ("low" confidence) — a
- * consistent unmapped label beats a guessed, possibly wrong, ticker.
+ * consistent unmapped label beats a guessed, possibly wrong, ticker — unless
+ * that name is implausibly short, in which case this returns null so the
+ * caller drops the row instead of fabricating a group around noise.
  */
-function resolveTicker(description: string): { ticker: string; confidence: ParseConfidence } {
+function resolveTicker(description: string): { ticker: string; confidence: ParseConfidence } | null {
   const key = normalizeCompanyKey(description);
   if (COMPANY_TICKER_MAP[key]) return { ticker: COMPANY_TICKER_MAP[key], confidence: "high" };
+  if (key.length < MIN_UNMAPPED_NAME_LENGTH) return null;
+  // name.startsWith(key) is only a meaningful "OCR truncated this" signal
+  // once key itself is long enough to identify a specific company — a short
+  // key (already rejected above) would otherwise spuriously "prefix-match"
+  // any company name that happens to start with the same couple of letters.
   for (const [name, ticker] of Object.entries(COMPANY_TICKER_MAP)) {
     if (key.startsWith(name) || name.startsWith(key)) return { ticker, confidence: "medium" };
   }
   const fuzzy = fuzzyMatchTicker(key);
   if (fuzzy) return { ticker: fuzzy, confidence: "medium" };
-  return { ticker: key || description.toUpperCase(), confidence: "low" };
+  return { ticker: key, confidence: "low" };
 }
 
 // Thndr "Customer Account Statement" rows look like:
@@ -157,7 +173,9 @@ function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
     if (!date) continue;
 
     const isBuy = /buy|شراء/i.test(typeStr);
-    const { ticker, confidence } = resolveTicker(description.trim());
+    const resolved = resolveTicker(description.trim());
+    if (!resolved) continue;
+    const { ticker, confidence } = resolved;
     if (NON_STOCK_INSTRUMENTS.has(ticker.toUpperCase())) continue;
 
     candidates.push({
