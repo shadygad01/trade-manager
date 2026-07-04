@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { strategyAttribution } from "./strategyAttribution";
 import { makeTrade, makeAllocation } from "./testFixtures";
+import { createJournalEntry } from "@domain/entities/JournalEntry";
 
 describe("strategyAttribution", () => {
   it("returns nothing when no trade carries a strategy tag", () => {
@@ -53,5 +54,26 @@ describe("strategyAttribution", () => {
     const results = strategyAttribution([best, worst], allocations);
     expect(results[0].tag).toBe("Best");
     expect(results[1].tag).toBe("Worst");
+  });
+
+  it("includes tags added later in the Journal, not just at buy time", () => {
+    const trade = makeTrade({ id: "t1", shares: 100, entryPrice: 10, strategyTags: ["Swing"] });
+    const allocations = [makeAllocation({ tradeId: "t1", sharesClosed: 100, exitPrice: 20 })];
+    const journalEntries = [
+      createJournalEntry({ id: "j1", tradeId: "t1", portfolioId: "p1", strategyTags: ["FOMO"] }),
+    ];
+    const results = strategyAttribution([trade], allocations, journalEntries);
+    expect(results.map((r) => r.tag).sort()).toEqual(["FOMO", "Swing"]);
+  });
+
+  it("doesn't double-count a tag present on both the Trade and its Journal entry", () => {
+    const trade = makeTrade({ id: "t1", shares: 100, entryPrice: 10, strategyTags: ["Swing"] });
+    const allocations = [makeAllocation({ tradeId: "t1", sharesClosed: 100, exitPrice: 20 })];
+    const journalEntries = [
+      createJournalEntry({ id: "j1", tradeId: "t1", portfolioId: "p1", strategyTags: ["Swing"] }),
+    ];
+    const results = strategyAttribution([trade], allocations, journalEntries);
+    expect(results).toHaveLength(1);
+    expect(results[0].tradeCount).toBe(1);
   });
 });

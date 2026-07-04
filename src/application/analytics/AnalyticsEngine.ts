@@ -1,6 +1,7 @@
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
+import type { JournalEntry } from "@domain/entities/JournalEntry";
 import { winRate } from "./calculators/winRate";
 import { profitFactor } from "./calculators/profitFactor";
 import { avgWinner } from "./calculators/avgWinner";
@@ -53,6 +54,8 @@ export interface AnalyticsInput {
   priceMap: Record<string, number>;
   cash: number;
   today?: string;
+  /** Feeds strategyAttribution's tag union (Trade.strategyTags ∪ JournalEntry.strategyTags) — optional since not every caller has journal data on hand. */
+  journalEntries?: JournalEntry[];
 }
 
 export interface AnalyticsResult {
@@ -102,6 +105,6 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     portfolioReturn: portfolioReturn(totalEquity, deposits, withdrawals),
     equityCurve: curve,
     portfolioHealth: portfolioHealth(trades, allocations, priceMap, cash),
-    strategyAttribution: strategyAttribution(trades, allocations),
+    strategyAttribution: strategyAttribution(trades, allocations, input.journalEntries ?? []),
   };
 }

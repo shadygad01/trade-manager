@@ -26,15 +26,16 @@ export function AnalyticsPage() {
   const { id: portfolioId } = useParams<{ id: string }>();
 
   const analytics = useLiveQuery(async () => {
-    const [portfolio, trades, allocations, timelineEvents, priceMap] = await Promise.all([
+    const [portfolio, trades, allocations, timelineEvents, priceMap, journalEntries] = await Promise.all([
       repos.portfolios.getById(portfolioId),
       repos.trades.getByPortfolio(portfolioId),
       repos.tradeAllocations.getByPortfolio(portfolioId),
       repos.timeline.getByPortfolio(portfolioId),
       repos.prices.getAllPrices(),
+      repos.journal.getByPortfolio(portfolioId),
     ]);
     if (!portfolio) return undefined;
-    return computeAnalytics({ trades, allocations, timelineEvents, priceMap, cash: portfolio.cash });
+    return computeAnalytics({ trades, allocations, timelineEvents, priceMap, cash: portfolio.cash, journalEntries });
   }, [portfolioId]);
 
   if (analytics === undefined) {

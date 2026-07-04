@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { computePositions } from "@application/services/TradeService";
-import { deposit, withdraw, recordDividend } from "@application/services/PortfolioService";
+import { deposit, withdraw, recordDividend, recordCashAdjustment, recordSplit, recordRightsIssue } from "@application/services/PortfolioService";
 import { reconcilePositions, acceptComputedAsVerified } from "@application/services/reconciliation";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
@@ -14,11 +14,13 @@ import { StatTile } from "@presentation/components/StatTile";
 import { CapitalDeploymentFlow } from "@presentation/components/CapitalDeploymentFlow";
 import { formatMoney, formatPercent, formatShares, signClass } from "@presentation/lib/format";
 
-type CashModalKind = "deposit" | "withdraw" | "dividend" | null;
+type CashModalKind = "deposit" | "withdraw" | "dividend" | "adjustment" | null;
+type CorporateActionKind = "split" | "rightsIssue" | null;
 
 export function PortfolioDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [cashModal, setCashModal] = useState<CashModalKind>(null);
+  const [corporateActionOpen, setCorporateActionOpen] = useState(false);
 
   const portfolio = useLiveQuery(() => repos.portfolios.getById(id), [id]);
   const positions = useLiveQuery(async (): Promise<Position[]> => {
@@ -78,6 +80,18 @@ export function PortfolioDetailPage() {
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
               <CircleDollarSign size={16} /> Dividend
+            </button>
+            <button
+              onClick={() => setCashModal("adjustment")}
+              className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+            >
+              <Wrench size={16} /> Adjust Cash
+            </button>
+            <button
+              onClick={() => setCorporateActionOpen(true)}
+              className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+            >
+              <SplitSquareHorizontal size={16} /> Corporate Action
             </button>
           </>
         }
@@ -209,6 +223,7 @@ export function PortfolioDetailPage() {
       ) : null}
 
       <CashModal kind={cashModal} portfolioId={portfolio.id} onClose={() => setCashModal(null)} />
+      <CorporateActionModal open={corporateActionOpen} portfolioId={portfolio.id} onClose={() => setCorporateActionOpen(false)} />
     </div>
   );
 }
@@ -224,6 +239,7 @@ function CashModal({
 }) {
   const [amount, setAmount] = useState("");
   const [ticker, setTicker] = useState("");
+  const [date, setDate] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -234,11 +250,21 @@ function CashModal({
     deposit: "Deposit Cash",
     withdraw: "Withdraw Cash",
     dividend: "Record Dividend",
+    adjustment: "Adjust Cash",
   };
 
   async function handleSubmit() {
     const n = Number.parseFloat(amount);
-    if (!Number.isFinite(n) || n <= 0) {
+    if (kind === "adjustment") {
+      if (!Number.isFinite(n) || n === 0) {
+        setError("Enter a non-zero amount (negative to decrease cash).");
+        return;
+      }
+      if (!notes.trim()) {
+        setError("Explain what this adjustment is for.");
+        return;
+      }
+    } else if (!Number.isFinite(n) || n <= 0) {
       setError("Enter a positive amount.");
       return;
     }
@@ -248,9 +274,11 @@ function CashModal({
       const trimmedNotes = notes.trim() || undefined;
       if (kind === "deposit") await deposit(repos, portfolioId, n, trimmedNotes);
       else if (kind === "withdraw") await withdraw(repos, portfolioId, n, trimmedNotes);
-      else await recordDividend(repos, portfolioId, { ticker: ticker.trim() || undefined, amount: n, notes: trimmedNotes });
+      else if (kind === "adjustment") await recordCashAdjustment(repos, portfolioId, n, notes.trim());
+      else await recordDividend(repos, portfolioId, { ticker: ticker.trim() || undefined, amount: n, date: date || undefined, notes: trimmedNotes });
       setAmount("");
       setTicker("");
+      setDate("");
       setNotes("");
       onClose();
     } catch (e) {
@@ -264,7 +292,7 @@ function CashModal({
     <Modal title={titles[kind]} open={Boolean(kind)} onClose={onClose}>
       <div className="space-y-3">
         <label className="block text-xs text-slate-400 space-y-1">
-          Amount (EGP)
+          {kind === "adjustment" ? "Amount (EGP) — negative to decrease" : "Amount (EGP)"}
           <input
             type="number"
             value={amount}
@@ -273,17 +301,28 @@ function CashModal({
           />
         </label>
         {kind === "dividend" ? (
-          <label className="block text-xs text-slate-400 space-y-1">
-            Ticker (optional)
-            <input
-              value={ticker}
-              onChange={(e) => setTicker(e.target.value.toUpperCase())}
-              className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-            />
-          </label>
+          <>
+            <label className="block text-xs text-slate-400 space-y-1">
+              Ticker (optional)
+              <input
+                value={ticker}
+                onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              />
+            </label>
+            <label className="block text-xs text-slate-400 space-y-1">
+              Date paid (optional — defaults to now)
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              />
+            </label>
+          </>
         ) : null}
         <label className="block text-xs text-slate-400 space-y-1">
-          Notes
+          Notes{kind === "adjustment" ? " (required)" : ""}
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -302,6 +341,124 @@ function CashModal({
             className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
           >
             {submitting ? "Saving…" : "Confirm"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Split/rights-issue are record-only by design (see PortfolioService) — this
+ * logs the event on the timeline without rebasing existing trades' share
+ * counts or entry prices, which was scoped out deliberately, not an
+ * oversight (see ROADMAP.md "Next recommended sprint").
+ */
+function CorporateActionModal({
+  open,
+  portfolioId,
+  onClose,
+}: {
+  open: boolean;
+  portfolioId: string;
+  onClose: () => void;
+}) {
+  const [kind, setKind] = useState<Exclude<CorporateActionKind, null>>("split");
+  const [ticker, setTicker] = useState("");
+  const [notes, setNotes] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function reset() {
+    setKind("split");
+    setTicker("");
+    setNotes("");
+    setError(null);
+  }
+
+  async function handleSubmit() {
+    const trimmedTicker = ticker.trim();
+    const trimmedNotes = notes.trim();
+    if (!trimmedTicker) {
+      setError("Enter a ticker.");
+      return;
+    }
+    if (!trimmedNotes) {
+      setError(kind === "split" ? "Describe the split ratio (e.g. \"2-for-1\")." : "Describe the rights issue (e.g. \"1-for-4 at 10 EGP\").");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (kind === "split") await recordSplit(repos, portfolioId, { ticker: trimmedTicker, notes: trimmedNotes });
+      else await recordRightsIssue(repos, portfolioId, { ticker: trimmedTicker, notes: trimmedNotes });
+      reset();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Action failed.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal
+      title="Record Corporate Action"
+      open={open}
+      onClose={() => {
+        reset();
+        onClose();
+      }}
+    >
+      <div className="space-y-3">
+        <p className="text-xs text-slate-400">
+          Logged on the timeline as a record of what happened — share counts and entry prices on existing trades are
+          not automatically rebased.
+        </p>
+        <div className="flex rounded-md border border-slate-700 p-0.5 text-xs">
+          <button
+            onClick={() => setKind("split")}
+            className={`flex-1 rounded px-3 py-1.5 ${kind === "split" ? "bg-cyan-500 text-slate-950 font-medium" : "text-slate-300 hover:bg-slate-800"}`}
+          >
+            Split
+          </button>
+          <button
+            onClick={() => setKind("rightsIssue")}
+            className={`flex-1 rounded px-3 py-1.5 ${kind === "rightsIssue" ? "bg-cyan-500 text-slate-950 font-medium" : "text-slate-300 hover:bg-slate-800"}`}
+          >
+            Rights Issue
+          </button>
+        </div>
+        <label className="block text-xs text-slate-400 space-y-1">
+          Ticker
+          <input
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value.toUpperCase())}
+            className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+            placeholder="COMI"
+          />
+        </label>
+        <label className="block text-xs text-slate-400 space-y-1">
+          Details (required)
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            placeholder={kind === "split" ? "2-for-1 split" : "1-for-4 at 10 EGP"}
+            className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+          />
+        </label>
+        {error ? <p className="text-sm text-rose-400">{error}</p> : null}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={submitting}
+            className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
+          >
+            {submitting ? "Saving…" : "Record"}
           </button>
         </div>
       </div>

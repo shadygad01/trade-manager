@@ -1,5 +1,6 @@
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
+import type { JournalEntry } from "@domain/entities/JournalEntry";
 import { winRate } from "./winRate";
 import { profitFactor } from "./profitFactor";
 import { realizedPnlMicrosForAllocations } from "./shared";
@@ -19,11 +20,27 @@ export interface StrategyAttribution {
  * so its realized P/L counts toward every tag it's attributed to rather than
  * being split — the question this answers is "how does the Swing strategy
  * perform", not "how much P/L belongs exclusively to Swing".
+ *
+ * Tags come from two places that can disagree: `Trade.strategyTags` (set at
+ * fill time) and `JournalEntry.strategyTags` (set or edited later, during
+ * reflection). This attributes by the union of both — a tag added in the
+ * Journal after the fact affects this table exactly like one set at buy
+ * time, rather than being silently ignored.
  */
-export function strategyAttribution(trades: Trade[], allocations: TradeAllocation[]): StrategyAttribution[] {
+export function strategyAttribution(
+  trades: Trade[],
+  allocations: TradeAllocation[],
+  journalEntries: JournalEntry[] = []
+): StrategyAttribution[] {
+  const journalTagsByTrade = new Map<string, string[]>();
+  for (const entry of journalEntries) {
+    journalTagsByTrade.set(entry.tradeId, entry.strategyTags);
+  }
+
   const tagToTradeIds = new Map<string, Set<string>>();
   for (const trade of trades) {
-    for (const tag of trade.strategyTags) {
+    const tags = new Set([...trade.strategyTags, ...(journalTagsByTrade.get(trade.id) ?? [])]);
+    for (const tag of tags) {
       const set = tagToTradeIds.get(tag) ?? new Set<string>();
       set.add(trade.id);
       tagToTradeIds.set(tag, set);
