@@ -278,6 +278,21 @@ describe("ThndrParser.parsePositionVerification", () => {
     const text = "My current position Units 74 Average cost EGP 23.73";
     expect(parser.parsePositionVerification(text)).toHaveLength(0);
   });
+
+  it("rejects a 2-3 letter OCR noise fragment near the header instead of fabricating a ticker from it", () => {
+    // Real EGX tickers are always exactly 4 letters (see KNOWN_EGX_TICKERS) —
+    // a stray 2-3 letter all-caps fragment (an OCR misread of surrounding UI
+    // chrome, not the actual ticker) must never be accepted as one.
+    for (const noise of ["TE", "HH", "EGF"]) {
+      const text = `
+        ${noise}
+        My current position
+        Units 74
+        Average cost EGP 23.73
+      `;
+      expect(parser.parsePositionVerification(text)).toHaveLength(0);
+    }
+  });
 });
 
 describe("ThndrParser.parseDividends", () => {

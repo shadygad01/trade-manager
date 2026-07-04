@@ -118,6 +118,14 @@ A full repo audit against the product vision (Completed / Partial / Not Implemen
 - **Ledger export/import** (`BackupService.ts`, new `/data` page): the single highest-consequence gap the review found — until now, a cleared browser profile meant total, unrecoverable data loss, since ADR-001's "no backend" trade-off had no manual escape hatch at all. Export produces one versioned JSON snapshot (every portfolio, trade, allocation, timeline event, journal entry, verification — deliberately excluding `Upload` rows, which are dedup bookkeeping, not financial data); import is a full replace, never a merge, so the ledger after restoring always exactly matches the file rather than a blend of old and new. Required adding `getAll()` to `TimelineRepository`/`JournalRepository`/`VerificationRepository` and `delete()` to `VerificationRepository` (neither existed before — the same completeness gap this feature was built to close), and adding `journal` to the shared `AppRepositories` type.
 - 10 new tests (196 total).
 
+### Post-sprint-7 fix — garbled ticker fallback + a way to correct one
+
+User-reported real bug, from real (test) screenshots: the same underlying position/trade data showed up repeatedly under several different, meaningless 2-3 letter ticker groups ("TE", "HH", "HI", "HN", "EGF"). Root cause: `ThndrParser`'s header-ticker fallback (used whenever a screenshot's company name doesn't resolve against `KNOWN_EGX_TICKERS`) accepted *any* all-caps token from 2 to 6 letters as a "ticker" — but every real EGX ticker is exactly 4 letters (every entry in `KNOWN_EGX_TICKERS` is 4 chars), so a 2-3 letter OCR fragment from unrelated header text (an icon's label, a misread word) was silently accepted as a ticker every time, spawning a bogus, unstable group per upload.
+
+- Tightened the fallback to require exactly 4 letters; anything shorter now correctly falls through to "couldn't resolve the ticker" rather than being fabricated. 2 new tests.
+- Since OCR ticker resolution can't be made perfect for every company outside the known list, `ImportPage` also gained a direct correction tool: clicking a ticker group's heading in Step 2 turns it into an editable field, and confirming a new ticker moves every pending row (buys, sells, verifications, dividends) from the wrong ticker to the corrected one — a `renameTickerGroup` operation on the pending pool only, before anything is added as a real trade.
+- Also explained in-app terminology to the reporting user: "Add as Trade" records a parsed Buy candidate as a real `Trade`; "Allocate Sell" opens the lot-picker so a parsed Sell candidate can specify exactly which open lot(s) it closes (per ADR-002 — this app never assumes FIFO).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

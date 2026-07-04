@@ -218,8 +218,19 @@ const NON_TICKER_WORDS = new Set(["EGP", "PLC", "LTD", "SAE", "ALL", "USD", "GBP
 
 // The header shows the ticker code and, below it, the full company name.
 // Prefer matching the company name against the known map (more OCR-robust
-// than a 2-6 letter ticker code rendered in small text); fall back to the
-// first plausible all-caps ticker-looking token.
+// than a short ticker code rendered in small text); fall back to the first
+// plausible all-caps ticker-looking token.
+//
+// EGX equity tickers are consistently exactly 4 letters (every entry in
+// KNOWN_EGX_TICKERS is 4 chars) — the fallback used to accept anywhere from
+// 2 to 6, which meant an unrelated 2-3 letter OCR fragment near the header
+// (a mis-read label, an icon's alt text, anything) was happily accepted as
+// a "ticker" every time, silently spawning a bogus ticker group in Import.
+// Requiring exactly 4 rejects that whole class of noise outright — if
+// nothing 4-letter turns up, this correctly reports "couldn't resolve" and
+// the caller surfaces that as a warning instead of fabricating a guess.
+const HEADER_TICKER_LENGTH = 4;
+
 function resolveHeaderTickerImpl(text: string): { ticker: string; confidence: ParseConfidence } | null {
   const head = text.slice(0, 400);
   const key = normalizeCompanyKey(head);
@@ -231,7 +242,7 @@ function resolveHeaderTickerImpl(text: string): { ticker: string; confidence: Pa
     const prefixLen = Math.min(name.length, 15);
     if (prefixLen >= 8 && key.includes(name.slice(0, prefixLen))) return { ticker, confidence: "medium" };
   }
-  const candidates = head.match(/\b[A-Z]{2,6}\b/g) ?? [];
+  const candidates = head.match(new RegExp(`\\b[A-Z]{${HEADER_TICKER_LENGTH}}\\b`, "g")) ?? [];
   for (const c of candidates) {
     if (!NON_TICKER_WORDS.has(c)) return { ticker: c, confidence: "low" };
   }

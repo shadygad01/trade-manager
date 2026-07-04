@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
-import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign } from "lucide-react";
+import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, Pencil } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
@@ -229,6 +229,40 @@ export function ImportPage() {
     importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
   }
 
+  /**
+   * OCR ticker resolution isn't perfect — a garbled/unrecognized company name
+   * can still produce a low-confidence guess that's flat-out wrong (see
+   * ThndrParser's header-ticker fallback). Rather than trying to make OCR
+   * infallible, this gives the user a direct way to correct it before adding
+   * anything: every pending candidate/verification/dividend currently grouped
+   * under the wrong ticker moves to the corrected one.
+   */
+  function renameTickerGroup(oldTicker: string, newTickerRaw: string) {
+    const newTicker = normalizeTicker(newTickerRaw);
+    if (!newTicker || newTicker === oldTicker) return;
+    importSession.update((prev) => {
+      const tickerPortfolioNext = { ...prev.tickerPortfolio };
+      if (prev.tickerPortfolio[oldTicker] && !tickerPortfolioNext[newTicker]) {
+        tickerPortfolioNext[newTicker] = prev.tickerPortfolio[oldTicker];
+      }
+      return {
+        ...prev,
+        pendingCandidates: prev.pendingCandidates.map((e) =>
+          normalizeTicker(e.candidate.ticker) === oldTicker ? { ...e, candidate: { ...e.candidate, ticker: newTicker } } : e,
+        ),
+        pendingVerifications: prev.pendingVerifications.map((e) =>
+          normalizeTicker(e.verification.ticker) === oldTicker
+            ? { ...e, verification: { ...e.verification, ticker: newTicker } }
+            : e,
+        ),
+        pendingDividends: prev.pendingDividends.map((e) =>
+          normalizeTicker(e.dividend.ticker) === oldTicker ? { ...e, dividend: { ...e.dividend, ticker: newTicker } } : e,
+        ),
+        tickerPortfolio: tickerPortfolioNext,
+      };
+    });
+  }
+
   async function acceptVerification(entry: VerificationEntry, ticker: string) {
     const portfolioId = portfolioForTicker(ticker);
     await repos.verifications.save({
@@ -392,6 +426,7 @@ export function ImportPage() {
               onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
               onAcceptVerification={(entry) => void acceptVerification(entry, ticker)}
               onAddDividend={(entry) => void addDividend(entry, ticker)}
+              onRenameTicker={(newTicker) => renameTickerGroup(ticker, newTicker)}
             />
           ))}
         </div>
@@ -439,6 +474,7 @@ function TickerGroupCard({
   onAllocateSell,
   onAcceptVerification,
   onAddDividend,
+  onRenameTicker,
 }: {
   ticker: string;
   group: { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[]; dividends: DividendEntry[] };
@@ -452,11 +488,63 @@ function TickerGroupCard({
   onAllocateSell: (entry: CandidateEntry) => void;
   onAcceptVerification: (entry: VerificationEntry) => void;
   onAddDividend: (entry: DividendEntry) => void;
+  onRenameTicker: (newTicker: string) => void;
 }) {
+  const [renaming, setRenaming] = useState(false);
+  const [draftTicker, setDraftTicker] = useState(ticker);
+
+  function confirmRename() {
+    onRenameTicker(draftTicker);
+    setRenaming(false);
+  }
+
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
-        <h4 className="text-sm font-semibold text-slate-100">{ticker}</h4>
+        {renaming ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              autoFocus
+              value={draftTicker}
+              onChange={(e) => setDraftTicker(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirmRename();
+                if (e.key === "Escape") {
+                  setDraftTicker(ticker);
+                  setRenaming(false);
+                }
+              }}
+              className="w-24 rounded border border-cyan-500/50 bg-slate-800 px-2 py-1 text-sm font-semibold text-slate-100"
+            />
+            <button
+              onClick={confirmRename}
+              className="rounded-md bg-cyan-500 px-2 py-1 text-xs font-medium text-slate-950 hover:bg-cyan-400"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => {
+                setDraftTicker(ticker);
+                setRenaming(false);
+              }}
+              className="rounded-md px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => {
+              setDraftTicker(ticker);
+              setRenaming(true);
+            }}
+            title="Wrong ticker? Click to correct it — this fixes every pending row extracted under this name."
+            className="flex items-center gap-1.5 text-sm font-semibold text-slate-100 hover:text-cyan-400"
+          >
+            {ticker}
+            <Pencil size={12} className="text-slate-500" />
+          </button>
+        )}
         <label className="flex items-center gap-2 text-xs text-slate-400">
           Portfolio
           <select
