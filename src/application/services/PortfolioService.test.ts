@@ -9,6 +9,8 @@ import {
   recordCashAdjustment,
   recordSplit,
   recordRightsIssue,
+  archivePortfolio,
+  unarchivePortfolio,
 } from "./PortfolioService";
 
 describe("createPortfolioAndSave", () => {
@@ -17,6 +19,24 @@ describe("createPortfolioAndSave", () => {
     const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading", initialCash: 5000 });
     expect(portfolio.cash).toBe(5000);
     expect(await repos.portfolios.getById(portfolio.id)).toEqual(portfolio);
+  });
+});
+
+describe("archivePortfolio / unarchivePortfolio", () => {
+  it("sets archivedAt without touching cash or any other field", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
+    const archived = await archivePortfolio(repos, "p1");
+    expect(archived.archivedAt).toBeDefined();
+    expect(archived.cash).toBe(1000);
+    expect((await repos.portfolios.getById("p1"))?.archivedAt).toBeDefined();
+  });
+
+  it("unarchiving clears archivedAt", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
+    await archivePortfolio(repos, "p1");
+    const unarchived = await unarchivePortfolio(repos, "p1");
+    expect(unarchived.archivedAt).toBeUndefined();
+    expect((await repos.portfolios.getById("p1"))?.archivedAt).toBeUndefined();
   });
 });
 

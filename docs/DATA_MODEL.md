@@ -40,6 +40,10 @@ This is the core design decision in the whole product (see [ARCHITECTURE.md ADR-
 
 Both entities carry their own `strategyTags`, and they're allowed to disagree — a tag added later during Journal reflection doesn't rewrite `Trade.strategyTags`. `strategyAttribution()` (see [ANALYTICS_ENGINE.md](ANALYTICS_ENGINE.md)) attributes by the **union** of both per trade, so a tag from either source counts, rather than only ever reading the fill-time one.
 
+## Portfolio archiving
+
+`Portfolio.archivedAt` (set/cleared via `PortfolioService.archivePortfolio`/`unarchivePortfolio`) hides a portfolio from the main `/portfolios` grid and the sidebar's portfolio switcher without touching any of its data — cash, trades, and history are all untouched, and unarchiving is a one-click reversal. `PortfoliosPage` keeps a collapsed "Archived (N)" section so an archived portfolio is still browsable, just not cluttering day-to-day navigation. Dashboard aggregates still include archived portfolios' totals — archiving is purely an organization/visibility concern, not a way to exclude real money from the numbers.
+
 ## Backup: export / import
 
 `BackupService.exportLedger`/`importLedger` (`/data` page) move the *entire* ledger — every `Portfolio`, `Trade`, `TradeAllocation`, `TimelineEvent`, `JournalEntry`, and `PositionVerification` — in or out as one versioned JSON snapshot (`schemaVersion`, currently `1`). `Upload` rows are deliberately excluded: they're OCR duplicate-file bookkeeping with no other reader in the app (see [OCR_SUBSYSTEM.md](OCR_SUBSYSTEM.md)), not financial data, and are meaningless to replay on a different browser. Import is a **full replace** — every existing row in the six exported tables is deleted before the snapshot's rows are inserted — never a merge; see the file's own doc comment for why a merge's conflict-resolution problem is out of scope for a single-profile-at-a-time app.

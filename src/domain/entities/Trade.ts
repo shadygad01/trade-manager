@@ -1,12 +1,3 @@
-export interface TradeAttachment {
-  id: string;
-  /** data URL or blob-store reference key; storage mechanism is an infrastructure concern. */
-  ref: string;
-  fileName: string;
-  contentType: string;
-  createdAt: string;
-}
-
 /**
  * A Trade is one Buy execution. It is immutable: ticker, shares, entryPrice,
  * fees, and execution date/time are recorded once and never edited or merged
@@ -29,8 +20,6 @@ export interface Trade {
   executionTime: string;
   remainingShares: number;
   notes?: string;
-  screenshots: TradeAttachment[];
-  attachments: TradeAttachment[];
   strategyTags: string[];
   createdAt: string;
 }
@@ -68,8 +57,6 @@ export function createTrade(input: {
     executionTime: input.executionTime,
     remainingShares: input.shares,
     notes: input.notes,
-    screenshots: [],
-    attachments: [],
     strategyTags: input.strategyTags ?? [],
     createdAt: new Date().toISOString(),
   };

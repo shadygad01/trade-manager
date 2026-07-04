@@ -27,6 +27,26 @@ async function requirePortfolio(repos: AppRepositories, portfolioId: string): Pr
   return portfolio;
 }
 
+/**
+ * Archiving hides a portfolio from the main list without touching any of
+ * its data — trades, cash, and history all stay exactly as they are and
+ * remain fully reachable by unarchiving. Never a delete.
+ */
+export async function archivePortfolio(repos: AppRepositories, portfolioId: string): Promise<Portfolio> {
+  const portfolio = await requirePortfolio(repos, portfolioId);
+  const updated = { ...portfolio, archivedAt: new Date().toISOString() };
+  await repos.portfolios.save(updated);
+  return updated;
+}
+
+export async function unarchivePortfolio(repos: AppRepositories, portfolioId: string): Promise<Portfolio> {
+  const portfolio = await requirePortfolio(repos, portfolioId);
+  const updated: Portfolio = { ...portfolio };
+  delete updated.archivedAt;
+  await repos.portfolios.save(updated);
+  return updated;
+}
+
 export async function deposit(
   repos: AppRepositories,
   portfolioId: string,

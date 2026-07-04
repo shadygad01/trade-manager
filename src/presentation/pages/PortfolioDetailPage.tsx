@@ -1,10 +1,19 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { computePositions } from "@application/services/TradeService";
-import { deposit, withdraw, recordDividend, recordCashAdjustment, recordSplit, recordRightsIssue } from "@application/services/PortfolioService";
+import {
+  deposit,
+  withdraw,
+  recordDividend,
+  recordCashAdjustment,
+  recordSplit,
+  recordRightsIssue,
+  archivePortfolio,
+  unarchivePortfolio,
+} from "@application/services/PortfolioService";
 import { reconcilePositions, acceptComputedAsVerified } from "@application/services/reconciliation";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
@@ -93,9 +102,34 @@ export function PortfolioDetailPage() {
             >
               <SplitSquareHorizontal size={16} /> Corporate Action
             </button>
+            {portfolio.archivedAt ? (
+              <button
+                onClick={() => void unarchivePortfolio(repos, portfolio.id)}
+                className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+              >
+                <ArchiveRestore size={16} /> Unarchive
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (confirm(`Archive "${portfolio.name}"? It's hidden from the main list but nothing is deleted — unarchive anytime.`)) {
+                    void archivePortfolio(repos, portfolio.id);
+                  }
+                }}
+                className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+              >
+                <Archive size={16} /> Archive
+              </button>
+            )}
           </>
         }
       />
+
+      {portfolio.archivedAt ? (
+        <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-2.5 text-sm text-amber-300">
+          This portfolio is archived (hidden from the main Portfolios list). Its data is untouched — unarchive anytime.
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile label="Cash Balance" value={formatMoney(portfolio.cash)} />

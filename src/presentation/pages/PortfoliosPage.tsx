@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Link } from "wouter";
-import { Plus, Briefcase, ArrowRight } from "lucide-react";
+import { Plus, Briefcase, ArrowRight, Archive, ArchiveRestore, ChevronDown, ChevronRight } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { createPortfolioAndSave } from "@application/services/PortfolioService";
-import type { PortfolioKind } from "@domain/entities/Portfolio";
+import { createPortfolioAndSave, unarchivePortfolio } from "@application/services/PortfolioService";
+import type { Portfolio, PortfolioKind } from "@domain/entities/Portfolio";
 import { computePositions } from "@application/services/TradeService";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
@@ -16,6 +16,16 @@ const KINDS: PortfolioKind[] = ["Investment", "Trading", "Swing", "Experiments",
 export function PortfoliosPage() {
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []);
   const [modalOpen, setModalOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+
+  const { active, archived } = useMemo(() => {
+    const active: Portfolio[] = [];
+    const archived: Portfolio[] = [];
+    for (const p of portfolios ?? []) {
+      (p.archivedAt ? archived : active).push(p);
+    }
+    return { active, archived };
+  }, [portfolios]);
 
   const summaries = useLiveQuery(async () => {
     if (!portfolios) return undefined;
@@ -44,7 +54,7 @@ export function PortfoliosPage() {
         }
       />
 
-      {portfolios && portfolios.length === 0 ? (
+      {portfolios && active.length === 0 && archived.length === 0 ? (
         <EmptyState
           icon={<Briefcase size={28} />}
           title="No portfolios yet"
@@ -58,40 +68,93 @@ export function PortfoliosPage() {
             </button>
           }
         />
+      ) : portfolios && active.length === 0 ? (
+        <EmptyState
+          icon={<Archive size={28} />}
+          title="No active portfolios"
+          description={`All ${archived.length} portfolio${archived.length === 1 ? " is" : "s are"} archived.`}
+          action={
+            <button onClick={() => setShowArchived(true)} className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950">
+              Show archived
+            </button>
+          }
+        />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {(portfolios ?? []).map((p) => (
-            <Link
-              key={p.id}
-              href={`/portfolios/${p.id}`}
-              className="group rounded-xl border border-slate-800 bg-slate-900/60 p-4 transition-colors hover:border-cyan-500/40 hover:bg-slate-900"
-            >
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-slate-50">{p.name}</p>
-                  <span className="mt-1 inline-block rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-400">
-                    {p.kind === "Custom" ? p.customKindLabel || "Custom" : p.kind}
-                  </span>
-                </div>
-                <ArrowRight size={16} className="text-slate-600 group-hover:text-cyan-400" />
-              </div>
-              <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-                <div>
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Cash</p>
-                  <p className="tabular-nums text-slate-200">{formatMoney(p.cash)}</p>
-                </div>
-                <div>
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Invested</p>
-                  <p className="tabular-nums text-slate-200">{formatMoney(summaries?.get(p.id) ?? 0)}</p>
-                </div>
-              </div>
-              {p.notes ? <p className="mt-3 line-clamp-2 text-xs text-slate-500">{p.notes}</p> : null}
-            </Link>
+          {active.map((p) => (
+            <PortfolioCard key={p.id} portfolio={p} marketValue={summaries?.get(p.id) ?? 0} />
           ))}
         </div>
       )}
 
+      {archived.length > 0 ? (
+        <div className="mt-6">
+          <button
+            onClick={() => setShowArchived((v) => !v)}
+            className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200"
+          >
+            {showArchived ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            Archived ({archived.length})
+          </button>
+          {showArchived ? (
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {archived.map((p) => (
+                <PortfolioCard key={p.id} portfolio={p} marketValue={summaries?.get(p.id) ?? 0} archived />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <CreatePortfolioModal open={modalOpen} onClose={() => setModalOpen(false)} />
+    </div>
+  );
+}
+
+function PortfolioCard({
+  portfolio: p,
+  marketValue,
+  archived,
+}: {
+  portfolio: Portfolio;
+  marketValue: number;
+  archived?: boolean;
+}) {
+  return (
+    <div className={`group relative rounded-xl border border-slate-800 bg-slate-900/60 p-4 transition-colors hover:border-cyan-500/40 hover:bg-slate-900 ${archived ? "opacity-60" : ""}`}>
+      <Link href={`/portfolios/${p.id}`} className="block">
+        <div className="flex items-start justify-between">
+          <div>
+            <p className="text-sm font-semibold text-slate-50">{p.name}</p>
+            <span className="mt-1 inline-block rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-400">
+              {p.kind === "Custom" ? p.customKindLabel || "Custom" : p.kind}
+            </span>
+          </div>
+          <ArrowRight size={16} className="text-slate-600 group-hover:text-cyan-400" />
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Cash</p>
+            <p className="tabular-nums text-slate-200">{formatMoney(p.cash)}</p>
+          </div>
+          <div>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">Invested</p>
+            <p className="tabular-nums text-slate-200">{formatMoney(marketValue)}</p>
+          </div>
+        </div>
+        {p.notes ? <p className="mt-3 line-clamp-2 text-xs text-slate-500">{p.notes}</p> : null}
+      </Link>
+      {archived ? (
+        <button
+          onClick={(e) => {
+            e.preventDefault();
+            void unarchivePortfolio(repos, p.id);
+          }}
+          className="mt-3 flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
+        >
+          <ArchiveRestore size={12} /> Unarchive
+        </button>
+      ) : null}
     </div>
   );
 }

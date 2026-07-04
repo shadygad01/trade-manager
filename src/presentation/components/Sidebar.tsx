@@ -34,6 +34,11 @@ export function Sidebar() {
     () => portfolios?.find((p) => p.id === activePortfolioId),
     [portfolios, activePortfolioId],
   );
+  // Archived portfolios are hidden from the switcher — a user navigating
+  // day-to-day shouldn't see them cluttering the list — but the active one
+  // still resolves above so viewing an archived portfolio directly still
+  // shows its real name in the header instead of falling back to "Portfolio".
+  const switcherPortfolios = useMemo(() => portfolios?.filter((p) => !p.archivedAt || p.id === activePortfolioId), [portfolios, activePortfolioId]);
 
   return (
     <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-950 text-slate-300">
@@ -97,9 +102,9 @@ export function Sidebar() {
                 </span>
                 <ChevronDown size={14} className="shrink-0 text-slate-500" />
               </button>
-              {switcherOpen && portfolios ? (
+              {switcherOpen && switcherPortfolios ? (
                 <div className="absolute z-10 mt-1 w-full rounded-md border border-slate-800 bg-slate-900 shadow-xl">
-                  {portfolios.map((p) => (
+                  {switcherPortfolios.map((p) => (
                     <Link
                       key={p.id}
                       href={`/portfolios/${p.id}`}
