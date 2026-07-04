@@ -3,6 +3,7 @@ export type TickerMatchReason =
   | "no-shares-to-verify"
   | "closed-position"
   | "invoice-verified"
+  | "cross-verified"
   | "no-verification"
   | "mismatch";
 
@@ -53,6 +54,17 @@ export interface TickerMatchStatus {
  * exists at all; a screenshot that's actually present and mismatches still
  * blocks, since a real discrepancy (e.g. a duplicate invoice) shouldn't be
  * silently overridden just because this batch happens to be invoice-sourced.
+ *
+ * A fourth way, one level broader: a ticker whose every still-pending
+ * candidate is *either* invoice-sourced *or* cross-verified by an
+ * independent second document describing the same transaction (see
+ * `findCrossSourceVerifiedKeys` — an OCR'd screenshot/statement read
+ * corroborated by a separate Invoice for the identical ticker/side/date/
+ * share count). Two independent sources agreeing is at least as
+ * trustworthy as an invoice alone, and resolves exactly the case a broker
+ * "My Position" total can't: an OCR-only ticker whose extracted total
+ * won't reconcile no matter how the rows are grouped, because the
+ * mismatch is hiding inside a row nothing else ever corroborated.
  */
 export function checkTickerMatch(params: {
   hasShares: boolean;
@@ -61,6 +73,7 @@ export function checkTickerMatch(params: {
   existingRemainingShares: number;
   verifiedUnits?: number;
   allPendingFromInvoice?: boolean;
+  allPendingSelfVerified?: boolean;
 }): TickerMatchStatus {
   const netShares = params.existingRemainingShares + params.pendingBuyShares - params.pendingSellShares;
 
@@ -73,6 +86,9 @@ export function checkTickerMatch(params: {
     }
     if (params.allPendingFromInvoice) {
       return { matched: true, reason: "invoice-verified", netShares };
+    }
+    if (params.allPendingSelfVerified) {
+      return { matched: true, reason: "cross-verified", netShares };
     }
     return { matched: false, reason: "no-verification", netShares };
   }

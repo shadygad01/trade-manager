@@ -11,6 +11,7 @@ import {
   dividendContentKey,
   buildExistingDividendKeys,
   suggestDuplicatePendingCandidateKeysToDelete,
+  findCrossSourceVerifiedKeys,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
 import { generateId } from "@domain/value-objects/id";
@@ -696,6 +697,10 @@ export function ImportPage() {
       const remainingBuysAndSells = [...remainingBuys, ...remainingSells];
       const allPendingFromInvoice =
         remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
+      const crossVerifiedKeys = findCrossSourceVerifiedKeys(remainingBuysAndSells);
+      const allPendingSelfVerified =
+        remainingBuysAndSells.length > 0 &&
+        remainingBuysAndSells.every((e) => e.candidate.source === "invoice" || crossVerifiedKeys.has(e.key));
       const existingRemainingShares = existingTrades
         .filter((t) => normalizeTicker(t.ticker) === ticker)
         .reduce((sum, t) => sum + t.remainingShares, 0);
@@ -717,6 +722,7 @@ export function ImportPage() {
           existingRemainingShares,
           verifiedUnits: latestVerification?.units,
           allPendingFromInvoice,
+          allPendingSelfVerified,
         }),
       );
     }
@@ -1331,6 +1337,13 @@ function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
         <ShieldCheck size={11} /> Verified by invoice
+      </span>
+    );
+  }
+  if (status.reason === "cross-verified") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+        <ShieldCheck size={11} /> Verified — invoice matches screenshot
       </span>
     );
   }

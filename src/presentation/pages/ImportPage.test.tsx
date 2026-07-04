@@ -62,6 +62,43 @@ describe("TickerGroupCard — invoice-sourced Buy needs no separate broker scree
   });
 });
 
+describe("TickerGroupCard — cross-verified (an OCR screenshot corroborated by an independent invoice, the ORHD case)", () => {
+  it("shows 'Verified — invoice matches screenshot' and lets the rows proceed straight to Ready", () => {
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [buyEntry("orhd-screenshot"), buyEntry("orhd-invoice")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "cross-verified", netShares: 10 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Verified — invoice matches screenshot")).toBeInTheDocument();
+    expect(screen.getAllByText("Ready — click Confirm above").length).toBe(2);
+    expect(screen.queryByText(/Mismatch/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Blocked — needs verification")).not.toBeInTheDocument();
+  });
+});
+
 describe("TickerGroupCard — portfolio picker for a brand-new ticker in more than one portfolio", () => {
   it("does not silently pre-select the first portfolio — shows an honest placeholder instead", () => {
     render(

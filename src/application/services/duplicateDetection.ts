@@ -110,12 +110,17 @@ export function isDividendAlreadyRecorded(
  * suggested for deletion; a Sell's lower-priced read is the more plausible
  * one, so higher-priced Sell duplicates are suggested instead.
  */
+/** Same real transaction, independent of a possibly re-OCR'd price: same ticker+side+date+share count. Shared by the sibling-duplicate grouping below and the cross-source verification check in ImportPage. */
+export function pendingCandidateSignature(candidate: { ticker: string; side: "BUY" | "SELL"; date: string; shares: number }): string {
+  return `${normalizeTicker(candidate.ticker)}|${candidate.side}|${candidate.date}|${candidate.shares}`;
+}
+
 export function suggestDuplicatePendingCandidateKeysToDelete(
   entries: { key: string; candidate: ParsedTradeCandidate }[]
 ): string[] {
   const bySignature = new Map<string, { key: string; candidate: ParsedTradeCandidate }[]>();
   for (const e of entries) {
-    const sig = `${normalizeTicker(e.candidate.ticker)}|${e.candidate.side}|${e.candidate.date}|${e.candidate.shares}`;
+    const sig = pendingCandidateSignature(e.candidate);
     const list = bySignature.get(sig) ?? [];
     list.push(e);
     bySignature.set(sig, list);
@@ -131,6 +136,45 @@ export function suggestDuplicatePendingCandidateKeysToDelete(
     for (const e of sorted.slice(1)) keysToDelete.push(e.key);
   }
   return keysToDelete;
+}
+
+/**
+ * Finds every still-pending candidate cross-verified by an independent
+ * second document: the same real transaction (same ticker+side+date+share
+ * count, ignoring price the same way the sibling-duplicate check above
+ * does) read once from a standardized Invoice and once from an OCR'd
+ * screenshot/statement. Two independently-sourced documents agreeing on a
+ * transaction is at least as trustworthy as an invoice alone (already
+ * sufficient on its own — see ThndrParser's Invoice format), and resolves
+ * exactly the case a broker "My Position" total can't: an OCR-only ticker
+ * whose extracted total won't reconcile no matter how the individual rows
+ * are read, because the mismatch is hiding inside rows that never got a
+ * second, independent document to confirm them.
+ *
+ * This never decides which of the pair to keep for commit — that's still
+ * suggestDuplicatePendingCandidateKeysToDelete's job (same signature, same
+ * price-priority rule). It only flags that the transaction itself is
+ * corroborated, for checkTickerMatch to treat as self-verified without a
+ * broker screenshot.
+ */
+export function findCrossSourceVerifiedKeys(entries: { key: string; candidate: ParsedTradeCandidate }[]): Set<string> {
+  const bySignature = new Map<string, { key: string; candidate: ParsedTradeCandidate }[]>();
+  for (const e of entries) {
+    const sig = pendingCandidateSignature(e.candidate);
+    const list = bySignature.get(sig) ?? [];
+    list.push(e);
+    bySignature.set(sig, list);
+  }
+
+  const verifiedKeys = new Set<string>();
+  for (const group of bySignature.values()) {
+    const hasInvoice = group.some((e) => e.candidate.source === "invoice");
+    const hasNonInvoice = group.some((e) => e.candidate.source !== "invoice");
+    if (hasInvoice && hasNonInvoice) {
+      for (const e of group) verifiedKeys.add(e.key);
+    }
+  }
+  return verifiedKeys;
 }
 
 /**

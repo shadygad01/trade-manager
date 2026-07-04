@@ -6,6 +6,7 @@ import {
   isDividendAlreadyRecorded,
   suggestDuplicateDividendIdsToDelete,
   suggestDuplicatePendingCandidateKeysToDelete,
+  findCrossSourceVerifiedKeys,
 } from "./duplicateDetection";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
@@ -194,5 +195,45 @@ describe("suggestDuplicatePendingCandidateKeysToDelete", () => {
   it("returns nothing for a single candidate", () => {
     const entries = [{ key: "a", candidate: buyCandidate() }];
     expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+});
+
+describe("findCrossSourceVerifiedKeys", () => {
+  it("flags both sides of a pair where one candidate is an invoice and the other isn't (ORHD-shaped: OCR screenshot corroborated by an invoice)", () => {
+    const screenshotRead = { key: "s1", candidate: buyCandidate({ ticker: "ORHD", shares: 10, price: 23.13, date: "2026-01-14" }) };
+    const invoiceRead = {
+      key: "i1",
+      candidate: buyCandidate({ ticker: "ORHD", shares: 10, price: 23.2, date: "2026-01-14", source: "invoice" }),
+    };
+    const unrelated = { key: "u1", candidate: buyCandidate({ ticker: "ORHD", shares: 25, price: 22.77, date: "2026-01-15" }) };
+    const verified = findCrossSourceVerifiedKeys([screenshotRead, invoiceRead, unrelated]);
+    expect(verified).toEqual(new Set(["s1", "i1"]));
+  });
+
+  it("does not flag two candidates that are both invoices or both non-invoice (no cross-source corroboration)", () => {
+    const twoInvoices = [
+      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "invoice" as const }) },
+      { key: "b", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "invoice" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(twoInvoices)).toEqual(new Set());
+
+    const twoScreenshots = [
+      { key: "c", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
+      { key: "d", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(twoScreenshots)).toEqual(new Set());
+  });
+
+  it("does not flag a lone invoice-sourced candidate with no non-invoice sibling to corroborate", () => {
+    const entries = [{ key: "a", candidate: buyCandidate({ source: "invoice" as const }) }];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+
+  it("ignores ticker/side/date/shares mismatches — only an exact signature match cross-verifies", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
+      { key: "b", candidate: buyCandidate({ shares: 11, date: "2026-01-14", source: "invoice" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
   });
 });
