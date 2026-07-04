@@ -5,7 +5,7 @@ import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2,
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
-import { findDuplicateBuyMatch, findDuplicateSellMatch } from "@application/services/duplicateDetection";
+import { findDuplicateBuyMatch, findDuplicateSellMatch, dividendContentKey, buildExistingDividendKeys } from "@application/services/duplicateDetection";
 import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -44,9 +44,6 @@ type Stage = "idle" | "reading" | "error";
  */
 function verificationContentKey(v: { ticker: string; units: number; avgCost?: number }): string {
   return `${normalizeTicker(v.ticker)}|${v.units}|${v.avgCost ?? ""}`;
-}
-function dividendContentKey(d: { ticker: string; date: string; amount: number }): string {
-  return `${normalizeTicker(d.ticker)}|${d.date}|${d.amount}`;
 }
 
 /**
@@ -110,6 +107,14 @@ export function ImportPage() {
   // reference even if this batch re-extracts more buys/sells for it.
   const existingVerificationsRaw = useLiveQuery(() => repos.verifications.getAll(), []);
   const existingVerifications = existingVerificationsRaw ?? [];
+  // A dividend already recorded in an earlier import session is otherwise
+  // invisible to the in-session dedup below (seenDividendKeys), which only
+  // ever sees the current batch's pending pool — the same broker statement
+  // re-uploaded weeks later (its dividend history overlapping what's already
+  // recorded) would silently double-count real cash. Global like existingTrades:
+  // a real dividend payment happened once regardless of which portfolio it's filed under.
+  const existingTimelineRaw = useLiveQuery(() => repos.timeline.getAll(), []);
+  const existingDividendKeys = useMemo(() => buildExistingDividendKeys(existingTimelineRaw ?? []), [existingTimelineRaw]);
 
   /**
    * useLiveQuery returns undefined until its first read resolves, then an
@@ -125,7 +130,8 @@ export function ImportPage() {
     portfoliosRaw !== undefined &&
     existingTradesRaw !== undefined &&
     existingAllocationsRaw !== undefined &&
-    existingVerificationsRaw !== undefined;
+    existingVerificationsRaw !== undefined &&
+    existingTimelineRaw !== undefined;
 
   function duplicateMatch(candidate: ParsedTradeCandidate) {
     return candidate.side === "BUY"
@@ -227,7 +233,10 @@ export function ImportPage() {
               newVerifications.push({ key: `${fileSeq}-v${vi}`, verification });
             });
 
-            const seenDividendKeys = new Set(prev.pendingDividends.map((e) => dividendContentKey(e.dividend)));
+            const seenDividendKeys = new Set([
+              ...prev.pendingDividends.map((e) => dividendContentKey(e.dividend)),
+              ...existingDividendKeys,
+            ]);
             const newDividends: DividendEntry[] = [];
             result.dividends.forEach((dividend, di) => {
               const key = dividendContentKey(dividend);
@@ -253,7 +262,7 @@ export function ImportPage() {
           }
           if (skippedDividends > 0) {
             dedupWarnings.push(
-              `${skippedDividends} dividend${skippedDividends === 1 ? "" : "s"} already in the list — not added again.`,
+              `${skippedDividends} dividend${skippedDividends === 1 ? "" : "s"} already in the list or already recorded — not added again.`,
             );
           }
           if (dedupWarnings.length > 0) {
