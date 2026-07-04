@@ -1,5 +1,5 @@
 import { createPortfolio, type Portfolio, type PortfolioKind } from "@domain/entities/Portfolio";
-import { createTimelineEvent } from "@domain/entities/TimelineEvent";
+import { createTimelineEvent, type TimelineEvent } from "@domain/entities/TimelineEvent";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -153,6 +153,23 @@ export async function recordDividend(
     })
   );
   return updated;
+}
+
+/**
+ * Undoes a recorded dividend — for a duplicate (the same real payment
+ * recorded twice, e.g. from overlapping statements imported before the
+ * cross-session dedup existed) or a plain mistake. Refunds its amount back
+ * out of cash the same way deleteTrade refunds a buy's cost, and removes
+ * the timeline event entirely rather than leaving a zeroed-out placeholder.
+ */
+export async function deleteDividend(repos: AppRepositories, event: TimelineEvent): Promise<void> {
+  if (event.type !== "Dividend") {
+    throw new Error(`deleteDividend called with a non-Dividend event: ${event.type}`);
+  }
+  const portfolio = await requirePortfolio(repos, event.portfolioId);
+  const updated = { ...portfolio, cash: Money.from(portfolio.cash).subtract(Money.from(event.amount ?? 0)).toNumber() };
+  await repos.portfolios.save(updated);
+  await repos.timeline.delete(event.id);
 }
 
 export async function recordCashAdjustment(
