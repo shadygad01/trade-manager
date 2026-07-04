@@ -20,8 +20,10 @@ function makeEntry(confidence: ParsedTradeCandidate["confidence"]): CandidateEnt
   };
 }
 
-describe("AutoCommitRow — Buy batch-commit status (no manual button)", () => {
-  it("shows 'Blocked — needs verification' when the ticker hasn't matched a broker screenshot yet", () => {
+describe("AutoCommitRow — Buy batch-commit status", () => {
+  it("shows 'Blocked — needs verification' when the ticker hasn't matched a broker screenshot yet, with a manual remove button available", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
     render(
       <AutoCommitRow
         entry={makeEntry("high")}
@@ -33,10 +35,13 @@ describe("AutoCommitRow — Buy batch-commit status (no manual button)", () => {
         matched={false}
         distributing={false}
         onDelete={vi.fn()}
+        onDiscardPending={onDiscardPending}
       />,
     );
     expect(screen.getByText("Blocked — needs verification")).toBeInTheDocument();
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    const removeButton = screen.getByTitle(/remove this row from the pending list/i);
+    await user.click(removeButton);
+    expect(onDiscardPending).toHaveBeenCalledTimes(1);
   });
 
   it("shows 'Waiting for portfolio' when matched but the ticker's portfolio isn't resolved yet", () => {
