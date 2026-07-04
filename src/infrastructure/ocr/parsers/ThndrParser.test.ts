@@ -462,6 +462,39 @@ describe("ThndrParser tracked-date-range guard", () => {
     expect(parser.isWithinTrackedRange("2026-01-01")).toBe(true);
     expect(parser.isWithinTrackedRange(new Date().toISOString().slice(0, 10))).toBe(true);
   });
+
+  it("excludes a dividend dated before the cutoff instead of letting it through to fail at commit time", () => {
+    const parser = new ThndrParser();
+    const text = `
+      ORAS
+      Orascom Construction PLC
+      My current position
+      Units 9
+      Average cost EGP 419.85
+      Earned Cash Dividends
+      Total EGP 156.54
+      21 August 2024 EGP 156.54
+    `;
+    expect(parser.parseDividends(text)).toHaveLength(0);
+  });
+
+  it("still includes an on/after-cutoff dividend alongside an excluded pre-cutoff one", () => {
+    const parser = new ThndrParser();
+    const text = `
+      ORAS
+      Orascom Construction PLC
+      My current position
+      Units 9
+      Average cost EGP 419.85
+      Earned Cash Dividends
+      Total EGP 300.00
+      21 August 2024 EGP 156.54
+      15 April 2026 EGP 143.46
+    `;
+    const dividends = parser.parseDividends(text);
+    expect(dividends).toHaveLength(1);
+    expect(dividends[0]).toMatchObject({ ticker: "ORAS", date: "2026-04-15", amount: 143.46 });
+  });
 });
 
 describe("ThndrParser.looksLikeOwnDocument / looksLikePositionVerification", () => {
