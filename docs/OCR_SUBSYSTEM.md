@@ -34,6 +34,16 @@ Each stage that finds nothing hands off to the next; warnings (incomplete rows, 
 
 Implement `BrokerParser` (`src/infrastructure/ocr/parsers/BrokerParser.ts`) and add an instance to the `parsers` array passed into `ImportOrchestrator`. Each parser is responsible for recognizing its own documents (`looksLikeOwnDocument`) so multiple brokers' parsers can coexist without one's regexes accidentally matching another's screenshot. Do not add broker-specific branches inside `ThndrParser.ts` — that file is Thndr-only by design.
 
-## Ground truth: position verification
+## Ground truth: position verification and reconciliation
 
-A "My Position" screenshot (units, average cost) is parsed independently of trade history and stored as a `PositionVerification` (see [DATA_MODEL.md](DATA_MODEL.md#ground-truth-verification)). It's a manual reconciliation aid, never an automatic trade-ledger correction.
+A "My Position" screenshot (units, average cost) is parsed independently of trade history and stored as a `PositionVerification` (see [DATA_MODEL.md](DATA_MODEL.md#ground-truth-verification)). `src/application/services/reconciliation.ts` (`reconcilePositions`) compares the trade-ledger-derived position for each ticker against the most recent verification and flags:
+
+- **`quantityMismatch`** — computed shares exceed the verified units (likely a duplicate or misparsed trade).
+- **`quantityShortfall`** — computed shares fall short of the verified units (a trade is missing from the ledger — including the case where the portfolio has zero open trades for a verified ticker).
+- **`verificationStale`** — a trade/allocation for that ticker was recorded after the screenshot was captured, so the gap is expected and the two flags above are suppressed.
+
+This is surfaced on `PortfolioDetailPage`'s holdings table (with an "Accept as current" action that records a `source: "manual"` verification via `acceptComputedAsVerified`), and it never auto-corrects the ledger — shortfalls are never filled in with invented trades.
+
+## Duplicate-trade detection on import
+
+`src/application/services/duplicateDetection.ts` checks each freshly parsed candidate against trades/allocations already on the ledger (same ticker, date, and share count): an **exact** match (price matches too) usually means the same file was re-imported; a **possible** match (price differs) usually means the same real trade was parsed from two different document formats — one commission-inclusive, one not (see the price-from-value note above). `ImportPage` surfaces this as a badge next to the candidate and relabels the action button ("Add anyway" / "Allocate anyway") — it never blocks the action, since a false positive should never prevent recording a real trade.

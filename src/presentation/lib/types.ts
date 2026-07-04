@@ -17,3 +17,5 @@ export type { AnalyticsInput, AnalyticsResult } from "@application/analytics/Ana
 export type { PeriodReturn } from "@application/analytics/calculators/shared";
 export type { EquityPoint } from "@application/analytics/calculators/equityCurve";
 export type { CreatePortfolioInput } from "@application/services/PortfolioService";
+export type { PositionReconciliation } from "@application/services/reconciliation";
+export type { DuplicateMatch } from "@application/services/duplicateDetection";

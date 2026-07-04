@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { computePositions } from "@application/services/TradeService";
 import { deposit, withdraw, recordDividend } from "@application/services/PortfolioService";
-import type { Position } from "@presentation/lib/types";
+import { reconcilePositions, acceptComputedAsVerified } from "@application/services/reconciliation";
+import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
@@ -23,6 +24,20 @@ export function PortfolioDetailPage() {
     const priceMap = await repos.prices.getAllPrices();
     return computePositions(repos, id, priceMap);
   }, [id]);
+  const reconciliations = useLiveQuery(async (): Promise<PositionReconciliation[]> => {
+    if (!positions) return [];
+    const [verifications, trades, allocations] = await Promise.all([
+      repos.verifications.getByPortfolio(id),
+      repos.trades.getByPortfolio(id),
+      repos.allocations.getByPortfolio(id),
+    ]);
+    return reconcilePositions(positions, verifications, trades, allocations);
+  }, [id, positions]);
+  const reconciliationByTicker = new Map((reconciliations ?? []).map((r) => [r.ticker, r]));
+
+  async function acceptCurrent(ticker: string, computedShares: number) {
+    await acceptComputedAsVerified(repos, id, ticker, computedShares);
+  }
 
   if (portfolio === undefined || positions === undefined) {
     return <p className="text-sm text-slate-500">Loading…</p>;
@@ -99,10 +114,13 @@ export function PortfolioDetailPage() {
                   <th className="px-4 py-2 text-right">Market Value</th>
                   <th className="px-4 py-2 text-right">Unrealized P/L</th>
                   <th className="px-4 py-2 text-right">Lots</th>
+                  <th className="px-4 py-2">Verification</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {positions.map((p) => (
+                {positions.map((p) => {
+                  const r = reconciliationByTicker.get(p.ticker);
+                  return (
                   <tr key={p.ticker}>
                     <td className="px-4 py-2.5 font-medium text-slate-100">{p.ticker}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatShares(p.totalShares)}</td>
@@ -121,13 +139,67 @@ export function PortfolioDetailPage() {
                       ) : null}
                     </td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-slate-400">{p.openTrades.length}</td>
+                    <td className="px-4 py-2.5">
+                      {!r ? (
+                        <span className="text-xs text-slate-600">—</span>
+                      ) : r.verificationStale ? (
+                        <span className="text-xs text-slate-500">Verification outdated</span>
+                      ) : r.quantityMismatch ? (
+                        <div className="flex items-center gap-2">
+                          <span className="flex items-center gap-1 text-xs text-rose-400">
+                            <ShieldAlert size={13} /> {formatShares(p.totalShares)} vs {formatShares(r.verifiedUnits)} verified
+                          </span>
+                          <button
+                            onClick={() => void acceptCurrent(p.ticker, p.totalShares)}
+                            className="rounded border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800"
+                          >
+                            Accept as current
+                          </button>
+                        </div>
+                      ) : r.quantityShortfall ? (
+                        <div className="flex items-center gap-2">
+                          <span className="flex items-center gap-1 text-xs text-amber-400">
+                            <ShieldAlert size={13} /> Missing {formatShares(r.verifiedUnits - p.totalShares)} shares
+                          </span>
+                          <button
+                            onClick={() => void acceptCurrent(p.ticker, p.totalShares)}
+                            className="rounded border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800"
+                          >
+                            Accept as current
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="flex items-center gap-1 text-xs text-emerald-400">
+                          <ShieldCheck size={13} /> Matches broker
+                        </span>
+                      )}
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {(reconciliations ?? []).some((r) => r.quantityShortfall && r.computedShares === 0) ? (
+        <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <p className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-400">
+            <ShieldAlert size={16} /> Verified positions with no recorded trades
+          </p>
+          <ul className="space-y-1 text-sm text-amber-200/80">
+            {(reconciliations ?? [])
+              .filter((r) => r.quantityShortfall && r.computedShares === 0)
+              .map((r) => (
+                <li key={r.ticker}>
+                  {r.ticker}: the broker screenshot shows {formatShares(r.verifiedUnits)} units, but this portfolio has no
+                  open trades for it — import or record the missing buy(s).
+                </li>
+              ))}
+          </ul>
+        </div>
+      ) : null}
 
       <CashModal kind={cashModal} portfolioId={portfolio.id} onClose={() => setCashModal(null)} />
     </div>

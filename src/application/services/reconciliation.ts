@@ -1,0 +1,104 @@
+import type { Trade } from "@domain/entities/Trade";
+import type { TradeAllocation } from "@domain/entities/TradeAllocation";
+import type { PositionVerification } from "@domain/entities/PositionVerification";
+import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { generateId } from "@domain/value-objects/id";
+import type { PositionAggregate } from "./TradeService";
+import type { AppRepositories } from "./types";
+
+export interface PositionReconciliation {
+  ticker: string;
+  computedShares: number;
+  verifiedUnits: number;
+  verifiedAvgCost?: number;
+  verificationCapturedAt: string;
+  verificationSource: "screenshot" | "manual";
+  /** Computed shares exceed the broker's verified units — a duplicate or misparsed trade is likely. */
+  quantityMismatch: boolean;
+  /** Computed shares fall short of the broker's verified units — the ledger is missing a trade. */
+  quantityShortfall: boolean;
+  /** A trade/allocation for this ticker was recorded after the screenshot was captured, so a gap is expected, not a bug — mismatch/shortfall are suppressed. */
+  verificationStale: boolean;
+}
+
+function latestByTicker(verifications: PositionVerification[]): Map<string, PositionVerification> {
+  const latest = new Map<string, PositionVerification>();
+  for (const v of verifications) {
+    const ticker = normalizeTicker(v.ticker);
+    const existing = latest.get(ticker);
+    if (!existing || v.capturedAt > existing.capturedAt) {
+      latest.set(ticker, v);
+    }
+  }
+  return latest;
+}
+
+/**
+ * Ground-truth reconciliation: compares the trade-ledger-derived position for
+ * each ticker against the most recent broker "My Position" screenshot for
+ * that ticker. Never mutates the ledger — this only surfaces a discrepancy
+ * for the user to investigate (e.g. a duplicate import, or a missing trade).
+ */
+export function reconcilePositions(
+  positions: PositionAggregate[],
+  verifications: PositionVerification[],
+  trades: Trade[],
+  allocations: TradeAllocation[]
+): PositionReconciliation[] {
+  const verificationByTicker = latestByTicker(verifications);
+  const computedByTicker = new Map(positions.map((p) => [p.ticker, p.totalShares]));
+  const tickers = new Set([...computedByTicker.keys(), ...verificationByTicker.keys()]);
+
+  const results: PositionReconciliation[] = [];
+  for (const ticker of tickers) {
+    const verification = verificationByTicker.get(ticker);
+    if (!verification) continue;
+
+    const computedShares = computedByTicker.get(ticker) ?? 0;
+
+    // Timestamps are plain "YYYY-MM-DDTHH:MM" / ISO strings, not Date objects
+    // — string comparison is safe here because both are zero-padded and
+    // share the same YYYY-MM-DD prefix ordering.
+    const hasNewerActivity =
+      trades.some(
+        (t) => normalizeTicker(t.ticker) === ticker && `${t.executionDate}T${t.executionTime}` > verification.capturedAt
+      ) ||
+      allocations.some(
+        (a) => normalizeTicker(a.ticker) === ticker && `${a.executionDate}T${a.executionTime}` > verification.capturedAt
+      );
+
+    results.push({
+      ticker,
+      computedShares,
+      verifiedUnits: verification.units,
+      verifiedAvgCost: verification.avgCost,
+      verificationCapturedAt: verification.capturedAt,
+      verificationSource: verification.source,
+      quantityMismatch: !hasNewerActivity && computedShares > verification.units,
+      quantityShortfall: !hasNewerActivity && computedShares < verification.units,
+      verificationStale: hasNewerActivity,
+    });
+  }
+  return results;
+}
+
+/**
+ * Manual override: the user confirms the currently-computed share count is
+ * correct without a fresh broker screenshot, recorded as a `source: "manual"`
+ * verification so it still participates in future reconciliation.
+ */
+export async function acceptComputedAsVerified(
+  repos: AppRepositories,
+  portfolioId: string,
+  ticker: string,
+  computedShares: number
+): Promise<void> {
+  await repos.verifications.save({
+    id: generateId(),
+    portfolioId,
+    ticker: normalizeTicker(ticker),
+    units: computedShares,
+    capturedAt: new Date().toISOString(),
+    source: "manual",
+  });
+}

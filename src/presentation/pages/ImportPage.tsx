@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { useParams } from "wouter";
-import { UploadCloud, FileText, AlertTriangle, ShieldCheck, CheckCircle2, Loader2 } from "lucide-react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { UploadCloud, FileText, AlertTriangle, ShieldCheck, ShieldAlert, CheckCircle2, Loader2 } from "lucide-react";
 import { repos, importOrchestrator } from "@presentation/lib/data";
 import type { ImportResult } from "@infrastructure/ocr/ImportOrchestrator";
 import { recordBuy } from "@application/services/TradeService";
+import { findDuplicateBuyMatch, findDuplicateSellMatch } from "@application/services/duplicateDetection";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
@@ -25,6 +27,19 @@ export function ImportPage() {
   const [addedTickers, setAddedTickers] = useState<Set<number>>(new Set());
   const [sellCandidate, setSellCandidate] = useState<{ index: number; candidate: ParsedTradeCandidate } | null>(null);
   const [acceptedVerifications, setAcceptedVerifications] = useState<Set<number>>(new Set());
+
+  // Loaded once outcome is available so each candidate row can be checked
+  // against trades/allocations already on the ledger — the same "possible
+  // duplicate" safety net as the original Thndr import, ported here instead
+  // of only deduping within a single OCR pass.
+  const existingTrades = useLiveQuery(() => repos.trades.getByPortfolio(portfolioId), [portfolioId]) ?? [];
+  const existingAllocations = useLiveQuery(() => repos.allocations.getByPortfolio(portfolioId), [portfolioId]) ?? [];
+
+  function duplicateMatch(candidate: ParsedTradeCandidate) {
+    return candidate.side === "BUY"
+      ? findDuplicateBuyMatch(candidate, existingTrades)
+      : findDuplicateSellMatch(candidate, existingAllocations);
+  }
 
   function pickFile(f: File) {
     setFile(f);
@@ -199,9 +214,29 @@ export function ImportPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800">
-                  {outcome.candidates.map((c, i) => (
+                  {outcome.candidates.map((c, i) => {
+                    const match = duplicateMatch(c);
+                    return (
                     <tr key={i}>
-                      <td className="px-4 py-2.5 font-medium text-slate-100">{normalizeTicker(c.ticker)}</td>
+                      <td className="px-4 py-2.5 font-medium text-slate-100">
+                        {normalizeTicker(c.ticker)}
+                        {match ? (
+                          <span
+                            title={
+                              match.matchType === "exact"
+                                ? "Same ticker, date, shares and price as an existing trade."
+                                : "Same ticker, date and shares as an existing trade, but a different price — may be the same trade parsed twice."
+                            }
+                            className={`ml-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                              match.matchType === "exact"
+                                ? "bg-rose-500/10 text-rose-400"
+                                : "bg-amber-500/10 text-amber-400"
+                            }`}
+                          >
+                            <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-2.5">
                         <span
                           className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
@@ -225,19 +260,20 @@ export function ImportPage() {
                             onClick={() => void addBuyCandidate(i, c)}
                             className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400"
                           >
-                            Add as Trade
+                            {match ? "Add anyway" : "Add as Trade"}
                           </button>
                         ) : (
                           <button
                             onClick={() => setSellCandidate({ index: i, candidate: c })}
                             className="rounded-md bg-rose-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-rose-400"
                           >
-                            Allocate Sell
+                            {match ? "Allocate anyway" : "Allocate Sell"}
                           </button>
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             )}

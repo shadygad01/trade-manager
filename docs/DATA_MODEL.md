@@ -35,4 +35,4 @@ This is the core design decision in the whole product (see [ARCHITECTURE.md ADR-
 
 ## Ground-truth verification
 
-`PositionVerification` records a snapshot from a broker's own "My Position" screen (units, avg cost, captured timestamp) independent of the trade ledger. It exists purely to help a user notice OCR-import drift — the app never uses it to silently overwrite trades; any reconciliation is a manual, explicit action.
+`PositionVerification` records a snapshot from a broker's own "My Position" screen (units, avg cost, captured timestamp) independent of the trade ledger. It exists purely to help a user notice OCR-import drift — the app never uses it to silently overwrite trades; any reconciliation is a manual, explicit action (see [OCR_SUBSYSTEM.md](OCR_SUBSYSTEM.md#ground-truth-position-verification-and-reconciliation) for the mismatch/shortfall/stale reconciliation logic and the duplicate-trade detection run at import time).

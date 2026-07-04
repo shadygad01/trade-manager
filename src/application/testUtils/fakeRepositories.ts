@@ -3,11 +3,13 @@ import type {
   TradeRepository,
   TradeAllocationRepository,
   TimelineRepository,
+  VerificationRepository,
 } from "@domain/repositories";
 import type { Portfolio } from "@domain/entities/Portfolio";
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
+import type { PositionVerification } from "@domain/entities/PositionVerification";
 import type { AppRepositories } from "@application/services/types";
 
 export function createFakePortfolioRepository(seed: Portfolio[] = []): PortfolioRepository {
@@ -87,16 +89,34 @@ export function createFakeTimelineRepository(seed: TimelineEvent[] = []): Timeli
   };
 }
 
+export function createFakeVerificationRepository(seed: PositionVerification[] = []): VerificationRepository {
+  const store = new Map(seed.map((v) => [v.id, v]));
+  return {
+    async getByPortfolio(portfolioId) {
+      return [...store.values()].filter((v) => v.portfolioId === portfolioId);
+    },
+    async getLatest(portfolioId, ticker) {
+      const matches = [...store.values()].filter((v) => v.portfolioId === portfolioId && v.ticker === ticker);
+      return matches.sort((a, b) => (a.capturedAt > b.capturedAt ? -1 : 1))[0];
+    },
+    async save(verification) {
+      store.set(verification.id, verification);
+    },
+  };
+}
+
 export function createFakeRepositories(seed?: {
   portfolios?: Portfolio[];
   trades?: Trade[];
   allocations?: TradeAllocation[];
   timeline?: TimelineEvent[];
+  verifications?: PositionVerification[];
 }): AppRepositories {
   return {
     portfolios: createFakePortfolioRepository(seed?.portfolios),
     trades: createFakeTradeRepository(seed?.trades),
     allocations: createFakeTradeAllocationRepository(seed?.allocations),
     timeline: createFakeTimelineRepository(seed?.timeline),
+    verifications: createFakeVerificationRepository(seed?.verifications),
   };
 }
