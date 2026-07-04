@@ -19,6 +19,7 @@ import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "@applicati
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
 import { isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
 import {
@@ -169,18 +170,24 @@ export function ImportPage() {
     existingTimelineRaw !== undefined;
 
   /**
-   * `ownTradeId` excludes a candidate's own already-committed trade from the
-   * comparison pool — without it, a row that was itself just added (via
-   * addedTradeIds) would "match" the exact Trade it just became (identical
-   * ticker/date/shares/price by construction), showing a false "Duplicate"
-   * badge on a perfectly successful, non-duplicate commit. Only matters for
-   * the per-row display after commit; the pre-commit skip check in
-   * commitTickerGroup runs before this candidate's own trade exists, so it
-   * never needs an exclusion.
+   * `ownTradeId` (Buys) / `ownAllocationIds` (Sells) exclude a candidate's
+   * own already-committed records from the comparison pool — without them, a
+   * row that was itself just added would "match" the exact Trade/allocations
+   * it just became (identical ticker/date/shares/price by construction),
+   * showing a false "Duplicate" badge on a perfectly successful,
+   * non-duplicate commit. Only matters for the per-row display after commit;
+   * the pre-commit skip check in commitTickerGroup runs before this
+   * candidate's own records exist, so it never needs an exclusion.
    */
-  function duplicateMatch(candidate: ParsedTradeCandidate, ownTradeId?: string) {
-    const trades = ownTradeId ? existingTrades.filter((t) => t.id !== ownTradeId) : existingTrades;
-    return candidate.side === "BUY" ? findDuplicateBuyMatch(candidate, trades) : findDuplicateSellMatch(candidate, existingAllocations);
+  function duplicateMatch(candidate: ParsedTradeCandidate, ownTradeId?: string, ownAllocationIds?: string[]) {
+    if (candidate.side === "BUY") {
+      const trades = ownTradeId ? existingTrades.filter((t) => t.id !== ownTradeId) : existingTrades;
+      return findDuplicateBuyMatch(candidate, trades);
+    }
+    const allocations = ownAllocationIds?.length
+      ? existingAllocations.filter((a) => !ownAllocationIds.includes(a.id))
+      : existingAllocations;
+    return findDuplicateSellMatch(candidate, allocations);
   }
 
   /**
@@ -1048,6 +1055,7 @@ export function ImportPage() {
                 rowErrors={rowErrors}
                 duplicateMatch={duplicateMatch}
                 addedTradeIds={session.addedTradeIds}
+                addedAllocationIds={session.addedAllocationIds}
                 suspectedDuplicateKeys={pendingDuplicateCandidateKeySet}
                 wrongTickerHints={wrongTickerHints}
                 reconcileSuggestion={reconcileSuggestions.get(ticker)}
@@ -1062,6 +1070,7 @@ export function ImportPage() {
                   existingNames.length > 0 ? { multiple: existingNames.length > 1, names: existingNames } : undefined
                 }
                 mergeSuggestion={mergeSuggestions.get(ticker)}
+                knownTickerSuggestion={tickerForCompanyNameFallback(ticker)}
               />
             );
           })}
@@ -1085,8 +1094,14 @@ export function ImportPage() {
               executionDate: sellCandidate.candidate.date,
               executionTime: sellCandidate.candidate.time,
             }}
-            onDone={() => {
-              importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, sellCandidate.key] }));
+            onDone={(created) => {
+              importSession.update((prev) => ({
+                ...prev,
+                addedKeys: [...prev.addedKeys, sellCandidate.key],
+                addedAllocationIds: created?.allocationIds.length
+                  ? { ...prev.addedAllocationIds, [sellCandidate.key]: created.allocationIds }
+                  : prev.addedAllocationIds,
+              }));
               setSellCandidate(null);
             }}
             onCancel={() => setSellCandidate(null)}
@@ -1113,6 +1128,7 @@ export function TickerGroupCard({
   rowErrors,
   duplicateMatch,
   addedTradeIds,
+  addedAllocationIds,
   suspectedDuplicateKeys,
   wrongTickerHints,
   reconcileSuggestion,
@@ -1125,6 +1141,7 @@ export function TickerGroupCard({
   onRenameTicker,
   existingPortfolioHint,
   mergeSuggestion,
+  knownTickerSuggestion,
 }: {
   ticker: string;
   group: { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[]; dividends: DividendEntry[] };
@@ -1142,9 +1159,15 @@ export function TickerGroupCard({
   skippedKeys: Set<string>;
   dismissedKeys: Set<string>;
   rowErrors: Record<string, string>;
-  duplicateMatch: (candidate: ParsedTradeCandidate, ownTradeId?: string) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
+  duplicateMatch: (
+    candidate: ParsedTradeCandidate,
+    ownTradeId?: string,
+    ownAllocationIds?: string[],
+  ) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
   /** Entry key -> the real Trade.id an added Buy became — excludes a row's own committed trade from its duplicateMatch check so a successful commit never shows a false "Duplicate" badge against itself. */
   addedTradeIds: Record<string, string>;
+  /** Sell entry key -> the TradeAllocation ids its "Allocate Sell" created — the Sell-side twin of addedTradeIds for the same self-duplicate exclusion. */
+  addedAllocationIds?: Record<string, string[]>;
   /** Keys of pending (not yet added/skipped/dismissed) candidates suggested for discard — either a duplicate of a sibling in this same batch, or of a trade already committed to the ledger. See ImportPage's pendingDuplicateCandidateKeys. */
   suspectedDuplicateKeys: Set<string>;
   /** Pending key -> the ticker a phantom wrong-ticker read most likely belongs to (see findWrongTickerCandidateKeys) — drives the "likely {other}'s transaction" badge. */
@@ -1163,6 +1186,8 @@ export function TickerGroupCard({
   onRenameTicker: (newTicker: string) => void;
   existingPortfolioHint: { multiple: boolean; names: string[] } | undefined;
   mergeSuggestion: string | undefined;
+  /** The real EGX symbol this group's company-name-fallback "ticker" maps to (see tickerForCompanyNameFallback) — drives the one-click rename banner. */
+  knownTickerSuggestion?: string;
 }) {
   const matched = matchStatus?.matched ?? false;
   const [renaming, setRenaming] = useState(false);
@@ -1186,6 +1211,20 @@ export function TickerGroupCard({
             className="rounded-md border border-amber-400/40 px-2.5 py-1 font-medium text-amber-300 hover:bg-amber-500/10"
           >
             Merge into {mergeSuggestion}
+          </button>
+        </div>
+      ) : null}
+      {!mergeSuggestion && knownTickerSuggestion ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-cyan-500/5 px-4 py-2.5 text-xs text-cyan-300">
+          <span>
+            "{ticker}" is a company name, not a ticker — on the EGX this stock is <strong>{knownTickerSuggestion}</strong>.
+            Renaming fixes every pending row and any trades already recorded under this name.
+          </span>
+          <button
+            onClick={() => onRenameTicker(knownTickerSuggestion)}
+            className="rounded-md border border-cyan-400/40 px-2.5 py-1 font-medium text-cyan-300 hover:bg-cyan-500/10"
+          >
+            Rename to {knownTickerSuggestion}
           </button>
         </div>
       ) : null}
@@ -1279,7 +1318,14 @@ export function TickerGroupCard({
           ) : null}
         </div>
       </div>
-      {matchStatus?.reason === "no-verification" ? (
+      {matchStatus?.reason === "matched" && (matchStatus.existingRemainingShares ?? 0) > 0 ? (
+        <div className="border-b border-slate-800 bg-emerald-500/5 px-4 py-2 text-xs text-slate-400">
+          Matches the broker: {formatShares(matchStatus.existingRemainingShares!)} already on the ledger +{" "}
+          {formatShares(matchStatus.netShares - matchStatus.existingRemainingShares!)} in this batch ={" "}
+          {formatShares(matchStatus.verifiedUnits ?? matchStatus.netShares)} — the rows below only show this batch's
+          part.
+        </div>
+      ) : matchStatus?.reason === "no-verification" ? (
         <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
           No broker "My Position" screenshot uploaded for {ticker} yet — upload one in Step 1 so its share count can be
           verified before anything is allocated to a portfolio.
@@ -1302,9 +1348,13 @@ export function TickerGroupCard({
       ) : matchStatus?.reason === "mismatch" && reconcileSuggestion ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
           <span>
-            Mismatch: extracted transactions total {formatShares(matchStatus.netShares)} shares, but the broker's "My
-            Position" screenshot — the trusted source — shows {formatShares(matchStatus.verifiedUnits ?? 0)}. Removing
-            the {reconcileSuggestion.keysToRemove.length === 1 ? "highlighted row" : `${reconcileSuggestion.keysToRemove.length} highlighted rows`}{" "}
+            Mismatch: this batch's rows
+            {(matchStatus.existingRemainingShares ?? 0) > 0
+              ? ` plus ${formatShares(matchStatus.existingRemainingShares!)} already on the ledger`
+              : ""}{" "}
+            total {formatShares(matchStatus.netShares)} shares, but the broker's "My Position" screenshot — the trusted
+            source — shows {formatShares(matchStatus.verifiedUnits ?? 0)}. Removing the{" "}
+            {reconcileSuggestion.keysToRemove.length === 1 ? "highlighted row" : `${reconcileSuggestion.keysToRemove.length} highlighted rows`}{" "}
             below leaves exactly {formatShares(matchStatus.verifiedUnits ?? 0)}
             {reconcileSuggestion.rankedByAvgCost ? " and lands closest to the broker's avg cost" : ""}.
             {reconcileSuggestion.alternatives > 0
@@ -1320,11 +1370,14 @@ export function TickerGroupCard({
         </div>
       ) : matchStatus?.reason === "mismatch" ? (
         <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          Mismatch: extracted transactions total {formatShares(matchStatus.netShares)} shares, but the broker's "My
-          Position" screenshot — the trusted source — shows {formatShares(matchStatus.verifiedUnits ?? 0)}. The
-          transaction list below is the likely cause: look for a duplicate or misclassified row (remove it with the icon
-          on the right to test-fix the match), or upload an Orders screenshot to confirm the exact transaction count
-          before this can be distributed.
+          Mismatch: this batch's rows
+          {(matchStatus.existingRemainingShares ?? 0) > 0
+            ? ` plus ${formatShares(matchStatus.existingRemainingShares!)} already on the ledger`
+            : ""}{" "}
+          total {formatShares(matchStatus.netShares)} shares, but the broker's "My Position" screenshot — the trusted
+          source — shows {formatShares(matchStatus.verifiedUnits ?? 0)}. The transaction list below is the likely cause:
+          look for a duplicate or misclassified row (remove it with the icon on the right to test-fix the match), or
+          upload an Orders screenshot to confirm the exact transaction count before this can be distributed.
         </div>
       ) : !portfolioResolved ? (
         <div className="border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
@@ -1356,7 +1409,7 @@ export function TickerGroupCard({
           );
         })}
         {group.sells.map((entry) => {
-          const match = duplicateMatch(entry.candidate);
+          const match = duplicateMatch(entry.candidate, undefined, addedAllocationIds?.[entry.key]);
           const added = addedKeys.has(entry.key);
           const disabled = !matched || !portfolioResolved;
           return (

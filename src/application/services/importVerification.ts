@@ -11,6 +11,14 @@ export interface TickerMatchStatus {
   matched: boolean;
   reason: TickerMatchReason;
   netShares: number;
+  /**
+   * Shares this ticker already had on the ledger before this batch —
+   * included in netShares. Surfaced so the UI can show the reconciliation
+   * arithmetic ("20 already recorded + 54 in this batch = 74"): a verified
+   * count that includes invisible existing shares otherwise looks like it
+   * doesn't add up against the rows on screen.
+   */
+  existingRemainingShares?: number;
   verifiedUnits?: number;
   /**
    * True on a "mismatch" whose already-committed shares alone (before this
@@ -75,27 +83,28 @@ export function checkTickerMatch(params: {
   allPendingFromInvoice?: boolean;
   allPendingSelfVerified?: boolean;
 }): TickerMatchStatus {
-  const netShares = params.existingRemainingShares + params.pendingBuyShares - params.pendingSellShares;
+  const existingRemainingShares = params.existingRemainingShares;
+  const netShares = existingRemainingShares + params.pendingBuyShares - params.pendingSellShares;
 
   if (!params.hasShares) {
-    return { matched: true, reason: "no-shares-to-verify", netShares, verifiedUnits: params.verifiedUnits };
+    return { matched: true, reason: "no-shares-to-verify", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits };
   }
   if (params.verifiedUnits === undefined) {
     if (Math.abs(netShares) < 1e-6) {
-      return { matched: true, reason: "closed-position", netShares };
+      return { matched: true, reason: "closed-position", netShares, existingRemainingShares };
     }
     if (params.allPendingFromInvoice) {
-      return { matched: true, reason: "invoice-verified", netShares };
+      return { matched: true, reason: "invoice-verified", netShares, existingRemainingShares };
     }
     if (params.allPendingSelfVerified) {
-      return { matched: true, reason: "cross-verified", netShares };
+      return { matched: true, reason: "cross-verified", netShares, existingRemainingShares };
     }
-    return { matched: false, reason: "no-verification", netShares };
+    return { matched: false, reason: "no-verification", netShares, existingRemainingShares };
   }
   const matched = Math.abs(netShares - params.verifiedUnits) < 1e-6;
   if (matched) {
-    return { matched: true, reason: "matched", netShares, verifiedUnits: params.verifiedUnits };
+    return { matched: true, reason: "matched", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits };
   }
-  const alreadyFullyRecorded = Math.abs(params.existingRemainingShares - params.verifiedUnits) < 1e-6;
-  return { matched: false, reason: "mismatch", netShares, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded };
+  const alreadyFullyRecorded = Math.abs(existingRemainingShares - params.verifiedUnits) < 1e-6;
+  return { matched: false, reason: "mismatch", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded };
 }

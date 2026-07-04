@@ -31,6 +31,8 @@ const SECTOR_BY_TICKER: Readonly<Record<string, string>> = {
   ORAS: "Construction & Engineering",
   ARCC: "Building Materials",
   ORHD: "Real Estate",
+  SUGR: "Food & Beverage",
+  MASR: "Real Estate",
 };
 
 /** Every entry in `KNOWN_EGX_TICKERS` must be classified — this is asserted by a test, not just assumed. */
