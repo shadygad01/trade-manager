@@ -115,6 +115,45 @@ describe("checkTickerMatch", () => {
     expect(result.reason).toBe("mismatch");
   });
 
+  it("trusts a cross-verified batch (an OCR read corroborated by an independent invoice) with no broker screenshot at all", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      allPendingSelfVerified: true,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBe("cross-verified");
+  });
+
+  it("prefers invoice-verified over cross-verified when both are true", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      allPendingFromInvoice: true,
+      allPendingSelfVerified: true,
+    });
+    expect(result.reason).toBe("invoice-verified");
+  });
+
+  it("still blocks a cross-verified batch if a broker screenshot exists and actually mismatches", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 30,
+      allPendingSelfVerified: true,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("mismatch");
+  });
+
   it("flags alreadyFullyRecorded when the ledger alone already reconciles with the broker (a bulk re-upload of an already-imported ticker)", () => {
     const result = checkTickerMatch({
       hasShares: true,
