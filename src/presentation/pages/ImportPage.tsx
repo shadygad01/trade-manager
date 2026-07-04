@@ -216,22 +216,20 @@ export function ImportPage() {
         title="Import"
         description="Step 1: extract every transaction from as many screenshots/PDFs/CSVs as you need. Step 2: assign each stock to a portfolio."
         actions={
-          totalPending > 0 || recentFileResults.length > 0 ? (
-            <button
-              onClick={() => {
-                if (
-                  confirm(
-                    "Clear all? This wipes the extracted list and this device's uploaded-file history (so a re-uploaded file is no longer treated as a duplicate). Trades you've already added are not affected."
-                  )
-                ) {
-                  void clearAll();
-                }
-              }}
-              className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
-            >
-              <RotateCcw size={14} /> Clear all
-            </button>
-          ) : undefined
+          <button
+            onClick={() => {
+              if (
+                confirm(
+                  "Clear all? This wipes the extracted list and this device's uploaded-file history (so a re-uploaded file is no longer treated as a duplicate). Trades you've already added are not affected."
+                )
+              ) {
+                void clearAll();
+              }
+            }}
+            className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
+          >
+            <RotateCcw size={14} /> Clear all
+          </button>
         }
       />
 
