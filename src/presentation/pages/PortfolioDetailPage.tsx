@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { computePositions, deleteTrade } from "@application/services/TradeService";
 import {
@@ -34,6 +34,8 @@ export function PortfolioDetailPage() {
   const [corporateActionOpen, setCorporateActionOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteError, setDeleteError] = useState<{ tradeId: string; message: string } | null>(null);
+  const [clearAllError, setClearAllError] = useState<string | null>(null);
+  const [clearingAll, setClearingAll] = useState(false);
   // Deleting a trade doesn't reliably retrigger dexie-react-hooks' liveQuery
   // for this page's positions/reconciliation (a pre-existing gap, not
   // specific to this action) — bumping this forces both queries to
@@ -83,6 +85,44 @@ export function PortfolioDetailPage() {
   const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
   const unrealizedPnl = positions.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
   const unrealizedPnlPct = costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0;
+
+  // Every ticker currently showing a quantityMismatch has (at most) one
+  // suggested duplicate (see suggestDuplicateTradeId) — collecting all of
+  // them lets "Clear all suspected duplicates" resolve every mismatched
+  // ticker in one click instead of one delete per ticker.
+  const suspectedDuplicateIds = positions
+    .map((p) => {
+      const r = reconciliationByTicker.get(p.ticker);
+      if (!r || r.verificationStale || !r.quantityMismatch) return undefined;
+      return suggestDuplicateTradeId(p.openTrades);
+    })
+    .filter((tradeId): tradeId is string => tradeId !== undefined);
+
+  async function handleClearAllSuspectedDuplicates() {
+    if (suspectedDuplicateIds.length === 0) return;
+    if (
+      !confirm(
+        `Delete ${suspectedDuplicateIds.length} suspected duplicate trade${suspectedDuplicateIds.length === 1 ? "" : "s"} across every mismatched ticker? Each one's cost will be refunded to cash. This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    setClearAllError(null);
+    setClearingAll(true);
+    const failures: string[] = [];
+    for (const tradeId of suspectedDuplicateIds) {
+      try {
+        await deleteTrade(repos, tradeId);
+      } catch (e) {
+        failures.push(e instanceof Error ? e.message : "Failed to delete a trade.");
+      }
+    }
+    setClearingAll(false);
+    setRefreshKey((k) => k + 1);
+    if (failures.length > 0) {
+      setClearAllError(`${failures.length} of ${suspectedDuplicateIds.length} deletions failed: ${failures.join("; ")}`);
+    }
+  }
 
   return (
     <div>
@@ -174,9 +214,24 @@ export function PortfolioDetailPage() {
       </div>
 
       <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60">
-        <div className="border-b border-slate-800 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
           <h3 className="text-sm font-semibold text-slate-200">Holdings</h3>
+          {suspectedDuplicateIds.length > 0 ? (
+            <button
+              onClick={() => void handleClearAllSuspectedDuplicates()}
+              disabled={clearingAll}
+              className="flex items-center gap-1.5 rounded-md border border-rose-500/40 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+            >
+              <Eraser size={13} />
+              {clearingAll
+                ? "Clearing…"
+                : `Clear all suspected duplicates (${suspectedDuplicateIds.length})`}
+            </button>
+          ) : null}
         </div>
+        {clearAllError ? (
+          <p className="border-b border-slate-800 px-4 py-2 text-xs text-rose-400">{clearAllError}</p>
+        ) : null}
         {positions.length === 0 ? (
           <div className="p-6">
             <EmptyState title="No open positions" description="Record a buy trade to see holdings here." />

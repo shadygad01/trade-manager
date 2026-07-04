@@ -276,6 +276,14 @@ User-reported real bug: uploading a screenshot/PDF in Import failed with a brows
 - **A second, non-obvious bug found while fixing the first**: tesseract.js's browser default `workerBlobURL: true` spawns the worker from a `blob:` URL wrapping `importScripts(workerPath)` — a CORS workaround for a CDN `workerPath` on a different origin. With a same-origin `workerPath`, that indirection has no purpose but still runs, and it broke the core script's relative lookup of its own `.wasm` sibling (the worker's `self.location` is the opaque blob URL, not a real path the core script can resolve against) — surfaced as `Failed to parse URL from tesseract-core-lstm.wasm`. Fixed by setting `workerBlobURL: false`, so the worker is spawned directly from the real same-origin URL.
 - Verified end-to-end against a real production build (`vite preview`, not dev server): before the fix, uploading a file threw `Failed to execute 'importScripts' ... failed to load` against the jsdelivr worker URL; after both fixes, uploading a synthetic statement image extracted successfully with zero network requests to any third-party host.
 
+### Post-sprint-8 — "Clear all suspected duplicates" bulk action
+
+Direct user follow-up on the Sprint 8 duplicate-highlighting work: deleting the suspected-duplicate trade one ticker at a time was still tedious when several tickers mismatch at once (e.g. right after a batch import). Asked for a single action that clears every suspected duplicate across the whole portfolio in one click.
+
+- `PortfolioDetailPage` now collects `suggestDuplicateTradeId` across every `quantityMismatch` position and shows a "Clear all suspected duplicates (N)" button in the Holdings panel header whenever N > 0 — one confirmation, then every ticker's suggested duplicate is deleted in sequence (reusing `deleteTrade`, so each one's cost is refunded exactly as an individual delete would). Per-ticker failures (if any) are collected and reported together rather than aborting the batch partway through.
+- Verified end-to-end against a real running build (not mocked repos): seeded two mismatched tickers (COMI 100@50 + 100@48 vs. a 100-unit broker verification; HRHO 50@30 + 50@29 vs. a 50-unit verification), confirmed both showed their lower-priced lot flagged "Suspected duplicate," clicked the one bulk button, and confirmed both tickers immediately read "Matches broker" with the higher-priced lot kept and cash correctly refunded for both deletions.
+- 2 new component tests (270 total): the bulk button resolves every mismatched ticker and disappears once nothing is left to clear; it's absent entirely when no ticker is mismatched. First test coverage for `PortfolioDetailPage` itself (previously untested at the page level).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
