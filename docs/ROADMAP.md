@@ -293,6 +293,15 @@ Direct user bug report on the "Clear all suspected duplicates" button just shipp
 - Verified end-to-end against a real running build: seeded the same real 100-share COMI buy three times (one kept, two duplicates) alongside a single-duplicate HRHO ticker, confirmed the button read "Clear all suspected duplicates (3)" and both COMI duplicates were flagged, clicked once, and confirmed both tickers read "Matches broker" immediately with exactly the two real trades (COMI @ 50, HRHO @ 30) remaining.
 - 3 net new tests (273 total): 2 net new `suggestDuplicateTradeIds` cases (a multi-duplicate gap, the shortfall-avoidance skip — the existing single-duplicate/not-deletable/empty-list cases were kept, just adapted to the new plural signature) plus a `PortfolioDetailPage` test seeding a three-duplicate ticker and asserting it fully resolves in one click.
 
+### Post-sprint-8 — Record a verified-but-untracked position as an opening balance
+
+Direct user report (screenshots): a broker "My Position" screenshot verified TMGH at 35 units @ 76.68 avg cost, but the portfolio had zero trades for it, landing it in the existing "Verified positions with no recorded trades" warning — dead-end informational text with no way to actually resolve it. Root cause understood, not a bug: the real buy predates 2026-01-01 (the tracking floor) or its invoice simply isn't available to import, so there's no real dated buy left to record for it.
+
+- `PortfolioDetailPage` gained a "Record as opening balance" action on each such row (only when the screenshot included an average cost — units alone can't seed a valid buy): one confirmation, then a single `Trade` is booked via the existing `recordBuy` using the broker's own reported units/avg cost, dated at `TRACKING_START_DATE`, with a note explaining it's an approximation of an unknown/out-of-range real purchase — not a fabricated precise history, just enough to make the position real on the ledger (cost basis, future sells, P/L) instead of a permanent gap. Reuses `deleteTrade` (already supported) if the user later finds the real invoice and wants to replace it.
+- When no average cost is available, the row shows a hint to record the buy manually instead of a broken/misleading action.
+- Verified end-to-end against a real running build: seeded exactly the reported scenario (TMGH verified at 35 units/76.68 avg, zero trades), clicked "Record as opening balance," and confirmed a real Trade landed (35 sh @ 76.68, dated 2026-01-01) with the Holdings row immediately reading "Matches broker" and the warning gone.
+- 2 new component tests (275 total): booking the opening balance from the broker's units/avg cost; the action is absent (with an explanatory hint) when the screenshot has no avg cost.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
