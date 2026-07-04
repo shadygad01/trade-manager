@@ -484,6 +484,15 @@ Dispatching the price workflow for the first time (see above) succeeded — and 
 - **Auto-deploy after a snapshot commit** (`update-prices.yml`): the commit step now reports whether it pushed, and a new step dispatches `deploy-pages.yml` via `gh workflow run` (workflow_dispatch is exempt from the GITHUB_TOKEN recursion guard) so every snapshot change actually goes live.
 - Script + workflow change only — no app code, no new tests; verified operationally by re-dispatching the workflow and inspecting the committed snapshot and the deploy it triggered.
 
+### Post-sprint-8 — the Trades page's "wrong" dates: opening balances labeled, and dates made correctable
+
+Direct user report (screenshot): "the EXECUTED date shown in Trades is all wrong — needs review and correction." Root cause was not corruption: the rows all dated 01 Jan 2026 (TMGH/ORAS/PHAR/COMI/EAST/CSAG) were **opening balances** deliberately booked at the tracking floor by `handleRecordOpeningBalance` (the real purchases predate 2026-01-01, so there is no real in-range date) — but the Trades table displayed that placeholder as a bare EXECUTED date indistinguishable from a real one, so correct-by-design data *read* as wrong. Two changes, one for honesty and one for agency:
+
+- **"Opening balance" pill** on any trade whose notes carry the opening-balance marker, with a tooltip explaining the date is the tracking floor by design and the avg cost came from the broker screenshot — the placeholder now announces itself instead of impersonating a real execution date.
+- **`correctTradeExecutionDate`** (`TradeService`, the date twin of `renameTickerEverywhere`): a pencil on every Executed cell opens an inline date editor (min = tracking floor, max = today). Touches ONLY the date — shares/price/fees/allocations untouched — and moves the matching Buy timeline event with it so the ledger and timeline never disagree. Refused when the new date would land after a sell that already closed shares from the lot (a lot can't be bought after part of it was sold), before the tracking floor, or in the future.
+- 3 new tests in `TradeService.test.ts` (trade + timeline move together; floor/future rejection; sell-ordering guard with a valid correction accepted) — 355 total.
+- Verified end-to-end against a real production build: recorded an opening-balance-shaped EAST lot and a wrongly-dated ORHD lot — the pill rendered on EAST only; correcting ORHD 01 Jan → 14 Jan updated the table instantly and the Timeline's Buy event moved to 14 JAN 2026 with it.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

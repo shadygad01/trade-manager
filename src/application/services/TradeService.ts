@@ -148,6 +148,46 @@ export async function deleteTrade(repos: AppRepositories, tradeId: string): Prom
   await repos.trades.delete(tradeId);
 }
 
+/**
+ * Corrects a mistaken execution date on a Buy lot — the date twin of
+ * renameTickerEverywhere: a trade's fields are otherwise immutable, but the
+ * user is the ledger's source of truth, and a wrongly-OCR'd date (or an
+ * opening-balance placeholder once the real invoice turns up) misplaces the
+ * lot in the timeline and every date-bucketed analytic. Touches ONLY the
+ * date: shares/price/fees/allocations are untouched, and the matching Buy
+ * timeline event moves with it so the two never disagree. Refused when the
+ * new date would land after a sell that already closed shares from this lot
+ * — a lot can't be bought after part of it was sold.
+ */
+export async function correctTradeExecutionDate(repos: AppRepositories, tradeId: string, newDate: string): Promise<void> {
+  assertWithinTrackingRange(newDate);
+  const today = new Date().toISOString().slice(0, 10);
+  if (newDate > today) {
+    throw new Error(`Execution date can't be in the future: got ${newDate}`);
+  }
+
+  const trade = await repos.trades.getById(tradeId);
+  if (!trade) {
+    throw new Error(`Trade not found: ${tradeId}`);
+  }
+
+  const allocations = await repos.allocations.getByTrade(tradeId);
+  const earliestSell = allocations.map((a) => a.executionDate).sort()[0];
+  if (earliestSell !== undefined && newDate > earliestSell) {
+    throw new Error(
+      `This lot has a sell dated ${earliestSell} — its buy date can't be after shares from it were already sold.`
+    );
+  }
+
+  await repos.trades.save({ ...trade, executionDate: newDate });
+
+  const events = await repos.timeline.getByPortfolio(trade.portfolioId);
+  const buyEvent = events.find((e) => e.type === "Buy" && e.relatedTradeIds?.includes(tradeId));
+  if (buyEvent) {
+    await repos.timeline.save({ ...buyEvent, timestamp: toTimestamp(newDate, trade.executionTime) });
+  }
+}
+
 export interface RenameTickerResult {
   tradesUpdated: number;
   allocationsUpdated: number;
