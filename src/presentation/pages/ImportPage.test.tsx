@@ -227,6 +227,42 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
     expect(onDiscardPending).toHaveBeenCalledWith(dupe);
   });
 
+  it("shows Discard (not a redundant 'Suspected duplicate' badge) for a lone pending row that duplicates a trade already committed to the ledger (the ARCC case)", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
+    const arcc = buyEntry("arcc-1");
+    render(
+      <TickerGroupCard
+        ticker="ARCC"
+        group={{ buys: [arcc], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 84, verifiedUnits: 42 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => ({ matchType: "possible", matchedId: "existing-trade-1" })}
+        suspectedDuplicateKeys={new Set(["arcc-1"])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={onDiscardPending}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Possible duplicate")).toBeInTheDocument();
+    expect(screen.queryByText("Suspected duplicate")).not.toBeInTheDocument();
+    const discardButton = screen.getByRole("button", { name: /Discard/ });
+    await user.click(discardButton);
+    expect(onDiscardPending).toHaveBeenCalledWith(arcc);
+  });
+
   it("does not show a Suspected duplicate badge or Discard button for a clean (non-flagged) row", () => {
     render(
       <TickerGroupCard
