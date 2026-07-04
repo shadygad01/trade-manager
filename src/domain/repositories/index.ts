@@ -62,9 +62,17 @@ export interface UploadRepository {
   delete(id: string): Promise<void>;
 }
 
-/** Read-only access to the single source of truth for current market prices. */
+/** Freshness metadata for the price snapshot, so the UI can say which close the "current" prices actually represent. */
+export interface PriceSnapshotInfo {
+  /** When the fetch pipeline wrote the snapshot. */
+  asOf: string;
+  /** The latest per-ticker market quote time in the snapshot — after the EGX session this is the official close time. Absent for snapshots written before quote times were captured. */
+  latestQuoteAt?: string;
+}
+
+/** Read-only access to the single source of truth for current market prices. `getSnapshotInfo` resolves to null (not undefined) when no usable snapshot exists, so callers can distinguish "definitively unavailable" from "still loading". */
 export interface PriceRepository {
   getPrice(ticker: string): Promise<number | undefined>;
   getAllPrices(): Promise<Record<string, number>>;
-  getSnapshotTimestamp(): Promise<string | undefined>;
+  getSnapshotInfo(): Promise<PriceSnapshotInfo | null>;
 }

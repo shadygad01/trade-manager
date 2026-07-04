@@ -27,6 +27,7 @@ import type { AnalyticsResult, EquityPoint, PeriodReturn } from "@presentation/l
 import type { Portfolio } from "@domain/entities/Portfolio";
 import { StatTile } from "@presentation/components/StatTile";
 import { PageHeader } from "@presentation/components/PageHeader";
+import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatMoney, formatMoneyCompact, formatPercent, signClass } from "@presentation/lib/format";
 import { CATEGORICAL, categoricalColor, CHART_AXIS, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
@@ -216,6 +217,7 @@ export function DashboardPage() {
   return (
     <div>
       <PageHeader title="Dashboard" description="Portfolio-wide overview across every portfolio." />
+      <PriceFreshness />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile

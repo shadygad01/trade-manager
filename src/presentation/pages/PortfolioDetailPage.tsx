@@ -19,6 +19,7 @@ import { reconcilePositions, suggestDuplicateTradeIds } from "@application/servi
 import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
+import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
 import { StatTile } from "@presentation/components/StatTile";
@@ -235,6 +236,7 @@ export function PortfolioDetailPage() {
           </>
         }
       />
+      <PriceFreshness />
 
       {portfolio.archivedAt ? (
         <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-2.5 text-sm text-amber-300">

@@ -1,8 +1,10 @@
-import type { PriceRepository } from "@domain/repositories";
+import type { PriceRepository, PriceSnapshotInfo } from "@domain/repositories";
 
 interface PriceSnapshot {
   asOf: string;
   prices: Record<string, number>;
+  /** Per-ticker quote metadata (price + market quote time + provider) — written by fetch-prices since the last-close upgrade; absent in older snapshots, so always optional. */
+  quotes?: Record<string, { price: number; quotedAt?: string; source: string }>;
 }
 
 const DEFAULT_SNAPSHOT_PATH = () => `${import.meta.env.BASE_URL}price-snapshot.json`;
@@ -32,9 +34,14 @@ export class SnapshotPriceRepository implements PriceRepository {
     return snapshot?.prices ?? {};
   }
 
-  async getSnapshotTimestamp(): Promise<string | undefined> {
+  async getSnapshotInfo(): Promise<PriceSnapshotInfo | null> {
     const snapshot = await this.load();
-    return snapshot?.asOf;
+    if (!snapshot || Object.keys(snapshot.prices).length === 0) return null;
+    const quoteTimes = Object.values(snapshot.quotes ?? {})
+      .map((q) => q.quotedAt)
+      .filter((t): t is string => typeof t === "string");
+    const latestQuoteAt = quoteTimes.length ? quoteTimes.reduce((a, b) => (a > b ? a : b)) : undefined;
+    return { asOf: snapshot.asOf, latestQuoteAt };
   }
 
   private async load(): Promise<PriceSnapshot | undefined> {

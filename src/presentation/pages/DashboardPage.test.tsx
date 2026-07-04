@@ -25,7 +25,7 @@ vi.mock("@presentation/lib/data", () => ({
     trades: { getByPortfolio: () => Promise.resolve([]) },
     tradeAllocations: { getByPortfolio: () => Promise.resolve([]) },
     timeline: { getByPortfolio: () => Promise.resolve([]) },
-    prices: { getAllPrices: () => Promise.resolve({}) },
+    prices: { getAllPrices: () => Promise.resolve({}), getSnapshotInfo: () => Promise.resolve(undefined) },
   },
 }));
 

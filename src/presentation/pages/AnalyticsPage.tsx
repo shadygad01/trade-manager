@@ -17,6 +17,7 @@ import {
 import { repos } from "@presentation/lib/data";
 import { computeAnalytics } from "@application/analytics/AnalyticsEngine";
 import { PageHeader } from "@presentation/components/PageHeader";
+import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { StatTile } from "@presentation/components/StatTile";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatMoney, formatPercent, signClass } from "@presentation/lib/format";
@@ -68,6 +69,7 @@ export function AnalyticsPage() {
   return (
     <div>
       <PageHeader title="Analytics" description="Performance, risk and behavioral stats for this portfolio." />
+      <PriceFreshness />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile label="Win Rate" value={formatPercent(analytics.winRate, 1)} />
