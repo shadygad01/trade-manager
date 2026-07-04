@@ -46,6 +46,7 @@ describe("TickerGroupCard — invoice-sourced Buy needs no separate broker scree
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
@@ -82,6 +83,7 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -118,6 +120,7 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -150,6 +153,7 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -182,6 +186,7 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -221,6 +226,7 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={onDiscardPending}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -257,6 +263,7 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={onDiscardPending}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -293,6 +300,7 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={onDiscardPending}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -327,6 +335,7 @@ describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismat
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -367,6 +376,7 @@ describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
         onDiscardAllPending={onDiscardAllPending}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
@@ -400,6 +410,7 @@ describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (
         onDeleteAutoAdded={vi.fn()}
         onDiscardPending={vi.fn()}
         onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
@@ -408,5 +419,73 @@ describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (
     );
     expect(screen.getByText(/fix a duplicate\/missing row or re-upload/)).toBeInTheDocument();
     expect(screen.queryByText("Discard all pending for ORHD")).not.toBeInTheDocument();
+  });
+});
+
+describe("TickerGroupCard — per-ticker Confirm (the ORWE case: verified but blocked by an unrelated stuck ticker)", () => {
+  it("shows a Confirm {ticker} button once matched and portfolio-resolved, independent of any other ticker", async () => {
+    const user = userEvent.setup();
+    const onConfirmTicker = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="ORWE"
+        group={{ buys: [buyEntry("o1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 177, verifiedUnits: 177 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={onConfirmTicker}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Confirm ORWE" });
+    await user.click(button);
+    expect(onConfirmTicker).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not show a Confirm button while the ticker is still unmatched", () => {
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [buyEntry("o1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 99, verifiedUnits: 74 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Confirm ORHD" })).not.toBeInTheDocument();
   });
 });

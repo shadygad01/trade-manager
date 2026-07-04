@@ -431,22 +431,39 @@ export function ImportPage() {
   }
 
   /**
-   * The single entry point for actually moving anything into a portfolio.
-   * Only ever called by an explicit user click on "Confirm — Distribute to
-   * Portfolios", and only ever commits tickers whose match status is
-   * already true — Step 1's extraction and Step 2's per-ticker portfolio
-   * picks never write a real Trade/Dividend/PositionVerification on their
-   * own. This is the two-phase gate: extract-and-verify, then a single
-   * explicit confirmation before anything is allocated.
+   * The entry point for actually moving anything into a portfolio. Only
+   * ever commits tickers whose match status is already true — Step 1's
+   * extraction and Step 2's per-ticker portfolio picks never write a real
+   * Trade/Dividend/PositionVerification on their own. This is the two-phase
+   * gate: extract-and-verify, then an explicit confirmation before anything
+   * is allocated.
+   *
+   * Commits every currently-matched ticker in one click — deliberately not
+   * gated on every ticker in the batch being matched (a single still-stuck
+   * ticker, e.g. one still needing "Discard all pending" or a portfolio
+   * pick, used to block every other already-verified ticker from
+   * distributing at all). confirmTicker below is the same commit, scoped to
+   * one ticker, for confirming just that one without waiting on the rest.
    */
   async function confirmAndDistributeAll() {
-    if (!initialDataLoaded || !allTickersMatched) return;
+    const matchedTickers = tickerGroups
+      .filter(([ticker]) => tickerMatchStatuses.get(ticker)?.matched)
+      .map(([ticker]) => ticker);
+    if (!initialDataLoaded || matchedTickers.length === 0) return;
     setDistributing(true);
     try {
-      const matchedTickers = tickerGroups
-        .filter(([ticker]) => tickerMatchStatuses.get(ticker)?.matched)
-        .map(([ticker]) => ticker);
       await Promise.all(matchedTickers.map((ticker) => commitTickerGroup(ticker)));
+    } finally {
+      setDistributing(false);
+    }
+  }
+
+  /** Confirms and distributes just one ticker, independent of any other still-stuck ticker in the same batch. */
+  async function confirmTicker(ticker: string) {
+    if (!initialDataLoaded || !tickerMatchStatuses.get(ticker)?.matched) return;
+    setDistributing(true);
+    try {
+      await commitTickerGroup(ticker);
     } finally {
       setDistributing(false);
     }
@@ -698,6 +715,7 @@ export function ImportPage() {
   }, [tickerGroups, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications]);
 
   const unmatchedTickerCount = tickerGroups.filter(([ticker]) => !tickerMatchStatuses.get(ticker)?.matched).length;
+  const matchedTickerCount = tickerGroups.length - unmatchedTickerCount;
   const allTickersMatched = tickerGroups.length > 0 && unmatchedTickerCount === 0;
 
   /**
@@ -866,9 +884,11 @@ export function ImportPage() {
               <p className="mt-1 text-xs text-slate-400">
                 {allTickersMatched
                   ? "Every ticker's share count matches its broker position screenshot — ready to distribute."
-                  : `${unmatchedTickerCount} of ${tickerGroups.length} ticker${tickerGroups.length === 1 ? "" : "s"} still ${
-                      unmatchedTickerCount === 1 ? "needs" : "need"
-                    } to match a broker position screenshot before anything can be allocated to a portfolio.`}
+                  : matchedTickerCount > 0
+                    ? `${matchedTickerCount} of ${tickerGroups.length} ticker${tickerGroups.length === 1 ? "" : "s"} verified and ready — the rest can be confirmed individually below, or fix them and use Confirm All.`
+                    : `${unmatchedTickerCount} of ${tickerGroups.length} ticker${tickerGroups.length === 1 ? "" : "s"} still ${
+                        unmatchedTickerCount === 1 ? "needs" : "need"
+                      } to match a broker position screenshot before anything can be allocated to a portfolio.`}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -883,11 +903,18 @@ export function ImportPage() {
               ) : null}
               <button
                 onClick={() => void confirmAndDistributeAll()}
-                disabled={!allTickersMatched || distributing || !initialDataLoaded}
+                disabled={matchedTickerCount === 0 || distributing || !initialDataLoaded}
+                title={
+                  matchedTickerCount === 0
+                    ? "No ticker is verified yet."
+                    : allTickersMatched
+                      ? undefined
+                      : `Confirms every verified ticker now (${matchedTickerCount} of ${tickerGroups.length}) — the rest stay pending until fixed.`
+                }
                 className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:hover:bg-slate-700"
               >
                 {distributing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                Confirm — Distribute to Portfolios
+                {allTickersMatched ? "Confirm — Distribute to Portfolios" : `Confirm All Verified (${matchedTickerCount})`}
               </button>
             </div>
           </div>
@@ -915,6 +942,7 @@ export function ImportPage() {
                 onDeleteAutoAdded={(entry) => void deleteAutoAddedTrade(entry)}
                 onDiscardPending={(entry) => discardPendingCandidate(entry.key)}
                 onDiscardAllPending={() => discardAllPendingForTicker(ticker)}
+                onConfirmTicker={() => void confirmTicker(ticker)}
                 onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
                 onRenameTicker={(newTicker) => void renameTickerGroup(ticker, newTicker)}
                 existingPortfolioHint={
@@ -975,6 +1003,7 @@ export function TickerGroupCard({
   onDeleteAutoAdded,
   onDiscardPending,
   onDiscardAllPending,
+  onConfirmTicker,
   onAllocateSell,
   onRenameTicker,
   existingPortfolioHint,
@@ -1003,6 +1032,8 @@ export function TickerGroupCard({
   onDiscardPending: (entry: CandidateEntry) => void;
   /** Discards every still-pending Buy/Sell for this ticker in one shot — only surfaced when matchStatus.alreadyFullyRecorded is true (see checkTickerMatch). */
   onDiscardAllPending: () => void;
+  /** Confirms and distributes just this ticker, independent of any other ticker in the batch still stuck — see ImportPage's confirmTicker. */
+  onConfirmTicker: () => void;
   onAllocateSell: (entry: CandidateEntry) => void;
   onRenameTicker: (newTicker: string) => void;
   existingPortfolioHint: { multiple: boolean; names: string[] } | undefined;
@@ -1110,6 +1141,17 @@ export function TickerGroupCard({
               ))}
             </select>
           </label>
+          {matched && portfolioResolved ? (
+            <button
+              onClick={onConfirmTicker}
+              disabled={distributing}
+              title={`Distribute just ${ticker} now, without waiting on any other ticker still stuck.`}
+              className="flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {distributing ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
+              Confirm {ticker}
+            </button>
+          ) : null}
         </div>
       </div>
       {matchStatus?.reason === "no-verification" ? (
