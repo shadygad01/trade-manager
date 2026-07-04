@@ -23,6 +23,14 @@ export interface ParsedTradeCandidate {
   confidence?: ParseConfidence;
 }
 
+/** A dividend payout read from a broker's "My Position" / dividends history screen. */
+export interface ParsedDividendCandidate {
+  ticker: string;
+  companyName?: string;
+  date: string;
+  amount: number;
+}
+
 /**
  * One imported screenshot/PDF/CSV and the outcome of running it through the
  * OCR subsystem. Not tied to a single portfolio: one upload's candidates can

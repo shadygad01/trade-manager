@@ -29,6 +29,8 @@ This is the core design decision in the whole product (see [ARCHITECTURE.md ADR-
 
 `Split` and `RightsIssue` are currently **record-only**: they log the event (ratio/details in `notes`) but do not automatically rebase existing trades' share counts or entry prices. Automatic rebasing was scoped out to avoid speculative complexity — add it as a deliberate follow-up if/when it's actually needed, not preemptively.
 
+`Dividend` events can be dated to when the payout actually happened rather than to now — `PortfolioService.recordDividend` accepts an optional `date`, used by the OCR import flow (see [OCR_SUBSYSTEM.md](OCR_SUBSYSTEM.md#dividend-history-extraction)) so a dividend read from a broker's payout history lands on the timeline at its real historical date instead of clustering everything at import time. Manually-entered dividends omit `date` and default to now.
+
 ## Journal vs. Trade notes
 
 `Trade.notes` / `Trade.strategyTags` are quick, execution-time fields set at fill time. `JournalEntry` (one per trade, `tradeId`-keyed) is the richer, reflective record: entry/exit reasoning, lessons learned, images, attachments. Both exist because they answer different questions ("what did I tag this trade as when I placed it" vs. "what did I learn after closing it").

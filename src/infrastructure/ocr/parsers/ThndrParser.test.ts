@@ -280,6 +280,58 @@ describe("ThndrParser.parsePositionVerification", () => {
   });
 });
 
+describe("ThndrParser.parseDividends", () => {
+  const parser = new ThndrParser("2020-01-01");
+
+  it("parses each dated payout from the 'My position' screen's dividend history", () => {
+    const text = `
+      EAST
+      Eastern Company
+      Last trade price EGP 37.40
+      My current position
+      Units 175
+      Average cost EGP 37.41
+      Purchase Value EGP 6,546.75
+      Market value 6,545.00
+      Earned Cash Dividends
+      Total cash dividends earned to date. Stock dividends aren't counted.
+      Total EGP 209.38
+      28 June 2026 EGP 64.98
+      25 May 2026 EGP 144.40
+    `;
+    const dividends = parser.parseDividends(text);
+    expect(dividends).toHaveLength(2);
+    expect(dividends[0]).toMatchObject({ ticker: "EAST", date: "2026-06-28", amount: 64.98 });
+    expect(dividends[1]).toMatchObject({ ticker: "EAST", date: "2026-05-25", amount: 144.4 });
+  });
+
+  it("parses a single payout without mistaking the Total line for a dated row", () => {
+    const text = `
+      COMI
+      Commercial International Bank
+      My current position
+      Units 59
+      Average cost EGP 128.19
+      Earned Cash Dividends
+      Total EGP 114.00
+      15 April 2026 EGP 114.00
+    `;
+    const dividends = parser.parseDividends(text);
+    expect(dividends).toHaveLength(1);
+    expect(dividends[0]).toMatchObject({ ticker: "COMI", date: "2026-04-15", amount: 114 });
+  });
+
+  it("returns an empty array when there is no dividend history section", () => {
+    const text = "ORHD\nOrascom Development Egypt\nMy current position\nUnits 74\nAverage cost EGP 23.73";
+    expect(parser.parseDividends(text)).toHaveLength(0);
+  });
+
+  it("returns an empty array when no ticker can be resolved", () => {
+    const text = "My current position Earned Cash Dividends Total EGP 100.00 1 Jan 2026 EGP 100.00";
+    expect(parser.parseDividends(text)).toHaveLength(0);
+  });
+});
+
 describe("ThndrParser tracked-date-range guard", () => {
   it("excludes trades dated before the configured cutoff", () => {
     const parser = new ThndrParser("2025-01-01");

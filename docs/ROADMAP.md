@@ -80,6 +80,18 @@ User-reported: after uploading files, navigating to Portfolios to create one, th
 - Added an explicit "Start over" action (`PageHeader` actions slot) to clear the session once a user is done distributing, since it no longer clears itself.
 - This was a genuine data-loss bug in a shipped feature, not a nice-to-have — flagging in case any other page-local state should be audited for the same "does this need to survive navigation" question.
 
+### Sprint 5 — Dividend history extraction from OCR
+
+User-reported real gap, working from two Thndr "My Position" screenshots (EAST, COMI): the position-verification screen's "Earned Cash Dividends" section (a dated list of past payouts) was being extracted for units/avg-cost only — the dividend history itself was dropped on the floor.
+
+- Domain: `ParsedDividendCandidate` (`ticker`, `companyName`, `date`, `amount`) alongside the existing `ParsedTradeCandidate`.
+- `BrokerParser.parseDividends(text)` — new interface method. `ThndrParser` locates the `"Earned Cash Dividends"` marker and regex-matches each `<date> EGP <amount>` row beneath it, resolving the ticker from the same position-verification header used for units/avg-cost; `CsvStatementParser.parseDividends` is a no-op (a transaction CSV export has no such section). Verified against the exact text shape of both user-provided screenshots.
+- `ImportOrchestrator.ImportResult` gained a `dividends` field, populated whenever a position-verification screenshot is parsed.
+- `PortfolioService.recordDividend` gained an optional historical `date` — a dividend read from a screenshot is timelined to when it was actually paid, not to import time. Manually-entered dividends still default to now.
+- `ImportPage`'s Step 2 distribution pool now includes a dividend row per ticker group ("Add as Dividend"), using the same per-ticker portfolio picker as its buys/sells/verifications.
+- `DashboardPage` gained a "Total Dividends" stat tile, summing `Dividend`-type timeline events across every portfolio. Confirmed (by reading `equityCurve.ts`/`portfolioReturn.ts` directly, no code change needed) that dividends already flowed correctly into both the equity curve (summed like any other timeline event) and portfolio return (excluded from the deposits/withdrawals-only contributed-capital denominator, so they show up purely as return).
+- 5 new tests (178 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

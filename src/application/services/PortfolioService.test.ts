@@ -60,6 +60,13 @@ describe("recordDividend", () => {
     expect(events[0].type).toBe("Dividend");
     expect(events[0].ticker).toBe("COMI");
   });
+
+  it("dates the timeline event to a provided historical date instead of now", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
+    await recordDividend(repos, "p1", { ticker: "EAST", amount: 64.98, date: "2026-06-28" });
+    const [event] = await repos.timeline.getByPortfolio("p1");
+    expect(event.timestamp).toBe("2026-06-28T00:00");
+  });
 });
 
 describe("recordCashAdjustment", () => {

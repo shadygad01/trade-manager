@@ -86,6 +86,8 @@ export interface RecordDividendInput {
   ticker?: string;
   amount: number;
   notes?: string;
+  /** ISO date the dividend was actually paid, e.g. from a broker's dividend history. Defaults to now for manually-entered dividends. */
+  date?: string;
 }
 
 export async function recordDividend(
@@ -104,7 +106,7 @@ export async function recordDividend(
       id: generateId(),
       portfolioId,
       type: "Dividend",
-      timestamp: new Date().toISOString(),
+      timestamp: input.date ? `${input.date}T00:00` : new Date().toISOString(),
       ticker: input.ticker ? normalizeTicker(input.ticker) : undefined,
       amount: input.amount,
       notes: input.notes,

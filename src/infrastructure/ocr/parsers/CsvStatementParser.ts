@@ -1,4 +1,4 @@
-import type { ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { BrokerParser, OrderRowText, OrderRowsParseResult, OrdersScreenParseResult } from "./BrokerParser";
@@ -145,6 +145,11 @@ export class CsvStatementParser implements BrokerParser {
   }
 
   parsePositionVerification(): Omit<PositionVerification, "id" | "portfolioId">[] {
+    return [];
+  }
+
+  // A CSV transaction export has no "governing image" dividend history section.
+  parseDividends(): ParsedDividendCandidate[] {
     return [];
   }
 

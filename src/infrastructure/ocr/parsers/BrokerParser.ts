@@ -1,4 +1,4 @@
-import type { ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 
 /** One order row's OCR text plus the status already read from its slice's pixel colors (see imagePreprocess.ts segmentOrderRows). */
@@ -49,6 +49,9 @@ export interface BrokerParser {
 
   /** Parses a "My position" ground-truth verification screen. Empty array when the ticker/units couldn't be read. */
   parsePositionVerification(text: string): Omit<PositionVerification, "id" | "portfolioId">[];
+
+  /** Parses a dividend-history section (e.g. a "My position" screen's "Earned Cash Dividends" list) into dated payouts. Empty array when there is none or the ticker can't be resolved. */
+  parseDividends(text: string): ParsedDividendCandidate[];
 
   /** Resolves the ticker shown in an Orders/position screen's header, used to route the row-isolated re-scan fallback. */
   resolveHeaderTicker(text: string): string | null;

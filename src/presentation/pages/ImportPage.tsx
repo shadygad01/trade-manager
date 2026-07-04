@@ -1,14 +1,21 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
-import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw } from "lucide-react";
+import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy } from "@application/services/TradeService";
+import { recordDividend } from "@application/services/PortfolioService";
 import { findDuplicateBuyMatch, findDuplicateSellMatch } from "@application/services/duplicateDetection";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
-import { importSession, useImportSession, type CandidateEntry, type VerificationEntry } from "@presentation/lib/importSession";
+import {
+  importSession,
+  useImportSession,
+  type CandidateEntry,
+  type VerificationEntry,
+  type DividendEntry,
+} from "@presentation/lib/importSession";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { Modal } from "@presentation/components/Modal";
 import { EmptyState } from "@presentation/components/EmptyState";
@@ -46,7 +53,7 @@ export function ImportPage() {
   const [sellCandidate, setSellCandidate] = useState<{ key: string; ticker: string; portfolioId: string; candidate: ParsedTradeCandidate } | null>(null);
 
   const session = useImportSession();
-  const { pendingCandidates, pendingVerifications, tickerPortfolio, filesProcessed } = session;
+  const { pendingCandidates, pendingVerifications, pendingDividends, tickerPortfolio, filesProcessed } = session;
   const addedKeys = useMemo(() => new Set(session.addedKeys), [session.addedKeys]);
   const acceptedKeys = useMemo(() => new Set(session.acceptedKeys), [session.acceptedKeys]);
 
@@ -106,10 +113,12 @@ export function ImportPage() {
           seq += 1;
           const newCandidates = result.candidates.map((candidate, ci) => ({ key: `${fileSeq}-c${ci}`, candidate }));
           const newVerifications = result.verifications.map((verification, vi) => ({ key: `${fileSeq}-v${vi}`, verification }));
+          const newDividends = result.dividends.map((dividend, di) => ({ key: `${fileSeq}-d${di}`, dividend }));
           importSession.update((prev) => ({
             ...prev,
             pendingCandidates: [...prev.pendingCandidates, ...newCandidates],
             pendingVerifications: [...prev.pendingVerifications, ...newVerifications],
+            pendingDividends: [...prev.pendingDividends, ...newDividends],
           }));
         }
 
@@ -146,6 +155,17 @@ export function ImportPage() {
     importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
   }
 
+  async function addDividend(entry: DividendEntry, ticker: string) {
+    const portfolioId = portfolioForTicker(ticker);
+    await recordDividend(repos, portfolioId, {
+      ticker,
+      amount: entry.dividend.amount,
+      date: entry.dividend.date,
+      notes: "Imported from screenshot/PDF",
+    });
+    importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+  }
+
   async function acceptVerification(entry: VerificationEntry, ticker: string) {
     const portfolioId = portfolioForTicker(ticker);
     await repos.verifications.save({
@@ -158,10 +178,13 @@ export function ImportPage() {
   }
 
   const tickerGroups = useMemo(() => {
-    const map = new Map<string, { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[] }>();
+    const map = new Map<
+      string,
+      { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[]; dividends: DividendEntry[] }
+    >();
     const group = (ticker: string) => {
       const t = normalizeTicker(ticker);
-      const g = map.get(t) ?? { buys: [], sells: [], verifications: [] };
+      const g = map.get(t) ?? { buys: [], sells: [], verifications: [], dividends: [] };
       map.set(t, g);
       return g;
     };
@@ -172,10 +195,13 @@ export function ImportPage() {
     for (const entry of pendingVerifications) {
       group(entry.verification.ticker).verifications.push(entry);
     }
+    for (const entry of pendingDividends) {
+      group(entry.dividend.ticker).dividends.push(entry);
+    }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [pendingCandidates, pendingVerifications]);
+  }, [pendingCandidates, pendingVerifications, pendingDividends]);
 
-  const totalPending = pendingCandidates.length + pendingVerifications.length;
+  const totalPending = pendingCandidates.length + pendingVerifications.length + pendingDividends.length;
 
   return (
     <div>
@@ -301,6 +327,7 @@ export function ImportPage() {
               onAddBuy={(entry) => void addBuyCandidate(entry, ticker)}
               onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
               onAcceptVerification={(entry) => void acceptVerification(entry, ticker)}
+              onAddDividend={(entry) => void addDividend(entry, ticker)}
             />
           ))}
         </div>
@@ -347,9 +374,10 @@ function TickerGroupCard({
   onAddBuy,
   onAllocateSell,
   onAcceptVerification,
+  onAddDividend,
 }: {
   ticker: string;
-  group: { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[] };
+  group: { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[]; dividends: DividendEntry[] };
   portfolios: { id: string; name: string }[];
   portfolioId: string;
   onPortfolioChange: (portfolioId: string) => void;
@@ -359,6 +387,7 @@ function TickerGroupCard({
   onAddBuy: (entry: CandidateEntry) => void;
   onAllocateSell: (entry: CandidateEntry) => void;
   onAcceptVerification: (entry: VerificationEntry) => void;
+  onAddDividend: (entry: DividendEntry) => void;
 }) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60">
@@ -428,6 +457,26 @@ function TickerGroupCard({
                 className="rounded-md border border-cyan-500/40 px-3 py-1 text-xs font-medium text-cyan-400 hover:bg-cyan-500/10"
               >
                 Accept as ground truth
+              </button>
+            )}
+          </div>
+        ))}
+        {group.dividends.map((entry) => (
+          <div key={entry.key} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-sm">
+            <span className="flex items-center gap-2 text-slate-300">
+              <CircleDollarSign size={14} className="text-emerald-400" />
+              Dividend: {formatMoney(entry.dividend.amount)} on {formatDate(entry.dividend.date)}
+            </span>
+            {addedKeys.has(entry.key) ? (
+              <span className="flex items-center gap-1 text-xs text-emerald-400">
+                <CheckCircle2 size={14} /> Added
+              </span>
+            ) : (
+              <button
+                onClick={() => onAddDividend(entry)}
+                className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400"
+              >
+                Add as Dividend
               </button>
             )}
           </div>

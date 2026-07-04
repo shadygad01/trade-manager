@@ -1,4 +1,4 @@
-import type { ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { extractPdfText } from "./pdfText";
 import { loadImageToCanvas, cropHeaderBand, preprocessForOcr, segmentOrderRows } from "./imagePreprocess";
@@ -14,6 +14,8 @@ export interface ImportResult {
   docType?: ImportDocType;
   candidates: ParsedTradeCandidate[];
   verifications: Omit<PositionVerification, "id" | "portfolioId">[];
+  /** Dividend payouts read from a "My Position" screen's dividend-history section, if present. */
+  dividends: ParsedDividendCandidate[];
   rawText: string;
   warnings: string[];
   /** SHA-256 hex digest of the file's bytes — callers persisting an Upload entity use this for its fileHash field / per-file dedup. */
@@ -74,6 +76,7 @@ export class ImportOrchestrator {
         status: "failed",
         candidates: [],
         verifications: [],
+        dividends: [],
         rawText,
         warnings: ["No text could be read from the file — try another file."],
         fileHash,
@@ -101,6 +104,7 @@ export class ImportOrchestrator {
             docType: "position-verification",
             candidates: [],
             verifications: [],
+            dividends: [],
             rawText,
             warnings: ["Recognized a position screen but couldn't read the ticker/units — try a clearer screenshot."],
             fileHash,
@@ -111,6 +115,7 @@ export class ImportOrchestrator {
           docType: "position-verification",
           candidates: [],
           verifications,
+          dividends: parser.parseDividends(rawText),
           rawText,
           warnings: [],
           fileHash,
@@ -122,7 +127,7 @@ export class ImportOrchestrator {
     for (const parser of candidateParsers) {
       const candidates = parser.parseStatementText(rawText);
       if (candidates.length > 0) {
-        return { status: "parsed", docType: "statement", candidates, verifications: [], rawText, warnings: [], fileHash };
+        return { status: "parsed", docType: "statement", candidates, verifications: [], dividends: [], rawText, warnings: [], fileHash };
       }
     }
 
@@ -203,6 +208,7 @@ export class ImportOrchestrator {
           docType: "orders-screen",
           candidates,
           verifications: [],
+          dividends: [],
           rawText: rawText + rowScanLog,
           warnings,
           fileHash,
@@ -219,6 +225,7 @@ export class ImportOrchestrator {
       status: "failed",
       candidates: [],
       verifications: [],
+      dividends: [],
       rawText,
       warnings: [
         looksLikeAnyKnownDocument

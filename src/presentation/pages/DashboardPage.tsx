@@ -16,7 +16,7 @@ import {
   BarChart,
   Bar,
 } from "recharts";
-import { TrendingUp, TrendingDown, Wallet, PieChart as PieChartIcon, Layers } from "lucide-react";
+import { TrendingUp, TrendingDown, Wallet, PieChart as PieChartIcon, Layers, CircleDollarSign } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { computePositions, type PositionAggregate } from "@application/services/TradeService";
 import { computeAnalytics } from "@application/analytics/AnalyticsEngine";
@@ -39,6 +39,7 @@ interface PortfolioSummary {
   costBasis: number;
   realizedPnl: number;
   unrealizedPnl: number;
+  dividends: number;
 }
 
 function mergeEquityCurves(curves: EquityPoint[][]): EquityPoint[] {
@@ -117,7 +118,8 @@ export function DashboardPage() {
         const marketValue = positions.reduce((sum, p) => sum + (p.marketValue ?? p.costBasis), 0);
         const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
         const unrealizedPnl = positions.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
-        return { portfolio, positions, analytics, marketValue, costBasis, realizedPnl, unrealizedPnl };
+        const dividends = timelineEvents.reduce((sum, e) => (e.type === "Dividend" ? sum + (e.amount ?? 0) : sum), 0);
+        return { portfolio, positions, analytics, marketValue, costBasis, realizedPnl, unrealizedPnl, dividends };
       }),
     );
     return summaries;
@@ -130,6 +132,7 @@ export function DashboardPage() {
     const totalCostBasis = dashboard.reduce((s, d) => s + d.costBasis, 0);
     const totalRealizedPnl = dashboard.reduce((s, d) => s + d.realizedPnl, 0);
     const totalUnrealizedPnl = dashboard.reduce((s, d) => s + d.unrealizedPnl, 0);
+    const totalDividends = dashboard.reduce((s, d) => s + d.dividends, 0);
     const totalAssets = totalCash + totalMarketValue;
     const totalValueWeightedReturn =
       totalAssets > 0
@@ -158,6 +161,7 @@ export function DashboardPage() {
       totalCostBasis,
       totalRealizedPnl,
       totalUnrealizedPnl,
+      totalDividends,
       totalAssets,
       totalValueWeightedReturn,
       capitalDeployment,
@@ -230,6 +234,12 @@ export function DashboardPage() {
           value={formatMoney(totals.totalUnrealizedPnl)}
           valueClassName={signClass(totals.totalUnrealizedPnl)}
           sublabel="Mark-to-market on open positions"
+        />
+        <StatTile
+          label="Total Dividends"
+          value={formatMoney(totals.totalDividends)}
+          sublabel="Cash received across all portfolios"
+          icon={<CircleDollarSign size={16} />}
         />
         <StatTile
           label="Cash Allocation"

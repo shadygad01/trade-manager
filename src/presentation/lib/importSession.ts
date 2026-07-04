@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 
 export interface CandidateEntry {
@@ -10,10 +10,15 @@ export interface VerificationEntry {
   key: string;
   verification: Omit<PositionVerification, "id" | "portfolioId">;
 }
+export interface DividendEntry {
+  key: string;
+  dividend: ParsedDividendCandidate;
+}
 
 export interface ImportSessionState {
   pendingCandidates: CandidateEntry[];
   pendingVerifications: VerificationEntry[];
+  pendingDividends: DividendEntry[];
   addedKeys: string[];
   acceptedKeys: string[];
   tickerPortfolio: Record<string, string>;
@@ -27,6 +32,7 @@ function emptyState(): ImportSessionState {
   return {
     pendingCandidates: [],
     pendingVerifications: [],
+    pendingDividends: [],
     addedKeys: [],
     acceptedKeys: [],
     tickerPortfolio: {},

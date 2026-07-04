@@ -47,6 +47,12 @@ Implement `BrokerParser` (`src/infrastructure/ocr/parsers/BrokerParser.ts`) and 
 
 Both parsers share `trackedDateRange.ts`'s rolling-cutoff helpers rather than each maintaining their own copy — extend that module, don't fork it, if a new parser needs date-range logic.
 
+## Dividend history extraction
+
+A "My Position" screenshot's "Earned Cash Dividends" section (a per-payout list of date + EGP amount below the position header) is parsed by `BrokerParser.parseDividends` into `ParsedDividendCandidate[]` — one entry per historical payout, dated to when the dividend was actually paid rather than to import time. `ThndrParser.parseDividends` resolves the ticker from the same position-verification header used for units/avg-cost, then regex-matches each `<date> EGP <amount>` row under the section marker; `CsvStatementParser.parseDividends` is a no-op since a transaction CSV export has no such section.
+
+These land in the Import page's Step 2 distribution pool alongside buy/sell candidates and verification rows (grouped by ticker, same portfolio picker), each with an "Add as Dividend" action that calls `PortfolioService.recordDividend` with the screenshot's own date — so a dividend paid months ago is timelined to that date, not to the moment it was imported. Recorded dividends flow into `equityCurve`/`portfolioReturn` like any other `TimelineEvent`, and are summed across all portfolios in the Dashboard's "Total Dividends" tile.
+
 ## Ground truth: position verification and reconciliation
 
 A "My Position" screenshot (units, average cost) is parsed independently of trade history and stored as a `PositionVerification` (see [DATA_MODEL.md](DATA_MODEL.md#ground-truth-verification)). `src/application/services/reconciliation.ts` (`reconcilePositions`) compares the trade-ledger-derived position for each ticker against the most recent verification and flags:

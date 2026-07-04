@@ -1,4 +1,4 @@
-import type { ParsedTradeCandidate, ParseConfidence } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedTradeCandidate, ParseConfidence } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { KNOWN_EGX_TICKERS, NON_STOCK_INSTRUMENTS } from "@domain/value-objects/knownTickers";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -475,6 +475,37 @@ function parsePositionVerificationTextImpl(text: string): Omit<PositionVerificat
   };
 }
 
+// The "My position" screen's own dividend history, e.g.:
+//   Total                    EGP 209.38
+//   28 June 2026             EGP 64.98
+//   25 May 2026              EGP 144.40
+// Only the dated rows are dividend candidates — the "Total" line has no
+// date, so it never matches this pattern and needs no special-casing to skip.
+const dividendSectionMarker = /earned\s+cash\s+dividends/i;
+const dividendRowPattern = /(\d{1,2}\s+[A-Za-z]{3,9}\s+\d{4})\s*EGP\s*([\d,]+(?:[.,]\d+)?)/gi;
+
+function parseDividendsTextImpl(text: string, ticker: string): ParsedDividendCandidate[] {
+  const normalized = text.replace(/\s+/g, " ");
+  const idx = normalized.search(dividendSectionMarker);
+  if (idx < 0) return [];
+  const section = normalized.slice(idx);
+
+  const dividends: ParsedDividendCandidate[] = [];
+  for (const m of section.matchAll(dividendRowPattern)) {
+    const date = parseShortDate(m[1].trim());
+    if (!date) continue;
+    const amount = parsePrice(m[2]);
+    if (!amount) continue;
+    dividends.push({
+      ticker: normalizeTicker(ticker),
+      companyName: canonicalNameForTicker(normalizeTicker(ticker)),
+      date,
+      amount,
+    });
+  }
+  return dividends;
+}
+
 const looksLikeOwnDocumentPattern = /customer account statement|thndr/i;
 const looksLikePositionVerificationPattern = /my\s+current\s+position/i;
 
@@ -519,6 +550,12 @@ export class ThndrParser implements BrokerParser {
   parsePositionVerification(text: string): Omit<PositionVerification, "id" | "portfolioId">[] {
     const result = parsePositionVerificationTextImpl(text);
     return result ? [result] : [];
+  }
+
+  parseDividends(text: string): ParsedDividendCandidate[] {
+    const header = resolveHeaderTickerImpl(text);
+    if (!header) return [];
+    return parseDividendsTextImpl(text, header.ticker);
   }
 
   resolveHeaderTicker(text: string): string | null {
