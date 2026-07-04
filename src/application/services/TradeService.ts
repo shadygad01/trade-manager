@@ -4,6 +4,7 @@ import { createTimelineEvent } from "@domain/entities/TimelineEvent";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { InsufficientCashError } from "./errors";
 import type { AppRepositories } from "./types";
 
 function toTimestamp(executionDate: string, executionTime: string): string {
@@ -43,7 +44,10 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
   const totalCost = Money.from(input.shares * input.entryPrice).add(Money.from(fees)).add(Money.from(taxes));
   const currentCash = Money.from(portfolio.cash);
   if (totalCost.greaterThan(currentCash)) {
-    throw new Error(
+    throw new InsufficientCashError(
+      input.portfolioId,
+      totalCost.toNumber(),
+      currentCash.toNumber(),
       `Insufficient cash in portfolio ${input.portfolioId}: need ${totalCost.toFixed()}, have ${currentCash.toFixed()}`
     );
   }
@@ -284,7 +288,10 @@ export async function moveTrade(
   const netCost = buyCost.subtract(netProceeds);
 
   if (netCost.isPositive() && netCost.greaterThan(Money.from(targetPortfolio.cash))) {
-    throw new Error(
+    throw new InsufficientCashError(
+      targetPortfolioId,
+      netCost.toNumber(),
+      Money.from(targetPortfolio.cash).toNumber(),
       `Insufficient cash in target portfolio ${targetPortfolioId}: need ${netCost.toFixed()}, have ${Money.from(targetPortfolio.cash).toFixed()}`
     );
   }

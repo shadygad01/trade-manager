@@ -18,9 +18,13 @@ Dependencies only ever point inward. `domain` depends on nothing. `application` 
 | Infrastructure | `src/infrastructure/` | `db/` (Dexie adapters), `market-data/` (price snapshot client), `ocr/` (the import pipeline — see [OCR_SUBSYSTEM.md](OCR_SUBSYSTEM.md)) |
 | Presentation | `src/presentation/` | React pages/components, wired to `application` services via `infrastructure` repositories |
 
-This means the entire trade/allocation/analytics logic is testable with in-memory fakes and has zero dependency on IndexedDB, Tesseract, or React — see `src/application/testUtils/fakeRepositories.ts` and the 197 tests across the three inner layers.
+This means the entire trade/allocation/analytics logic is testable with in-memory fakes and has zero dependency on IndexedDB, Tesseract, or React — see `src/application/testUtils/fakeRepositories.ts` and the 200+ tests across the three inner layers.
 
 This layering is machine-enforced, not just documented: `.dependency-cruiser.cjs` encodes the same inward-only rules (domain → nothing, application → domain only, infrastructure → domain only) and runs as part of `npm run lint` (`npm run arch:check` to run it alone) — a stray import that reaches outward across a layer boundary fails CI instead of just failing code review.
+
+## Testing the presentation layer
+
+Every test above is domain/application/infrastructure-only by design — pure functions and repository interfaces need no DOM. `presentation` has its own, smaller test surface: React Testing Library + jsdom (`@testing-library/react`, `@testing-library/jest-dom`, `@testing-library/user-event`), added once the review flagged zero component coverage as the single biggest gap given how much of this app's real regressions have been UI-only (a silently-vanishing button, a swallowed error). Component test files opt into a DOM environment per-file with a `// @vitest-environment jsdom` comment at the top (the global default stays `"node"` for every other test, which doesn't need one); `src/presentation/testUtils/setupTests.ts` registers jest-dom's matchers and an `afterEach(cleanup)` (needed because this codebase never enables Vitest's `globals` option, so React Testing Library's own automatic-cleanup detection never fires). Page-level tests mock the `@presentation/lib/data` module's `repos` singleton — the same seam the app itself uses to swap in a real Dexie-backed implementation — rather than standing up a real IndexedDB, so a real application-layer function like `computePositions` still runs for real against the mocked repository boundary.
 
 ## Architectural decisions
 

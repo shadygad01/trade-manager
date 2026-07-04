@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
 import { recordBuy, recordSell, computePositions, moveTrade } from "./TradeService";
+import { InsufficientCashError } from "./errors";
 
 function seedPortfolio(cash: number) {
   return createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: cash });
@@ -46,6 +47,28 @@ describe("recordBuy", () => {
         executionTime: "10:30",
       })
     ).rejects.toThrow(/insufficient cash/i);
+  });
+
+  it("rejects with a structured InsufficientCashError carrying the exact shortfall", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(100)] });
+
+    try {
+      await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2026-01-05",
+        executionTime: "10:30",
+      });
+      expect.unreachable("recordBuy should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(InsufficientCashError);
+      const err = e as InsufficientCashError;
+      expect(err.portfolioId).toBe("p1");
+      expect(err.required).toBeCloseTo(500);
+      expect(err.available).toBeCloseTo(100);
+    }
   });
 
   it("throws for an unknown portfolio", async () => {

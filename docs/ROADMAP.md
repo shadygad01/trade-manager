@@ -147,6 +147,14 @@ The review flagged two entity fields nothing in the app ever populated or read: 
 
 The Clean Architecture layering (`presentation → application → domain`, `infrastructure → domain`) was real and consistently followed, but only by convention — nothing stopped a stray import from `src/domain` reaching into `@presentation` from compiling and passing every test. Added `dependency-cruiser` (`.dependency-cruiser.cjs`, `npm run arch:check`) encoding the same three inward-only rules the docs already described; wired into `npm run lint` (and therefore CI, with no workflow file changes needed) so a boundary violation now fails the build instead of only failing code review. Verified it actually catches a violation (a throwaway `@presentation` import inside a domain file), not just that it passes on already-clean code.
 
+### Post-sprint-7 — first component tests, and a real recovery action for insufficient cash
+
+The review's last open item was zero test coverage for the entire presentation layer. Added React Testing Library + jsdom (per-file `// @vitest-environment jsdom`, global default stays `"node"`), a shared setup file (jest-dom matchers + `afterEach(cleanup)`, needed since this codebase never enables Vitest's `globals`), and a first slice: the four components used on every page (`StatTile`, `EmptyState`, `PageHeader`, `Modal`), plus one full page test (`PortfoliosPage`, mocking the `@presentation/lib/data` repos singleton — the app's own real seam for swapping implementations — so `computePositions` still runs for real against the mock).
+
+Immediate user follow-up, from a live screenshot of Import surfacing exactly the "insufficient cash" error the previous fix was built to expose: rather than a dead-end message, `recordBuy` (and `withdraw`, and `moveTrade`'s target-portfolio guard) now throw a structured `InsufficientCashError` (`portfolioId`/`required`/`available` — `application/services/errors.ts`) instead of a plain `Error`. `ImportPage` catches it specifically and offers "Deposit ¤Y & add" inline under the row — depositing exactly the shortfall and retrying the same buy in one click, instead of leaving Import to deposit manually and coming back.
+
+- 1 new application-layer test (the structured error) + 13 new component/page tests (213 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

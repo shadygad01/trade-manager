@@ -4,10 +4,12 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, Pencil } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy } from "@application/services/TradeService";
-import { recordDividend } from "@application/services/PortfolioService";
+import { recordDividend, deposit } from "@application/services/PortfolioService";
+import { InsufficientCashError } from "@application/services/errors";
 import { findDuplicateBuyMatch, findDuplicateSellMatch } from "@application/services/duplicateDetection";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { Money } from "@domain/value-objects/Money";
 import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
 import {
   importSession,
@@ -69,6 +71,7 @@ export function ImportPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [sellCandidate, setSellCandidate] = useState<{ key: string; ticker: string; portfolioId: string; candidate: ParsedTradeCandidate } | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [cashShortfalls, setCashShortfalls] = useState<Record<string, { portfolioId: string; shortfall: number }>>({});
 
   const session = useImportSession();
   const { pendingCandidates, pendingVerifications, pendingDividends, tickerPortfolio, filesProcessed } = session;
@@ -223,9 +226,29 @@ export function ImportPage() {
       delete next[key];
       return next;
     });
+    setCashShortfalls((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   }
 
   function setRowError(key: string, e: unknown) {
+    if (e instanceof InsufficientCashError) {
+      // A structured shortfall gets its own recovery action (deposit + retry)
+      // instead of just a dead-end message — most common when backfilling
+      // historical trades into a portfolio whose deposits aren't all in yet.
+      const shortfall = Money.from(e.required).subtract(Money.from(e.available)).toNumber();
+      setCashShortfalls((prev) => ({ ...prev, [key]: { portfolioId: e.portfolioId, shortfall } }));
+      setRowErrors((prev) => {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
     setRowErrors((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : "Something went wrong." }));
   }
 
@@ -249,6 +272,18 @@ export function ImportPage() {
     } catch (e) {
       setRowError(entry.key, e);
     }
+  }
+
+  async function depositShortfallAndRetry(entry: CandidateEntry, ticker: string) {
+    const info = cashShortfalls[entry.key];
+    if (!info) return;
+    try {
+      await deposit(repos, info.portfolioId, info.shortfall, "Auto top-up for historical import");
+    } catch (e) {
+      setRowError(entry.key, e);
+      return;
+    }
+    await addBuyCandidate(entry, ticker);
   }
 
   async function clearAll() {
@@ -523,8 +558,11 @@ export function ImportPage() {
                 addedKeys={addedKeys}
                 acceptedKeys={acceptedKeys}
                 rowErrors={rowErrors}
+                cashShortfalls={cashShortfalls}
+                portfolioName={(id) => portfolios.find((p) => p.id === id)?.name ?? "this portfolio"}
                 duplicateMatch={duplicateMatch}
                 onAddBuy={(entry) => void addBuyCandidate(entry, ticker)}
+                onDepositShortfallAndRetry={(entry) => void depositShortfallAndRetry(entry, ticker)}
                 onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
                 onAcceptVerification={(entry) => void acceptVerification(entry, ticker)}
                 onAddDividend={(entry) => void addDividend(entry, ticker)}
@@ -577,8 +615,11 @@ function TickerGroupCard({
   addedKeys,
   acceptedKeys,
   rowErrors,
+  cashShortfalls,
+  portfolioName,
   duplicateMatch,
   onAddBuy,
+  onDepositShortfallAndRetry,
   onAllocateSell,
   onAcceptVerification,
   onAddDividend,
@@ -594,8 +635,11 @@ function TickerGroupCard({
   addedKeys: Set<string>;
   acceptedKeys: Set<string>;
   rowErrors: Record<string, string>;
+  cashShortfalls: Record<string, { portfolioId: string; shortfall: number }>;
+  portfolioName: (portfolioId: string) => string;
   duplicateMatch: (candidate: ParsedTradeCandidate) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
   onAddBuy: (entry: CandidateEntry) => void;
+  onDepositShortfallAndRetry: (entry: CandidateEntry) => void;
   onAllocateSell: (entry: CandidateEntry) => void;
   onAcceptVerification: (entry: VerificationEntry) => void;
   onAddDividend: (entry: DividendEntry) => void;
@@ -699,6 +743,7 @@ function TickerGroupCard({
         {group.buys.map((entry) => {
           const match = duplicateMatch(entry.candidate);
           const added = addedKeys.has(entry.key);
+          const shortfall = cashShortfalls[entry.key];
           return (
             <CandidateRow
               key={entry.key}
@@ -709,6 +754,11 @@ function TickerGroupCard({
               actionLabel={match ? "Add anyway" : "Add as Trade"}
               actionClassName="bg-emerald-500 hover:bg-emerald-400"
               onAction={() => onAddBuy(entry)}
+              shortfall={
+                shortfall
+                  ? { amount: shortfall.shortfall, portfolioName: portfolioName(shortfall.portfolioId), onDepositAndRetry: () => onDepositShortfallAndRetry(entry) }
+                  : undefined
+              }
             />
           );
         })}
@@ -787,6 +837,7 @@ function CandidateRow({
   actionLabel,
   actionClassName,
   onAction,
+  shortfall,
 }: {
   entry: CandidateEntry;
   match: { matchType: "exact" | "possible"; matchedId: string } | undefined;
@@ -795,6 +846,7 @@ function CandidateRow({
   actionLabel: string;
   actionClassName: string;
   onAction: () => void;
+  shortfall?: { amount: number; portfolioName: string; onDepositAndRetry: () => void };
 }) {
   const c = entry.candidate;
   return (
@@ -843,6 +895,19 @@ function CandidateRow({
         )}
       </div>
       {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
+      {shortfall ? (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
+          <p className="text-xs text-amber-300">
+            {shortfall.portfolioName} is short {formatMoney(shortfall.amount)} for this buy.
+          </p>
+          <button
+            onClick={shortfall.onDepositAndRetry}
+            className="rounded-md border border-amber-400/40 px-2 py-0.5 text-xs font-medium text-amber-300 hover:bg-amber-500/10"
+          >
+            Deposit {formatMoney(shortfall.amount)} &amp; add
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

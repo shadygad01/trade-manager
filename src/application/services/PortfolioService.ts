@@ -3,6 +3,7 @@ import { createTimelineEvent } from "@domain/entities/TimelineEvent";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { InsufficientCashError } from "./errors";
 import type { AppRepositories } from "./types";
 
 export interface CreatePortfolioInput {
@@ -85,7 +86,12 @@ export async function withdraw(
   const currentCash = Money.from(portfolio.cash);
   const withdrawAmount = Money.from(amount);
   if (withdrawAmount.greaterThan(currentCash)) {
-    throw new Error(`Insufficient cash in portfolio ${portfolioId}: have ${currentCash.toFixed()}, want ${withdrawAmount.toFixed()}`);
+    throw new InsufficientCashError(
+      portfolioId,
+      withdrawAmount.toNumber(),
+      currentCash.toNumber(),
+      `Insufficient cash in portfolio ${portfolioId}: have ${currentCash.toFixed()}, want ${withdrawAmount.toFixed()}`
+    );
   }
   const updated = { ...portfolio, cash: currentCash.subtract(withdrawAmount).toNumber() };
   await repos.portfolios.save(updated);
