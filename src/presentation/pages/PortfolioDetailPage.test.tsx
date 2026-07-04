@@ -97,6 +97,31 @@ describe("PortfolioDetailPage — Clear all suspected duplicates", () => {
     expect(screen.queryByRole("button", { name: /clear all suspected duplicates/i })).not.toBeInTheDocument();
   });
 
+  it("clears every duplicate for a ticker with more than one, in a single click", async () => {
+    // Same real 100-share buy imported three times: one real trade (kept,
+    // highest price) plus two duplicates that both must go in one pass.
+    state.trades = [
+      createTrade({ id: "keep", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 50, executionDate: "2026-01-05", executionTime: "10:00" }),
+      createTrade({ id: "dup1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 48, executionDate: "2026-01-05", executionTime: "10:00" }),
+      createTrade({ id: "dup2", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 47, executionDate: "2026-01-05", executionTime: "10:00" }),
+    ];
+    state.verifications = [
+      { id: "v1", portfolioId: "p1", ticker: "COMI", units: 100, capturedAt: "2026-06-01T00:00", source: "screenshot" },
+    ];
+
+    const user = userEvent.setup();
+    renderPage("p1");
+
+    const clearButton = await screen.findByRole("button", { name: /clear all suspected duplicates \(2\)/i });
+    await user.click(clearButton);
+
+    await waitFor(() => {
+      expect(state.trades.map((t) => t.id)).toEqual(["keep"]);
+    });
+    expect(await screen.findByText("Matches broker")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /clear all suspected duplicates/i })).not.toBeInTheDocument();
+  });
+
   it("does not show the button when no ticker is mismatched", async () => {
     state.trades = [
       createTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 50, executionDate: "2026-01-05", executionTime: "10:00" }),
