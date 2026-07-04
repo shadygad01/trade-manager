@@ -793,7 +793,7 @@ export function ImportPage() {
                 ticker={ticker}
                 group={group}
                 portfolios={portfolios}
-                portfolioId={portfolioForTicker(ticker)}
+                portfolioId={resolvedPortfolioId(ticker) ?? ""}
                 portfolioResolved={resolvedPortfolioId(ticker) !== undefined}
                 matchStatus={tickerMatchStatuses.get(ticker)}
                 distributing={distributing}
@@ -846,7 +846,7 @@ export function ImportPage() {
   );
 }
 
-function TickerGroupCard({
+export function TickerGroupCard({
   ticker,
   group,
   portfolios,
@@ -974,8 +974,17 @@ function TickerGroupCard({
             <select
               value={portfolioId}
               onChange={(e) => onPortfolioChange(e.target.value)}
-              className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+              className={`rounded border px-2 py-1 text-xs ${
+                portfolioResolved
+                  ? "border-slate-700 bg-slate-800 text-slate-100"
+                  : "border-cyan-500/50 bg-slate-800 text-cyan-300"
+              }`}
             >
+              {!portfolioResolved ? (
+                <option value="" disabled>
+                  Select a portfolio…
+                </option>
+              ) : null}
               {portfolios.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -1024,6 +1033,7 @@ function TickerGroupCard({
         {group.sells.map((entry) => {
           const match = duplicateMatch(entry.candidate);
           const added = addedKeys.has(entry.key);
+          const disabled = !matched || !portfolioResolved;
           return (
             <CandidateRow
               key={entry.key}
@@ -1033,8 +1043,14 @@ function TickerGroupCard({
               actionLabel={match ? "Allocate anyway" : "Allocate Sell"}
               actionClassName="bg-rose-500 hover:bg-rose-400"
               onAction={() => onAllocateSell(entry)}
-              disabled={!matched}
-              disabledReason={!matched ? "Verify this ticker's share count against a broker position screenshot first." : undefined}
+              disabled={disabled}
+              disabledReason={
+                !matched
+                  ? "Verify this ticker's share count against a broker position screenshot first."
+                  : !portfolioResolved
+                    ? "Pick a portfolio above first."
+                    : undefined
+              }
             />
           );
         })}
