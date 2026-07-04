@@ -155,11 +155,17 @@ Immediate user follow-up, from a live screenshot of Import surfacing exactly the
 
 - 1 new application-layer test (the structured error) + 13 new component/page tests (213 total).
 
+### Post-sprint-7 — confidence-aware confirmation gate for low-confidence OCR rows
+
+Item 3 of the next-recommended-sprint list below: a `confidence: "low"` candidate (unmapped-ticker fallback — the tier most likely to be flat-out wrong) now requires an explicit "I've checked this row is correct" checkbox in `CandidateRow` before its Add/Allocate button is even clickable, rather than being one click away like every other row. High/medium-confidence rows are unaffected. This sits alongside the existing merge-suggestion and manual-rename features as a third, narrower answer to the same underlying OCR-ticker-resolution problem — this one specifically slows down the single riskiest action (recording an actual trade) rather than helping fix the ticker itself.
+
+- 2 new component tests (215 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
 2. **Sector Allocation**: still honestly unmodeled (no sector field on `Trade`/`Portfolio`) — either add one deliberately or keep the dashboard's honest "not yet modeled" empty state; don't fabricate data to fill the chart.
-3. **OCR confidence-aware UX**: Sprint 3 added `confidence` scoring but it's only a passive badge today — consider auto-collapsing/deprioritizing low-confidence candidates in the Import review list, or requiring an explicit confirmation step before a "low" candidate can be added as a trade.
+3. ~~**OCR confidence-aware UX**~~ — done (see above): low-confidence candidates now require explicit confirmation before they can be added.
 4. **A real second broker's screenshot format**: `CsvStatementParser` validated the interface with a non-OCR input; the OCR-specific parts of the interface (`parseOrdersScreenText`, `parseOrderRowsText`, `resolveHeaderTicker`) still only have one real implementation (Thndr) — worth validating against an actual second brokerage app's screenshots if/when real sample data is available.
 
 Each of these should get its own gap-check at sprint start — this list is a starting point, not a commitment, and should be re-prioritized against whatever the repo audit finds at that time.

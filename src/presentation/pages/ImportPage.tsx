@@ -829,7 +829,7 @@ function TickerGroupCard({
   );
 }
 
-function CandidateRow({
+export function CandidateRow({
   entry,
   match,
   added,
@@ -849,6 +849,14 @@ function CandidateRow({
   shortfall?: { amount: number; portfolioName: string; onDepositAndRetry: () => void };
 }) {
   const c = entry.candidate;
+  // A "low" confidence row means the ticker itself was a weak guess (see
+  // ThndrParser's confidence scoring) — this requires the user to explicitly
+  // look at it and confirm before the action button even becomes clickable,
+  // rather than letting a bad guess get added with the same one click as
+  // every other row.
+  const requiresConfirmation = c.confidence === "low";
+  const [confirmed, setConfirmed] = useState(false);
+  const canAct = !requiresConfirmation || confirmed;
   return (
     <div className="px-4 py-2.5 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -889,11 +897,27 @@ function CandidateRow({
             <CheckCircle2 size={14} /> Added
           </span>
         ) : (
-          <button onClick={onAction} className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 ${actionClassName}`}>
+          <button
+            onClick={onAction}
+            disabled={!canAct}
+            title={canAct ? undefined : "Low-confidence ticker — confirm it's correct before adding."}
+            className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 ${actionClassName} disabled:cursor-not-allowed disabled:opacity-40`}
+          >
             {actionLabel}
           </button>
         )}
       </div>
+      {requiresConfirmation && !added ? (
+        <label className="mt-1.5 flex items-center gap-2 text-xs text-amber-300">
+          <input
+            type="checkbox"
+            checked={confirmed}
+            onChange={(e) => setConfirmed(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-amber-400/40 bg-slate-800"
+          />
+          Low-confidence ticker guess — I've checked this row is correct
+        </label>
+      ) : null}
       {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
       {shortfall ? (
         <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
