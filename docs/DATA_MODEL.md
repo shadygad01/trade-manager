@@ -12,7 +12,7 @@ All data is persisted client-side in IndexedDB via Dexie (`src/infrastructure/db
 | `timelineEvents` | `portfolioId`, `type`, `ticker`, `timestamp` | `TimelineEvent` |
 | `journalEntries` | `tradeId`, `portfolioId` | `JournalEntry` |
 | `verifications` | `portfolioId`, `ticker`, `[portfolioId+ticker]`, `capturedAt` | `PositionVerification` |
-| `uploads` | `portfolioId`, `fileHash`, `[portfolioId+fileHash]`, `status` | `Upload` |
+| `uploads` | `portfolioId`, `fileHash`, `status` | `Upload` |
 
 ## The trade/allocation model
 

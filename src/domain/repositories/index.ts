@@ -23,6 +23,7 @@ export interface TradeRepository {
 }
 
 export interface TradeAllocationRepository {
+  getAll(): Promise<TradeAllocation[]>;
   getByPortfolio(portfolioId: string): Promise<TradeAllocation[]>;
   getByTrade(tradeId: string): Promise<TradeAllocation[]>;
   save(allocation: TradeAllocation): Promise<void>;
@@ -50,7 +51,8 @@ export interface VerificationRepository {
 
 export interface UploadRepository {
   getByPortfolio(portfolioId: string): Promise<Upload[]>;
-  getByHash(portfolioId: string, fileHash: string): Promise<Upload | undefined>;
+  /** File-hash dedup is global — the same screenshot re-uploaded is a duplicate regardless of which portfolio its candidates end up assigned to. */
+  getByHash(fileHash: string): Promise<Upload | undefined>;
   save(upload: Upload): Promise<void>;
   delete(id: string): Promise<void>;
 }

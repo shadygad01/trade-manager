@@ -66,6 +66,39 @@ describe("DexieTradeAllocationRepository", () => {
     expect(portfolio1Allocations.every((a) => a.sellGroupId === "sell-group-1")).toBe(true);
   });
 
+  it("lists every allocation across all portfolios via getAll", async () => {
+    await repo.save(
+      createTradeAllocation({
+        id: "alloc-1",
+        sellGroupId: "sell-1",
+        portfolioId: "portfolio-1",
+        tradeId: "trade-1",
+        ticker: "COMI",
+        sharesClosed: 20,
+        exitPrice: 55,
+        executionDate: "2026-02-01",
+        executionTime: "12:00",
+      })
+    );
+    await repo.save(
+      createTradeAllocation({
+        id: "alloc-2",
+        sellGroupId: "sell-2",
+        portfolioId: "portfolio-2",
+        tradeId: "trade-2",
+        ticker: "HRHO",
+        sharesClosed: 5,
+        exitPrice: 20,
+        executionDate: "2026-02-02",
+        executionTime: "09:30",
+      })
+    );
+
+    const all = await repo.getAll();
+    expect(all).toHaveLength(2);
+    expect(all.map((a) => a.id).sort()).toEqual(["alloc-1", "alloc-2"]);
+  });
+
   it("deletes an allocation", async () => {
     const allocation = createTradeAllocation({
       id: "alloc-1",

@@ -9,11 +9,8 @@ export class DexieUploadRepository implements UploadRepository {
     return this.db.uploads.where("portfolioId").equals(portfolioId).toArray();
   }
 
-  async getByHash(portfolioId: string, fileHash: string): Promise<Upload | undefined> {
-    return this.db.uploads
-      .where("[portfolioId+fileHash]")
-      .equals([portfolioId, fileHash])
-      .first();
+  async getByHash(fileHash: string): Promise<Upload | undefined> {
+    return this.db.uploads.where("fileHash").equals(fileHash).first();
   }
 
   async save(upload: Upload): Promise<void> {

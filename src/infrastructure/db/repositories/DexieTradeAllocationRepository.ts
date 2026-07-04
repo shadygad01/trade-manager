@@ -5,6 +5,10 @@ import type { PortfolioOsDatabase } from "../db";
 export class DexieTradeAllocationRepository implements TradeAllocationRepository {
   constructor(private readonly db: PortfolioOsDatabase) {}
 
+  async getAll(): Promise<TradeAllocation[]> {
+    return this.db.tradeAllocations.toArray();
+  }
+
   async getByPortfolio(portfolioId: string): Promise<TradeAllocation[]> {
     return this.db.tradeAllocations.where("portfolioId").equals(portfolioId).toArray();
   }

@@ -2,6 +2,8 @@
 
 Portfolio OS can import trades directly from broker screenshots and PDF statements, entirely client-side — no image or text ever leaves the browser. The reference broker is [Thndr](https://thndr.app), a popular Egyptian brokerage app, with support for Buy/Sell confirmations, order-history screens, portfolio/position screenshots, and statement PDFs, in both Arabic and English.
 
+Import (`/import`) is a global page, not scoped to one portfolio: a single statement can hold trades meant for more than one of a user's portfolios (e.g. some shares bought for "Investment", others for "Trading"), so each parsed candidate — and each position-verification row — gets its own portfolio picker at review time, defaulting to the first portfolio but changeable per row before confirming. `Upload.portfolioId` is therefore optional; the file-hash dedup check (`UploadRepository.getByHash`) and the possible-duplicate check against existing trades (`duplicateDetection.ts`) are both global, not per-portfolio, since a re-uploaded file or a duplicated trade is a duplicate regardless of which portfolio it's assigned to.
+
 ## Pipeline (`src/infrastructure/ocr/ImportOrchestrator.ts`)
 
 ```

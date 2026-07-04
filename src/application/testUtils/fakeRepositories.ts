@@ -59,6 +59,9 @@ export function createFakeTradeRepository(seed: Trade[] = []): TradeRepository {
 export function createFakeTradeAllocationRepository(seed: TradeAllocation[] = []): TradeAllocationRepository {
   const store = new Map(seed.map((a) => [a.id, a]));
   return {
+    async getAll() {
+      return [...store.values()];
+    },
     async getByPortfolio(portfolioId) {
       return [...store.values()].filter((a) => a.portfolioId === portfolioId);
     },

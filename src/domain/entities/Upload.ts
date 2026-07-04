@@ -23,10 +23,16 @@ export interface ParsedTradeCandidate {
   confidence?: ParseConfidence;
 }
 
-/** One imported screenshot/PDF and the outcome of running it through the OCR subsystem. */
+/**
+ * One imported screenshot/PDF/CSV and the outcome of running it through the
+ * OCR subsystem. Not tied to a single portfolio: one upload's candidates can
+ * each be assigned to a different portfolio during review (a statement
+ * mixing trades meant for more than one of the user's portfolios), so
+ * `portfolioId` is only set when every candidate ended up in the same one.
+ */
 export interface Upload {
   id: string;
-  portfolioId: string;
+  portfolioId?: string;
   fileName: string;
   fileHash: string;
   contentType: string;

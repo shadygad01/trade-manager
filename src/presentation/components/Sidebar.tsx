@@ -19,7 +19,6 @@ const NAV_ITEMS = [
   { key: "timeline", label: "Timeline", icon: Clock, suffix: "/timeline" },
   { key: "journal", label: "Journal", icon: BookOpen, suffix: "/journal" },
   { key: "analytics", label: "Analytics", icon: BarChart3, suffix: "/analytics" },
-  { key: "import", label: "Import", icon: UploadCloud, suffix: "/import" },
 ] as const;
 
 export function Sidebar() {
@@ -63,6 +62,15 @@ export function Sidebar() {
         >
           <Briefcase size={16} />
           Portfolios
+        </Link>
+        <Link
+          href="/import"
+          className={`mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+            location.startsWith("/import") ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
+          }`}
+        >
+          <UploadCloud size={16} />
+          Import
         </Link>
       </nav>
 

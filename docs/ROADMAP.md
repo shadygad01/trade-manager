@@ -51,6 +51,15 @@ Executed the full "Next recommended sprint" list from Sprint 2 in one pass (user
 - **Code-splitting**: `ImportOrchestrator` (and transitively Tesseract.js/pdfjs-dist) is now a dynamic `import()` in `data.ts` instead of a static one, and every page is now `React.lazy`-loaded in `App.tsx`. Main entry bundle dropped from ~1.27MB (gzip ~365KB) to ~266KB (gzip ~87KB); the OCR subsystem is now its own ~472KB chunk fetched only when a user actually opens Import. No more Vite chunk-size warning.
 - 19 new tests (168 total).
 
+### Post-sprint-4 fix — Import made portfolio-agnostic
+
+User-reported real workflow gap: Import was scoped to one portfolio (`/portfolios/:id/import`), so a single statement screenshot containing several buys meant for *different* portfolios (e.g. some shares for "Investment", others for "Trading") couldn't be split correctly — every candidate landed in whichever portfolio the user happened to be inside.
+
+- Import moved to a global route (`/import`), always in the sidebar, no longer gated behind selecting a portfolio first.
+- Each parsed candidate and each position-verification row gets its own portfolio picker at review time (defaults to the first portfolio, changeable per row) — `recordBuy`/`recordSell`/verification-save all use the row's chosen portfolio, not a single page-wide one.
+- `Upload.portfolioId` is now optional and `UploadRepository.getByHash` is global (file-hash dedup no longer scoped per portfolio) — a re-uploaded file is a duplicate regardless of which portfolio its candidates end up in. Duplicate-trade detection (`duplicateDetection.ts`) now checks against every portfolio's trades/allocations (`TradeRepository.getAll()`, new `TradeAllocationRepository.getAll()`), not just one.
+- 5 new tests (173 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

@@ -36,7 +36,7 @@ export function App() {
               <Route path="/portfolios/:id/timeline" component={TimelinePage} />
               <Route path="/portfolios/:id/journal" component={JournalPage} />
               <Route path="/portfolios/:id/analytics" component={AnalyticsPage} />
-              <Route path="/portfolios/:id/import" component={ImportPage} />
+              <Route path="/import" component={ImportPage} />
               <Route>
                 <Redirect to="/" />
               </Route>
