@@ -284,4 +284,21 @@ describe("computePositions", () => {
     expect(positions[0].marketValue).toBeCloseTo(60 * 65);
     expect(positions[0].unrealizedPnl).toBeCloseTo(60 * 65 - 60 * 50);
   });
+
+  it("includes taxes in cost basis, not just fees", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(100_000)] });
+    await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      fees: 20,
+      taxes: 30,
+      executionDate: "2026-01-01",
+      executionTime: "10:00",
+    });
+
+    const positions = await computePositions(repos, "p1", {});
+    expect(positions[0].costBasis).toBeCloseTo(100 * 50 + 20 + 30);
+  });
 });

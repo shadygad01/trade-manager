@@ -51,3 +51,4 @@ npm run build     # typecheck + production build
 - [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) — entities, IndexedDB schema, and the trade/allocation model.
 - [`docs/ANALYTICS_ENGINE.md`](docs/ANALYTICS_ENGINE.md) — every metric and how to add a new one.
 - [`docs/OCR_SUBSYSTEM.md`](docs/OCR_SUBSYSTEM.md) — the Thndr screenshot import pipeline and how to add a new broker.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — gap analysis, sprint log, and the next recommended sprint.

@@ -14,6 +14,8 @@ import { capitalDeployment } from "./calculators/capitalDeployment";
 import { monthlyReturn } from "./calculators/monthlyReturn";
 import { annualReturn } from "./calculators/annualReturn";
 import { portfolioReturn } from "./calculators/portfolioReturn";
+import { portfolioHealth, type PortfolioHealth } from "./calculators/portfolioHealth";
+import { strategyAttribution, type StrategyAttribution } from "./calculators/strategyAttribution";
 import { summarizeOpenPositions, type PeriodReturn } from "./calculators/shared";
 
 /**
@@ -40,6 +42,8 @@ export const calculators = {
   monthlyReturn,
   annualReturn,
   portfolioReturn,
+  portfolioHealth,
+  strategyAttribution,
 };
 
 export interface AnalyticsInput {
@@ -65,6 +69,8 @@ export interface AnalyticsResult {
   annualReturn: PeriodReturn[];
   portfolioReturn: number;
   equityCurve: EquityPoint[];
+  portfolioHealth: PortfolioHealth;
+  strategyAttribution: StrategyAttribution[];
 }
 
 export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
@@ -95,5 +101,7 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     annualReturn: annualReturn(curve),
     portfolioReturn: portfolioReturn(totalEquity, deposits, withdrawals),
     equityCurve: curve,
+    portfolioHealth: portfolioHealth(trades, allocations, priceMap, cash),
+    strategyAttribution: strategyAttribution(trades, allocations),
   };
 }

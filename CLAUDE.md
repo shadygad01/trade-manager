@@ -22,6 +22,10 @@ No backend server. No database server. Everything runs in the browser; the app i
 
 Every Buy creates one immutable `Trade` (a lot). Selling never assumes FIFO or average cost — the caller must name exactly which `Trade`(s) a sell closes and how many shares from each, recorded as `TradeAllocation`s. Do not reintroduce implicit lot-selection logic anywhere.
 
+## Working on this repo
+
+Start each session by reading `docs/ROADMAP.md` (gap analysis + sprint log). Audit the current state against the product vision before adding features; implement the highest-priority gap(s) only, not the whole backlog. Update the sprint log and "Next recommended sprint" section when you finish.
+
 ## Conventions
 
 - No comments except where a business rule or heuristic is genuinely non-obvious.

@@ -151,6 +151,7 @@ function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
 
     candidates.push({
       ticker: normalizeTicker(ticker),
+      companyName: canonicalNameForTicker(normalizeTicker(ticker)),
       side: isBuy ? "BUY" : "SELL",
       shares,
       price,
@@ -300,6 +301,7 @@ function parseOrdersScreenTextImpl(text: string): OrdersScreenParseResult {
 
     candidates.push({
       ticker: normalizeTicker(ticker),
+      companyName: canonicalNameForTicker(normalizeTicker(ticker)),
       side: /buy|شراء/i.test(actions[i][1]) ? "BUY" : "SELL",
       shares,
       price,
@@ -380,6 +382,7 @@ function parseOrderRowsTextImpl(rows: OrderRowText[], ticker: string): OrderRows
 
     candidates.push({
       ticker: normalizeTicker(ticker),
+      companyName: canonicalNameForTicker(normalizeTicker(ticker)),
       side: /buy|شراء/i.test(action[1]) ? "BUY" : "SELL",
       shares,
       price,

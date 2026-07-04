@@ -25,7 +25,7 @@ export function summarizeOpenPositions(trades: Trade[], priceMap: Record<string,
   let costBasis = Money.zero();
   let marketValue = Money.zero();
   for (const trade of trades.filter(isOpen)) {
-    const tradeCostBasis = Money.from(trade.entryPrice * trade.shares + trade.fees).multiply(
+    const tradeCostBasis = Money.from(trade.entryPrice * trade.shares + trade.fees + trade.taxes).multiply(
       trade.remainingShares / trade.shares
     );
     costBasis = costBasis.add(tradeCostBasis);

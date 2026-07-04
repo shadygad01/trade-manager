@@ -13,6 +13,7 @@ interface SellAllocationFormProps {
   initial?: {
     exitPrice?: number;
     fees?: number;
+    taxes?: number;
     executionDate?: string;
     executionTime?: string;
   };
@@ -35,6 +36,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [exitPrice, setExitPrice] = useState(initial?.exitPrice !== undefined ? String(initial.exitPrice) : "");
   const [fees, setFees] = useState(initial?.fees !== undefined ? String(initial.fees) : "0");
+  const [taxes, setTaxes] = useState(initial?.taxes !== undefined ? String(initial.taxes) : "0");
   const [executionDate, setExecutionDate] = useState(() => initial?.executionDate ?? new Date().toISOString().slice(0, 10));
   const [executionTime, setExecutionTime] = useState(() => initial?.executionTime ?? new Date().toISOString().slice(11, 16));
   const [exitReason, setExitReason] = useState("");
@@ -95,13 +97,15 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
 
     setSubmitting(true);
     try {
-      // The user sets one exit price/fee for the whole sell action (it's one
-      // market order); recordSell's contract is per-lot, so the total fee is
-      // prorated across lots by shares closed and each lot gets the same
+      // The user sets one exit price/fee/tax for the whole sell action (it's
+      // one market order); recordSell's contract is per-lot, so the totals
+      // are prorated across lots by shares closed and each lot gets the same
       // price — this keeps per-lot P/L attribution accurate without asking
       // the user to re-enter the same price per lot.
       const totalFees = Number.parseFloat(fees) || 0;
+      const totalTaxes = Number.parseFloat(taxes) || 0;
       const feePerShare = totalSelected > 0 ? totalFees / totalSelected : 0;
+      const taxPerShare = totalSelected > 0 ? totalTaxes / totalSelected : 0;
       const allocations = Object.entries(selected)
         .filter(([, v]) => Number.parseFloat(v) > 0)
         .map(([tradeId, v]) => {
@@ -111,6 +115,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
             shares: lineShares,
             exitPrice: price,
             fees: feePerShare * lineShares,
+            taxes: taxPerShare * lineShares,
             notes: notes || undefined,
             exitReason: exitReason || undefined,
           };
@@ -204,6 +209,15 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
             type="number"
             value={fees}
             onChange={(e) => setFees(e.target.value)}
+            className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+          />
+        </label>
+        <label className="text-xs text-slate-400 space-y-1">
+          Taxes
+          <input
+            type="number"
+            value={taxes}
+            onChange={(e) => setTaxes(e.target.value)}
             className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
           />
         </label>

@@ -5,6 +5,7 @@ import { Plus, ArrowLeftRight, ChevronDown, ChevronRight } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { recordBuy } from "@application/services/TradeService";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { getTradeStatus } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
@@ -101,7 +102,7 @@ export function TradesPage() {
             </thead>
             <tbody className="divide-y divide-slate-800">
               {sorted.map((trade) => {
-                const isOpen = trade.remainingShares > 0;
+                const status = getTradeStatus(trade);
                 const isExpanded = expanded.has(trade.id);
                 const tradeAllocations = allocationsByTrade.get(trade.id) ?? [];
                 return (
@@ -115,7 +116,12 @@ export function TradesPage() {
                           isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
                         ) : null}
                       </td>
-                      <td className="px-4 py-2.5 font-medium text-slate-100">{trade.ticker}</td>
+                      <td className="px-4 py-2.5 font-medium text-slate-100">
+                        {trade.ticker}
+                        {trade.companyName ? (
+                          <span className="ml-2 text-xs font-normal text-slate-500">{trade.companyName}</span>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-2.5 text-slate-300">{formatDate(trade.executionDate)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatShares(trade.shares)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatShares(trade.remainingShares)}</td>
@@ -124,10 +130,14 @@ export function TradesPage() {
                       <td className="px-4 py-2.5">
                         <span
                           className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                            isOpen ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-700/40 text-slate-400"
+                            status === "open"
+                              ? "bg-emerald-500/10 text-emerald-400"
+                              : status === "partial"
+                                ? "bg-amber-500/10 text-amber-400"
+                                : "bg-slate-700/40 text-slate-400"
                           }`}
                         >
-                          {isOpen ? "Open" : "Closed"}
+                          {status === "open" ? "Open" : status === "partial" ? "Partial" : "Closed"}
                         </span>
                       </td>
                     </tr>
@@ -183,9 +193,11 @@ export function TradesPage() {
 
 function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; open: boolean; onClose: () => void }) {
   const [ticker, setTicker] = useState("");
+  const [companyName, setCompanyName] = useState("");
   const [shares, setShares] = useState("");
   const [entryPrice, setEntryPrice] = useState("");
   const [fees, setFees] = useState("0");
+  const [taxes, setTaxes] = useState("0");
   const [executionDate, setExecutionDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [executionTime, setExecutionTime] = useState(() => new Date().toISOString().slice(11, 16));
   const [notes, setNotes] = useState("");
@@ -195,9 +207,11 @@ function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; o
 
   function reset() {
     setTicker("");
+    setCompanyName("");
     setShares("");
     setEntryPrice("");
     setFees("0");
+    setTaxes("0");
     setNotes("");
     setStrategyTags("");
     setError(null);
@@ -227,9 +241,11 @@ function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; o
       await recordBuy(repos, {
         portfolioId,
         ticker: normalizedTicker,
+        companyName: companyName.trim() || undefined,
         shares: sharesN,
         entryPrice: priceN,
         fees: Number.parseFloat(fees) || 0,
+        taxes: Number.parseFloat(taxes) || 0,
         executionDate,
         executionTime,
         notes: notes.trim() || undefined,
@@ -268,6 +284,15 @@ function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; o
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
+            Company (optional)
+            <input
+              value={companyName}
+              onChange={(e) => setCompanyName(e.target.value)}
+              className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+              placeholder="Commercial International Bank"
+            />
+          </label>
+          <label className="text-xs text-slate-400 space-y-1">
             Shares
             <input
               type="number"
@@ -291,6 +316,15 @@ function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; o
               type="number"
               value={fees}
               onChange={(e) => setFees(e.target.value)}
+              className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+            />
+          </label>
+          <label className="text-xs text-slate-400 space-y-1">
+            Taxes
+            <input
+              type="number"
+              value={taxes}
+              onChange={(e) => setTaxes(e.target.value)}
               className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
             />
           </label>

@@ -17,6 +17,8 @@
 | Capital deployment | `calculators/capitalDeployment.ts` | Invested cost basis ÷ total equity |
 | Monthly / annual return | `calculators/monthlyReturn.ts` / `annualReturn.ts` | Equity curve bucketed by period, % change per bucket |
 | Portfolio return | `calculators/portfolioReturn.ts` | (Total equity − net contributions) ÷ net contributions |
+| Portfolio health | `calculators/portfolioHealth.ts` | Cash ratio, largest position %, Herfindahl-index concentration score, diversification score, largest realized winner/loser, composite 0-100 health score |
+| Strategy attribution | `calculators/strategyAttribution.ts` | Win rate / profit factor / total realized P/L grouped by `Trade.strategyTags` — a trade with multiple tags attributes its P/L to every tag it carries |
 
 ## Known limitation: equity curve is marked to *today's* price
 

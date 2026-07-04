@@ -77,6 +77,8 @@ describe("computeAnalytics", () => {
         "monthlyReturn",
         "annualReturn",
         "portfolioReturn",
+        "portfolioHealth",
+        "strategyAttribution",
       ].sort()
     );
   });

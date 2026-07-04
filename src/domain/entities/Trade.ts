@@ -19,9 +19,12 @@ export interface Trade {
   id: string;
   portfolioId: string;
   ticker: string;
+  companyName?: string;
   shares: number;
   entryPrice: number;
   fees: number;
+  /** Broker/exchange tax withheld on the buy, separate from `fees` for reporting — economically it adds to cost basis exactly like fees do. */
+  taxes: number;
   executionDate: string;
   executionTime: string;
   remainingShares: number;
@@ -36,9 +39,11 @@ export function createTrade(input: {
   id: string;
   portfolioId: string;
   ticker: string;
+  companyName?: string;
   shares: number;
   entryPrice: number;
   fees?: number;
+  taxes?: number;
   executionDate: string;
   executionTime: string;
   notes?: string;
@@ -54,9 +59,11 @@ export function createTrade(input: {
     id: input.id,
     portfolioId: input.portfolioId,
     ticker: input.ticker,
+    companyName: input.companyName,
     shares: input.shares,
     entryPrice: input.entryPrice,
     fees: input.fees ?? 0,
+    taxes: input.taxes ?? 0,
     executionDate: input.executionDate,
     executionTime: input.executionTime,
     remainingShares: input.shares,
@@ -70,4 +77,13 @@ export function createTrade(input: {
 
 export function isOpen(trade: Trade): boolean {
   return trade.remainingShares > 0;
+}
+
+export type TradeStatus = "open" | "partial" | "closed";
+
+/** "open" = untouched since the buy, "partial" = some shares closed but not all, "closed" = fully exited. */
+export function getTradeStatus(trade: Trade): TradeStatus {
+  if (trade.remainingShares <= 0) return "closed";
+  if (trade.remainingShares < trade.shares) return "partial";
+  return "open";
 }

@@ -92,9 +92,11 @@ export function ImportPage() {
     await recordBuy(repos, {
       portfolioId,
       ticker,
+      companyName: candidate.companyName,
       shares: candidate.shares,
       entryPrice: candidate.price,
       fees: candidate.fees ?? 0,
+      taxes: candidate.taxes ?? 0,
       executionDate: candidate.date,
       executionTime: candidate.time ?? "00:00",
       notes: "Imported from screenshot/PDF",
@@ -341,6 +343,7 @@ export function ImportPage() {
             initial={{
               exitPrice: sellCandidate.candidate.price,
               fees: sellCandidate.candidate.fees ?? 0,
+              taxes: sellCandidate.candidate.taxes ?? 0,
               executionDate: sellCandidate.candidate.date,
               executionTime: sellCandidate.candidate.time,
             }}

@@ -147,6 +147,69 @@ export function AnalyticsPage() {
       </div>
 
       <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">Portfolio Health</h3>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatTile
+            label="Health Score"
+            value={analytics.portfolioHealth.healthScore.toFixed(0)}
+            sublabel="0-100, higher is better"
+          />
+          <StatTile
+            label="Diversification"
+            value={formatPercent(analytics.portfolioHealth.diversificationScore, 0)}
+            sublabel={
+              analytics.portfolioHealth.largestPositionTicker
+                ? `Largest: ${analytics.portfolioHealth.largestPositionTicker} (${formatPercent(analytics.portfolioHealth.largestPositionPct, 0)})`
+                : "No open positions"
+            }
+          />
+          <StatTile label="Open Trades" value={String(analytics.portfolioHealth.openTradeCount)} />
+          <StatTile
+            label="Largest Winner / Loser"
+            value={formatMoney(analytics.portfolioHealth.largestWinner)}
+            valueClassName="text-emerald-400"
+            sublabel={formatMoney(analytics.portfolioHealth.largestLoser)}
+          />
+        </div>
+      </div>
+
+      {analytics.strategyAttribution.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60">
+          <div className="border-b border-slate-800 px-4 py-3">
+            <h3 className="text-sm font-semibold text-slate-200">Strategy Attribution</h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-4 py-2">Strategy</th>
+                  <th className="px-4 py-2 text-right">Trades</th>
+                  <th className="px-4 py-2 text-right">Win Rate</th>
+                  <th className="px-4 py-2 text-right">Profit Factor</th>
+                  <th className="px-4 py-2 text-right">Total Realized P/L</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {analytics.strategyAttribution.map((s) => (
+                  <tr key={s.tag}>
+                    <td className="px-4 py-2.5 font-medium text-slate-100">{s.tag}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{s.tradeCount}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatPercent(s.winRate, 0)}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
+                      {Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞"}
+                    </td>
+                    <td className={`px-4 py-2.5 text-right tabular-nums ${signClass(s.totalRealizedPnl)}`}>
+                      {formatMoney(s.totalRealizedPnl)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <h3 className="mb-3 text-sm font-semibold text-slate-200">Monthly Return</h3>
         {analytics.monthlyReturn.length > 0 ? (
           <ResponsiveContainer width="100%" height={240}>

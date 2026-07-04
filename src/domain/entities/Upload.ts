@@ -2,6 +2,7 @@ export type UploadStatus = "pending" | "parsed" | "failed" | "duplicate";
 
 export interface ParsedTradeCandidate {
   ticker: string;
+  companyName?: string;
   side: "BUY" | "SELL";
   shares: number;
   price: number;

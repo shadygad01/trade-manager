@@ -17,9 +17,11 @@ function microsToMoney(totalMicros: number): Money {
 export interface RecordBuyInput {
   portfolioId: string;
   ticker: string;
+  companyName?: string;
   shares: number;
   entryPrice: number;
   fees?: number;
+  taxes?: number;
   executionDate: string;
   executionTime: string;
   notes?: string;
@@ -37,7 +39,8 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
   }
 
   const fees = input.fees ?? 0;
-  const totalCost = Money.from(input.shares * input.entryPrice).add(Money.from(fees));
+  const taxes = input.taxes ?? 0;
+  const totalCost = Money.from(input.shares * input.entryPrice).add(Money.from(fees)).add(Money.from(taxes));
   const currentCash = Money.from(portfolio.cash);
   if (totalCost.greaterThan(currentCash)) {
     throw new Error(
@@ -49,9 +52,11 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
     id: generateId(),
     portfolioId: input.portfolioId,
     ticker: normalizeTicker(input.ticker),
+    companyName: input.companyName,
     shares: input.shares,
     entryPrice: input.entryPrice,
     fees,
+    taxes,
     executionDate: input.executionDate,
     executionTime: input.executionTime,
     notes: input.notes,
@@ -84,6 +89,7 @@ export interface RecordSellAllocationInput {
   shares: number;
   exitPrice: number;
   fees?: number;
+  taxes?: number;
   notes?: string;
   exitReason?: string;
 }
@@ -147,6 +153,7 @@ export async function recordSell(repos: AppRepositories, input: RecordSellInput)
       sharesClosed: line.shares,
       exitPrice: line.exitPrice,
       fees: line.fees,
+      taxes: line.taxes,
       executionDate: input.executionDate,
       executionTime: input.executionTime,
       notes: line.notes,
@@ -162,7 +169,9 @@ export async function recordSell(repos: AppRepositories, input: RecordSellInput)
       fullyClosedCount += 1;
     }
 
-    const lineProceeds = Money.from(line.shares * line.exitPrice).subtract(Money.from(line.fees ?? 0));
+    const lineProceeds = Money.from(line.shares * line.exitPrice)
+      .subtract(Money.from(line.fees ?? 0))
+      .subtract(Money.from(line.taxes ?? 0));
     netProceeds = netProceeds.add(lineProceeds);
     realizedMicros += realizedPnlMicros(allocation, trade);
   }
@@ -226,7 +235,7 @@ export async function computePositions(
     const totalShares = tickerTrades.reduce((sum, t) => sum + t.remainingShares, 0);
     const costBasis = Money.sum(
       tickerTrades.map((t) =>
-        Money.from(t.entryPrice * t.shares + t.fees).multiply(t.remainingShares / t.shares)
+        Money.from(t.entryPrice * t.shares + t.fees + t.taxes).multiply(t.remainingShares / t.shares)
       )
     );
     const avgCost = totalShares > 0 ? costBasis.divide(totalShares).toNumber() : 0;
