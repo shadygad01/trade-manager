@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, Pencil, Trash2, XCircle } from "lucide-react";
@@ -7,6 +7,7 @@ import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/ser
 import { recordDividend, deposit } from "@application/services/PortfolioService";
 import { InsufficientCashError } from "@application/services/errors";
 import { findDuplicateBuyMatch, findDuplicateSellMatch } from "@application/services/duplicateDetection";
+import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { Money } from "@domain/value-objects/Money";
@@ -51,14 +52,14 @@ function dividendContentKey(d: { ticker: string; date: string; amount: number })
 }
 
 /**
- * Guards auto-commit against a genuine race: two triggers (e.g. a fresh
- * extraction finishing and the user picking a portfolio) firing close
- * together could otherwise both see the same entry as "not yet added" and
+ * Guards the batch commit against a genuine race: two triggers (e.g. a
+ * duplicate Confirm click, or a rename firing while a commit is already in
+ * flight) could otherwise both see the same entry as "not yet added" and
  * call recordBuy/recordDividend/acceptVerification on it twice, since the
  * check-then-act happens across an await. Module-level (not React state,
  * which only updates asynchronously) so the guard is synchronous: an entry
  * is marked in-flight before its first await and cleared in a finally,
- * regardless of how many times auto-commit gets invoked concurrently.
+ * regardless of how many times commitTickerGroup gets invoked concurrently.
  */
 const inFlightKeys = new Set<string>();
 
@@ -66,9 +67,14 @@ const inFlightKeys = new Set<string>();
  * Import runs as a strict two-phase workflow: (1) extract — drop as many
  * files as needed; every candidate/verification accumulates into one pool,
  * confirmed complete by the running "N transactions from M files" count —
- * then (2) distribute — group everything by ticker and assign ONE portfolio
- * per ticker, so a stock's sells automatically travel with its buys to the
- * same portfolio (they're the same decision, not two).
+ * then (2) verify & distribute — group everything by ticker, assign ONE
+ * portfolio per ticker (so a stock's sells automatically travel with its
+ * buys), and reconcile each ticker's extracted share count against a broker
+ * "My Position" screenshot. Nothing is written to a portfolio until every
+ * ticker's count matches its screenshot exactly and the user explicitly
+ * clicks "Confirm — Distribute to Portfolios" — see tickerMatchStatuses and
+ * confirmAndDistributeAll. A Sell always still opens its own allocation
+ * modal (ADR-002 — this app never auto-picks which lot a sell closes).
  *
  * The pool itself lives in `importSession` (module-level, localStorage-backed),
  * not component state — a user often needs to leave this page mid-import to
@@ -84,6 +90,7 @@ export function ImportPage() {
   const [sellCandidate, setSellCandidate] = useState<{ key: string; ticker: string; portfolioId: string; candidate: ParsedTradeCandidate } | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [cashShortfalls, setCashShortfalls] = useState<Record<string, { portfolioId: string; shortfall: number }>>({});
+  const [distributing, setDistributing] = useState(false);
 
   const session = useImportSession();
   const { pendingCandidates, pendingVerifications, pendingDividends, tickerPortfolio, filesProcessed } = session;
@@ -101,18 +108,27 @@ export function ImportPage() {
   const existingTrades = existingTradesRaw ?? [];
   const existingAllocationsRaw = useLiveQuery(() => repos.allocations.getAll(), []);
   const existingAllocations = existingAllocationsRaw ?? [];
+  // Ground truth for the verification gate below — a broker "My Position"
+  // screenshot accepted in an earlier session still counts as this ticker's
+  // reference even if this batch re-extracts more buys/sells for it.
+  const existingVerificationsRaw = useLiveQuery(() => repos.verifications.getAll(), []);
+  const existingVerifications = existingVerificationsRaw ?? [];
 
   /**
    * useLiveQuery returns undefined until its first read resolves, then an
-   * array from then on — including a genuinely empty one. Auto-commit must
-   * tell those apart: firing while any of these three is still undefined
-   * would decide duplicate/portfolio-resolution off of default-empty data
-   * (e.g. missing an already-recorded exact-duplicate trade because
-   * existingTrades briefly reads as [] before its first real load), and by
-   * the time the real data arrives the row is already committed and no
-   * longer eligible for reconsideration.
+   * array from then on — including a genuinely empty one. The verification
+   * gate and commit logic must tell those apart: firing while any of these
+   * is still undefined would decide duplicate/portfolio-resolution/match
+   * status off of default-empty data (e.g. missing an already-recorded
+   * exact-duplicate trade because existingTrades briefly reads as [] before
+   * its first real load), and by the time the real data arrives a row
+   * committed off the stale read is no longer eligible for reconsideration.
    */
-  const initialDataLoaded = portfoliosRaw !== undefined && existingTradesRaw !== undefined && existingAllocationsRaw !== undefined;
+  const initialDataLoaded =
+    portfoliosRaw !== undefined &&
+    existingTradesRaw !== undefined &&
+    existingAllocationsRaw !== undefined &&
+    existingVerificationsRaw !== undefined;
 
   function duplicateMatch(candidate: ParsedTradeCandidate) {
     return candidate.side === "BUY"
@@ -366,20 +382,22 @@ export function ImportPage() {
   }
 
   /**
-   * The core of Import's auto-commit: once a ticker's portfolio resolves
-   * confidently (see resolvedPortfolioId), every pending buy/dividend/
-   * verification under it commits on its own — no per-row click. A buy
-   * that's an exact duplicate of an already-recorded trade is skipped
-   * silently instead (near-certainly the same transaction re-read from a
-   * different file); a "possible" duplicate (same ticker/date/shares, a
-   * different price) still commits, since that's usually the same real
-   * trade parsed from a different document format, but keeps showing its
-   * duplicate badge so it stays visible for a later look. Sells are
-   * deliberately excluded — which lot(s) a sell closes is an explicit
-   * financial decision this app never auto-picks (ADR-002), so "Allocate
-   * Sell" stays a manual action.
+   * Commits every pending buy/dividend/verification under one ticker in one
+   * go — called only from confirmAndDistributeAll, and only for a ticker
+   * whose share count has already reconciled against a broker position
+   * screenshot (see tickerMatchStatuses/checkTickerMatch) and whose
+   * portfolio has resolved. A buy that's an exact duplicate of an
+   * already-recorded trade is skipped silently instead (near-certainly the
+   * same transaction re-read from a different file); a "possible" duplicate
+   * (same ticker/date/shares, a different price) still commits, since
+   * that's usually the same real trade parsed from a different document
+   * format, but keeps showing its duplicate badge so it stays visible for a
+   * later look. Sells are deliberately excluded — which lot(s) a sell
+   * closes is an explicit financial decision this app never auto-picks
+   * (ADR-002), so "Allocate Sell" stays a manual action, gated separately on
+   * the same match status.
    */
-  async function autoCommitTicker(ticker: string) {
+  async function commitTickerGroup(ticker: string) {
     const portfolioId = resolvedPortfolioId(ticker);
     if (!portfolioId) return;
     const state = importSession.getState();
@@ -432,14 +450,25 @@ export function ImportPage() {
     }
   }
 
-  function autoCommitAllResolved() {
-    const state = importSession.getState();
-    const tickers = new Set<string>();
-    for (const e of state.pendingCandidates) tickers.add(normalizeTicker(e.candidate.ticker));
-    for (const e of state.pendingVerifications) tickers.add(normalizeTicker(e.verification.ticker));
-    for (const e of state.pendingDividends) tickers.add(normalizeTicker(e.dividend.ticker));
-    for (const ticker of tickers) {
-      void autoCommitTicker(ticker);
+  /**
+   * The single entry point for actually moving anything into a portfolio.
+   * Only ever called by an explicit user click on "Confirm — Distribute to
+   * Portfolios", and only ever commits tickers whose match status is
+   * already true — Step 1's extraction and Step 2's per-ticker portfolio
+   * picks never write a real Trade/Dividend/PositionVerification on their
+   * own. This is the two-phase gate: extract-and-verify, then a single
+   * explicit confirmation before anything is allocated.
+   */
+  async function confirmAndDistributeAll() {
+    if (!initialDataLoaded || !allTickersMatched) return;
+    setDistributing(true);
+    try {
+      const matchedTickers = tickerGroups
+        .filter(([ticker]) => tickerMatchStatuses.get(ticker)?.matched)
+        .map(([ticker]) => ticker);
+      await Promise.all(matchedTickers.map((ticker) => commitTickerGroup(ticker)));
+    } finally {
+      setDistributing(false);
     }
   }
 
@@ -552,35 +581,54 @@ export function ImportPage() {
   }, [pendingCandidates, pendingVerifications, pendingDividends]);
 
   /**
-   * The single trigger for auto-commit: runs whenever anything that could
-   * change a ticker's resolution changes — a fresh extraction, a manual
-   * portfolio pick, a rename, or (importantly) portfolios/existingTrades
-   * finishing their initial load on mount. Without this last case, pending
-   * rows already sitting in the pool from a previous visit (the page was
-   * closed mid-import, or portfolios/existingTrades simply hadn't loaded
-   * yet on first render) would never get a chance to auto-commit — nothing
-   * else in this component re-triggers it on its own.
-   *
-   * Gated on initialDataLoaded so it never fires against the transient
-   * pre-load [] that useLiveQuery renders with — otherwise an
-   * already-recorded exact-duplicate buy could commit as a fresh trade
-   * before existingTrades has actually loaded, and once committed it's in
-   * addedKeys and never reconsidered.
+   * The verification gate (Step 2 of the two-phase workflow): a ticker's
+   * pending buys/sells only get a green light once their net effect on its
+   * share count exactly reconciles against a broker "My Position"
+   * screenshot for that ticker — the most recent one, whether it was
+   * accepted in an earlier session (existingVerifications) or is still
+   * sitting in this batch's pending pool. A ticker with no pending buy/sell
+   * candidates at all (a dividend-only or stray verification-only read) has
+   * no share count to reconcile and is trivially matched. Nothing here
+   * writes anything — see confirmAndDistributeAll for the one place that
+   * actually commits, and only for tickers this reports as matched.
    */
-  useEffect(() => {
-    if (!initialDataLoaded) return;
-    autoCommitAllResolved();
-  }, [
-    initialDataLoaded,
-    pendingCandidates,
-    pendingVerifications,
-    pendingDividends,
-    tickerPortfolio,
-    portfolios,
-    existingPortfoliosByTicker,
-    existingTrades,
-    existingAllocations,
-  ]);
+  const tickerMatchStatuses = useMemo(() => {
+    const map = new Map<string, TickerMatchStatus>();
+    for (const [ticker, group] of tickerGroups) {
+      const pendingBuyShares = group.buys
+        .filter((e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key))
+        .reduce((sum, e) => sum + e.candidate.shares, 0);
+      const pendingSellShares = group.sells
+        .filter((e) => !addedKeys.has(e.key))
+        .reduce((sum, e) => sum + e.candidate.shares, 0);
+      const existingRemainingShares = existingTrades
+        .filter((t) => normalizeTicker(t.ticker) === ticker)
+        .reduce((sum, t) => sum + t.remainingShares, 0);
+
+      const verificationCandidates = [
+        ...existingVerifications.filter((v) => normalizeTicker(v.ticker) === ticker),
+        ...group.verifications.map((e) => e.verification),
+      ];
+      const latestVerification = verificationCandidates.length
+        ? verificationCandidates.reduce((a, b) => (a.capturedAt > b.capturedAt ? a : b))
+        : undefined;
+
+      map.set(
+        ticker,
+        checkTickerMatch({
+          hasShares: group.buys.length + group.sells.length > 0,
+          pendingBuyShares,
+          pendingSellShares,
+          existingRemainingShares,
+          verifiedUnits: latestVerification?.units,
+        }),
+      );
+    }
+    return map;
+  }, [tickerGroups, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications]);
+
+  const unmatchedTickerCount = tickerGroups.filter(([ticker]) => !tickerMatchStatuses.get(ticker)?.matched).length;
+  const allTickersMatched = tickerGroups.length > 0 && unmatchedTickerCount === 0;
 
   /**
    * A ticker resolved from an unmapped company name (see ThndrParser's
@@ -636,7 +684,7 @@ export function ImportPage() {
     <div>
       <PageHeader
         title="Import"
-        description="Step 1: extract every transaction from as many screenshots/PDFs/CSVs as you need. Step 2: pick a portfolio for each new stock — everything else (buys, dividends, position checks) commits on its own. Only a Sell still needs you to pick which lot(s) it closes."
+        description="Step 1: extract every transaction from as many screenshots/PDFs/CSVs as you need. Step 2: every ticker's share count must match a broker 'My Position' screenshot before anything can be distributed. Only once every ticker is verified can you confirm and allocate to portfolios."
         actions={
           <button
             onClick={() => {
@@ -742,7 +790,26 @@ export function ImportPage() {
 
       {tickerGroups.length > 0 ? (
         <div className="mt-4 space-y-4">
-          <h3 className="text-sm font-semibold text-slate-200">Step 2 — Distribute to portfolios</h3>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <div>
+              <h3 className="text-sm font-semibold text-slate-200">Step 2 — Verify &amp; Distribute</h3>
+              <p className="mt-1 text-xs text-slate-400">
+                {allTickersMatched
+                  ? "Every ticker's share count matches its broker position screenshot — ready to distribute."
+                  : `${unmatchedTickerCount} of ${tickerGroups.length} ticker${tickerGroups.length === 1 ? "" : "s"} still ${
+                      unmatchedTickerCount === 1 ? "needs" : "need"
+                    } to match a broker position screenshot before anything can be allocated to a portfolio.`}
+              </p>
+            </div>
+            <button
+              onClick={() => void confirmAndDistributeAll()}
+              disabled={!allTickersMatched || distributing || !initialDataLoaded}
+              className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:hover:bg-slate-700"
+            >
+              {distributing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+              Confirm — Distribute to Portfolios
+            </button>
+          </div>
           {tickerGroups.map(([ticker, group]) => {
             const existingIds = existingPortfoliosByTicker.get(ticker);
             const existingNames = existingIds ? [...existingIds].map((id) => portfolios.find((p) => p.id === id)?.name ?? "?") : [];
@@ -754,6 +821,8 @@ export function ImportPage() {
                 portfolios={portfolios}
                 portfolioId={portfolioForTicker(ticker)}
                 portfolioResolved={resolvedPortfolioId(ticker) !== undefined}
+                matchStatus={tickerMatchStatuses.get(ticker)}
+                distributing={distributing}
                 onPortfolioChange={(portfolioId) => setTickerPortfolio(ticker, portfolioId)}
                 addedKeys={addedKeys}
                 acceptedKeys={acceptedKeys}
@@ -812,6 +881,8 @@ function TickerGroupCard({
   portfolios,
   portfolioId,
   portfolioResolved,
+  matchStatus,
+  distributing,
   onPortfolioChange,
   addedKeys,
   acceptedKeys,
@@ -832,8 +903,12 @@ function TickerGroupCard({
   group: { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[]; dividends: DividendEntry[] };
   portfolios: { id: string; name: string }[];
   portfolioId: string;
-  /** False while the ticker's portfolio is still ambiguous (a brand-new ticker with more than one portfolio open) — auto-commit waits on the user picking one below. */
+  /** False while the ticker's portfolio is still ambiguous (a brand-new ticker with more than one portfolio open) — commit waits on the user picking one below. */
   portfolioResolved: boolean;
+  /** The verification gate's result for this ticker — nothing here commits until this is matched. */
+  matchStatus: TickerMatchStatus | undefined;
+  /** True while confirmAndDistributeAll is actively committing this batch — drives the row-level "Adding…" spinner. */
+  distributing: boolean;
   onPortfolioChange: (portfolioId: string) => void;
   addedKeys: Set<string>;
   acceptedKeys: Set<string>;
@@ -850,6 +925,7 @@ function TickerGroupCard({
   existingPortfolioHint: { multiple: boolean; names: string[] } | undefined;
   mergeSuggestion: string | undefined;
 }) {
+  const matched = matchStatus?.matched ?? false;
   const [renaming, setRenaming] = useState(false);
   const [draftTicker, setDraftTicker] = useState(ticker);
 
@@ -926,25 +1002,38 @@ function TickerGroupCard({
             <Pencil size={12} className="text-slate-500" />
           </button>
         )}
-        <label className="flex items-center gap-2 text-xs text-slate-400">
-          Portfolio
-          <select
-            value={portfolioId}
-            onChange={(e) => onPortfolioChange(e.target.value)}
-            className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
-          >
-            {portfolios.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex items-center gap-3">
+          <MatchBadge status={matchStatus} />
+          <label className="flex items-center gap-2 text-xs text-slate-400">
+            Portfolio
+            <select
+              value={portfolioId}
+              onChange={(e) => onPortfolioChange(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+            >
+              {portfolios.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
-      {!portfolioResolved ? (
+      {matchStatus?.reason === "no-verification" ? (
+        <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
+          No broker "My Position" screenshot uploaded for {ticker} yet — upload one in Step 1 so its share count can be
+          verified before anything is allocated to a portfolio.
+        </div>
+      ) : matchStatus?.reason === "mismatch" ? (
+        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
+          Mismatch: extracted transactions total {formatShares(matchStatus.netShares)} shares, but the broker screenshot
+          shows {formatShares(matchStatus.verifiedUnits ?? 0)} — fix a duplicate/missing row or re-upload before this can
+          be distributed.
+        </div>
+      ) : !portfolioResolved ? (
         <div className="border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
-          This ticker is new to more than one of your portfolios — pick one above and every buy, dividend, and position
-          check below will be added automatically.
+          This ticker is new to more than one of your portfolios — pick one above so it's ready once you confirm.
         </div>
       ) : null}
 
@@ -960,6 +1049,8 @@ function TickerGroupCard({
               skipped={skippedKeys.has(entry.key)}
               dismissed={dismissedKeys.has(entry.key)}
               portfolioResolved={portfolioResolved}
+              matched={matched}
+              distributing={distributing}
               error={rowErrors[entry.key]}
               shortfall={
                 cashShortfalls[entry.key]
@@ -986,6 +1077,8 @@ function TickerGroupCard({
               actionLabel={match ? "Allocate anyway" : "Allocate Sell"}
               actionClassName="bg-rose-500 hover:bg-rose-400"
               onAction={() => onAllocateSell(entry)}
+              disabled={!matched}
+              disabledReason={!matched ? "Verify this ticker's share count against a broker position screenshot first." : undefined}
             />
           );
         })}
@@ -1001,12 +1094,16 @@ function TickerGroupCard({
                 <span className="flex items-center gap-1 text-xs text-emerald-400">
                   <CheckCircle2 size={14} /> Accepted
                 </span>
-              ) : portfolioResolved ? (
+              ) : !matched ? (
+                <span className="text-xs text-amber-300">Blocked — needs verification</span>
+              ) : !portfolioResolved ? (
+                <span className="text-xs text-slate-500">Waiting for portfolio</span>
+              ) : distributing ? (
                 <span className="flex items-center gap-1 text-xs text-slate-500">
                   <Loader2 size={13} className="animate-spin" /> Accepting…
                 </span>
               ) : (
-                <span className="text-xs text-slate-500">Waiting for portfolio</span>
+                <span className="text-xs text-slate-500">Ready — click Confirm above</span>
               )}
             </div>
             {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
@@ -1023,12 +1120,16 @@ function TickerGroupCard({
                 <span className="flex items-center gap-1 text-xs text-emerald-400">
                   <CheckCircle2 size={14} /> Added
                 </span>
-              ) : portfolioResolved ? (
+              ) : !matched ? (
+                <span className="text-xs text-amber-300">Blocked — needs verification</span>
+              ) : !portfolioResolved ? (
+                <span className="text-xs text-slate-500">Waiting for portfolio</span>
+              ) : distributing ? (
                 <span className="flex items-center gap-1 text-xs text-slate-500">
                   <Loader2 size={13} className="animate-spin" /> Adding…
                 </span>
               ) : (
-                <span className="text-xs text-slate-500">Waiting for portfolio</span>
+                <span className="text-xs text-slate-500">Ready — click Confirm above</span>
               )}
             </div>
             {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
@@ -1039,11 +1140,35 @@ function TickerGroupCard({
   );
 }
 
+/** The verification-gate badge on a ticker card's header — the visual anchor for the whole two-phase workflow. */
+function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
+  if (!status || status.reason === "no-verification") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+        <ShieldAlert size={11} /> Needs broker screenshot
+      </span>
+    );
+  }
+  if (status.reason === "mismatch") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-400">
+        <ShieldAlert size={11} /> Mismatch
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+      <ShieldCheck size={11} /> Verified
+    </span>
+  );
+}
+
 /**
- * Buy rows commit on their own now (see ImportPage's autoCommitTicker) — this
- * only ever shows status, never an action button. A "low" confidence row
- * (an unmapped-ticker guess, the tier most likely to be flat-out wrong) gets
- * a visually distinct amber-tinted treatment instead of the confirmation
+ * Buy rows commit as a batch once the user clicks "Confirm — Distribute to
+ * Portfolios" (see ImportPage's confirmAndDistributeAll) — this only ever
+ * shows status, never an action button. A "low" confidence row (an
+ * unmapped-ticker guess, the tier most likely to be flat-out wrong) gets a
+ * visually distinct amber-tinted treatment instead of the confirmation
  * checkbox this used to require, since there's no click left to gate — the
  * warning styling plus a one-click delete afterward is the replacement
  * safety net.
@@ -1055,6 +1180,8 @@ export function AutoCommitRow({
   skipped,
   dismissed,
   portfolioResolved,
+  matched,
+  distributing,
   error,
   shortfall,
   onDelete,
@@ -1065,6 +1192,10 @@ export function AutoCommitRow({
   skipped: boolean;
   dismissed: boolean;
   portfolioResolved: boolean;
+  /** Whether this row's ticker has reconciled against a broker position screenshot yet — nothing commits until it does. */
+  matched: boolean;
+  /** True while confirmAndDistributeAll is actively committing this row's batch. */
+  distributing: boolean;
   error?: string;
   shortfall?: { amount: number; portfolioName: string; onDepositAndRetry: () => void };
   onDelete: () => void;
@@ -1127,12 +1258,16 @@ export function AutoCommitRow({
               </button>
             ) : null}
           </span>
-        ) : portfolioResolved ? (
+        ) : !matched ? (
+          <span className="text-xs text-amber-300">Blocked — needs verification</span>
+        ) : !portfolioResolved ? (
+          <span className="text-xs text-slate-500">Waiting for portfolio</span>
+        ) : distributing ? (
           <span className="flex items-center gap-1 text-xs text-slate-500">
             <Loader2 size={13} className="animate-spin" /> Adding…
           </span>
         ) : (
-          <span className="text-xs text-slate-500">Waiting for portfolio</span>
+          <span className="text-xs text-slate-500">Ready — click Confirm above</span>
         )}
       </div>
       {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
@@ -1154,13 +1289,16 @@ export function AutoCommitRow({
 }
 
 /**
- * Sell is the one row type Import never auto-commits (see ImportPage's
- * autoCommitTicker doc comment) — which lot(s) it closes is an explicit
+ * Sell is the one row type Import never batch-commits (see ImportPage's
+ * commitTickerGroup doc comment) — which lot(s) it closes is an explicit
  * financial decision (ADR-002), so "Allocate Sell" always opens the
  * allocation modal for the user to review and submit. Because that modal
  * is itself the review step, a low-confidence sell doesn't need a separate
- * confirmation gate the way an auto-committed buy did — it's flagged with
- * the same amber styling, but the button stays clickable either way.
+ * confirmation gate the way a batch-committed buy did — it's flagged with
+ * the same amber styling, but the button stays clickable either way. It's
+ * still gated on the ticker's verification-match status, though: `disabled`
+ * blocks the click (with `disabledReason` as its tooltip) until this
+ * ticker's share count reconciles against a broker position screenshot.
  */
 export function CandidateRow({
   entry,
@@ -1169,6 +1307,8 @@ export function CandidateRow({
   actionLabel,
   actionClassName,
   onAction,
+  disabled = false,
+  disabledReason,
 }: {
   entry: CandidateEntry;
   match: { matchType: "exact" | "possible"; matchedId: string } | undefined;
@@ -1176,6 +1316,8 @@ export function CandidateRow({
   actionLabel: string;
   actionClassName: string;
   onAction: () => void;
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   const c = entry.candidate;
   const isLowConfidence = c.confidence === "low";
@@ -1223,7 +1365,14 @@ export function CandidateRow({
             <CheckCircle2 size={14} /> Added
           </span>
         ) : (
-          <button onClick={onAction} className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 ${actionClassName}`}>
+          <button
+            onClick={onAction}
+            disabled={disabled}
+            title={disabled ? disabledReason : undefined}
+            className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 ${
+              disabled ? "" : actionClassName
+            }`}
+          >
             {actionLabel}
           </button>
         )}
