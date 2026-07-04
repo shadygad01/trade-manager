@@ -64,7 +64,7 @@ A "My Position" screenshot (units, average cost) is parsed independently of trad
 - **`quantityShortfall`** — computed shares fall short of the verified units (a trade is missing from the ledger — including the case where the portfolio has zero open trades for a verified ticker).
 - **`verificationStale`** — a trade/allocation for that ticker was recorded after the screenshot was captured, so the gap is expected and the two flags above are suppressed.
 
-This is surfaced on `PortfolioDetailPage`'s holdings table (with an "Accept as current" action that records a `source: "manual"` verification via `acceptComputedAsVerified`), and it never auto-corrects the ledger — shortfalls are never filled in with invented trades.
+This is surfaced on `PortfolioDetailPage`'s holdings table. `quantityMismatch` lists the ticker's open trades directly so the actual duplicate can be deleted (`TradeService.deleteTrade` — refunds its cost and removes its `Buy` event, guarded to only unallocated trades) instead of just labeled a warning; an earlier "Accept as current" action was removed because it only re-labeled the wrong computed total as verified without fixing anything. `quantityShortfall` remains pure information — the ledger is never auto-corrected by filling in an invented trade.
 
 ## Duplicate-trade detection on import
 

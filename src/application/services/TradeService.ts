@@ -93,6 +93,57 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
   return { trade };
 }
 
+/**
+ * Undoes a mistaken buy — the real fix for ground-truth reconciliation's
+ * (see reconciliation.ts) `quantityMismatch`, which usually means a
+ * duplicate import. An earlier "Accept as current" action only re-labeled
+ * the wrong computed total as verified rather than fixing anything, and was
+ * removed for exactly that reason — this instead deletes the actual
+ * offending trade so the ledger becomes correct on its own, symmetrically
+ * undoing exactly what `recordBuy` did: refunding the cash it debited and
+ * removing the `Buy` timeline event and any journal entry that narrated it,
+ * so nothing is left behind, the same as if the trade had never been
+ * recorded.
+ *
+ * Guarded to only ever delete a trade with zero shares closed against it
+ * (`remainingShares === shares`): once even one allocation exists, deleting
+ * the trade out from under it would orphan that `TradeAllocation` and
+ * silently corrupt realized P/L — this is refused outright rather than
+ * attempted, matching this app's ledger-never-lies philosophy (ADR-002).
+ */
+export async function deleteTrade(repos: AppRepositories, tradeId: string): Promise<void> {
+  const trade = await repos.trades.getById(tradeId);
+  if (!trade) {
+    throw new Error(`Trade not found: ${tradeId}`);
+  }
+  if (trade.remainingShares !== trade.shares) {
+    throw new Error(
+      "This trade has shares closed against it (a sell allocation exists) — it can't be deleted without corrupting that history."
+    );
+  }
+
+  const portfolio = await repos.portfolios.getById(trade.portfolioId);
+  if (!portfolio) {
+    throw new Error(`Portfolio not found: ${trade.portfolioId}`);
+  }
+
+  const totalCost = Money.from(trade.shares * trade.entryPrice).add(Money.from(trade.fees)).add(Money.from(trade.taxes));
+  await repos.portfolios.save({ ...portfolio, cash: Money.from(portfolio.cash).add(totalCost).toNumber() });
+
+  const events = await repos.timeline.getByPortfolio(trade.portfolioId);
+  const buyEvent = events.find((e) => e.type === "Buy" && e.relatedTradeIds?.includes(tradeId));
+  if (buyEvent) {
+    await repos.timeline.delete(buyEvent.id);
+  }
+
+  const journalEntry = await repos.journal.getByTrade(tradeId);
+  if (journalEntry) {
+    await repos.journal.delete(journalEntry.id);
+  }
+
+  await repos.trades.delete(tradeId);
+}
+
 export interface RecordSellAllocationInput {
   tradeId: string;
   shares: number;

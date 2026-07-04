@@ -2,9 +2,7 @@ import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
-import { generateId } from "@domain/value-objects/id";
 import type { PositionAggregate } from "./TradeService";
-import type { AppRepositories } from "./types";
 
 export interface PositionReconciliation {
   ticker: string;
@@ -80,25 +78,4 @@ export function reconcilePositions(
     });
   }
   return results;
-}
-
-/**
- * Manual override: the user confirms the currently-computed share count is
- * correct without a fresh broker screenshot, recorded as a `source: "manual"`
- * verification so it still participates in future reconciliation.
- */
-export async function acceptComputedAsVerified(
-  repos: AppRepositories,
-  portfolioId: string,
-  ticker: string,
-  computedShares: number
-): Promise<void> {
-  await repos.verifications.save({
-    id: generateId(),
-    portfolioId,
-    ticker: normalizeTicker(ticker),
-    units: computedShares,
-    capturedAt: new Date().toISOString(),
-    source: "manual",
-  });
 }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
-import { recordBuy, recordSell, computePositions, moveTrade } from "./TradeService";
+import { recordBuy, recordSell, computePositions, moveTrade, deleteTrade } from "./TradeService";
 import { InsufficientCashError } from "./errors";
 
 function seedPortfolio(cash: number) {
@@ -123,6 +123,56 @@ describe("recordBuy", () => {
         executionTime: "10:30",
       })
     ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe("deleteTrade", () => {
+  it("removes an unallocated trade, refunds its cost, and removes its Buy event", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 10,
+      entryPrice: 50,
+      fees: 5,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    await deleteTrade(repos, trade.id);
+
+    expect(await repos.trades.getById(trade.id)).toBeUndefined();
+    const portfolio = await repos.portfolios.getById("p1");
+    expect(portfolio?.cash).toBeCloseTo(10_000);
+    const events = await repos.timeline.getByPortfolio("p1");
+    expect(events.some((e) => e.type === "Buy" && e.relatedTradeIds?.includes(trade.id))).toBe(false);
+  });
+
+  it("refuses to delete a trade that has shares closed against it", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [{ tradeId: trade.id, shares: 4, exitPrice: 55 }],
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+
+    await expect(deleteTrade(repos, trade.id)).rejects.toThrow(/shares closed against it/i);
+    expect(await repos.trades.getById(trade.id)).toBeDefined();
+  });
+
+  it("rejects an unknown trade id", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    await expect(deleteTrade(repos, "nope")).rejects.toThrow(/not found/i);
   });
 });
 

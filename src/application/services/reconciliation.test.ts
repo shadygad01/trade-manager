@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reconcilePositions, acceptComputedAsVerified } from "./reconciliation";
-import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
+import { reconcilePositions } from "./reconciliation";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
@@ -91,15 +90,5 @@ describe("reconcilePositions", () => {
   it("skips tickers with no verification at all", () => {
     const results = reconcilePositions([position("HRHO", 10)], [], [], []);
     expect(results).toHaveLength(0);
-  });
-});
-
-describe("acceptComputedAsVerified", () => {
-  it("saves a manual verification with the given share count", async () => {
-    const repos = createFakeRepositories();
-    await acceptComputedAsVerified(repos, "p1", "comi", 42);
-    const saved = await repos.verifications.getLatest("p1", "COMI");
-    expect(saved?.units).toBe(42);
-    expect(saved?.source).toBe("manual");
   });
 });

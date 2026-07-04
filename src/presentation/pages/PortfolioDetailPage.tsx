@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore } from "lucide-react";
+import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2 } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { computePositions } from "@application/services/TradeService";
+import { computePositions, deleteTrade } from "@application/services/TradeService";
 import {
   deposit,
   withdraw,
@@ -14,14 +14,14 @@ import {
   archivePortfolio,
   unarchivePortfolio,
 } from "@application/services/PortfolioService";
-import { reconcilePositions, acceptComputedAsVerified } from "@application/services/reconciliation";
+import { reconcilePositions } from "@application/services/reconciliation";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
 import { StatTile } from "@presentation/components/StatTile";
 import { CapitalDeploymentFlow } from "@presentation/components/CapitalDeploymentFlow";
-import { formatMoney, formatPercent, formatShares, signClass } from "@presentation/lib/format";
+import { formatDate, formatMoney, formatPercent, formatShares, signClass } from "@presentation/lib/format";
 
 type CashModalKind = "deposit" | "withdraw" | "dividend" | "adjustment" | null;
 type CorporateActionKind = "split" | "rightsIssue" | null;
@@ -30,12 +30,19 @@ export function PortfolioDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [cashModal, setCashModal] = useState<CashModalKind>(null);
   const [corporateActionOpen, setCorporateActionOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState<{ tradeId: string; message: string } | null>(null);
+  // Deleting a trade doesn't reliably retrigger dexie-react-hooks' liveQuery
+  // for this page's positions/reconciliation (a pre-existing gap, not
+  // specific to this action) — bumping this forces both queries to
+  // re-run immediately instead of only reflecting the change after a
+  // manual page reload.
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const portfolio = useLiveQuery(() => repos.portfolios.getById(id), [id]);
   const positions = useLiveQuery(async (): Promise<Position[]> => {
     const priceMap = await repos.prices.getAllPrices();
     return computePositions(repos, id, priceMap);
-  }, [id]);
+  }, [id, refreshKey]);
   const reconciliations = useLiveQuery(async (): Promise<PositionReconciliation[]> => {
     if (!positions) return [];
     const [verifications, trades, allocations] = await Promise.all([
@@ -44,12 +51,21 @@ export function PortfolioDetailPage() {
       repos.allocations.getByPortfolio(id),
     ]);
     return reconcilePositions(positions, verifications, trades, allocations);
-  }, [id, positions]);
+  }, [id, positions, refreshKey]);
   const reconciliationByTicker = new Map((reconciliations ?? []).map((r) => [r.ticker, r]));
   const timelineEvents = useLiveQuery(() => repos.timeline.getByPortfolio(id), [id]);
 
-  async function acceptCurrent(ticker: string, computedShares: number) {
-    await acceptComputedAsVerified(repos, id, ticker, computedShares);
+  async function handleDeleteTrade(tradeId: string) {
+    if (!confirm("Delete this trade? Its cost will be refunded to the portfolio's cash balance. This can't be undone.")) {
+      return;
+    }
+    setDeleteError(null);
+    try {
+      await deleteTrade(repos, tradeId);
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setDeleteError({ tradeId, message: e instanceof Error ? e.message : "Failed to delete trade." });
+    }
   }
 
   if (portfolio === undefined || positions === undefined) {
@@ -200,29 +216,46 @@ export function PortfolioDetailPage() {
                       ) : r.verificationStale ? (
                         <span className="text-xs text-slate-500">Verification outdated</span>
                       ) : r.quantityMismatch ? (
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-col gap-1.5">
                           <span className="flex items-center gap-1 text-xs text-rose-400">
                             <ShieldAlert size={13} /> {formatShares(p.totalShares)} vs {formatShares(r.verifiedUnits)} verified
                           </span>
-                          <button
-                            onClick={() => void acceptCurrent(p.ticker, p.totalShares)}
-                            className="rounded border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800"
-                          >
-                            Accept as current
-                          </button>
+                          <p className="text-[11px] text-slate-500">
+                            Likely a duplicate import — delete the offending buy below, then this should match on its own.
+                          </p>
+                          <ul className="space-y-1">
+                            {p.openTrades.map((t) => {
+                              const deletable = t.remainingShares === t.shares;
+                              return (
+                                <li key={t.id} className="flex items-center gap-2 text-[11px] text-slate-400">
+                                  <span className="tabular-nums">
+                                    {formatShares(t.shares)} sh @ {formatMoney(t.entryPrice)} · {formatDate(t.executionDate)}
+                                  </span>
+                                  {deletable ? (
+                                    <button
+                                      onClick={() => void handleDeleteTrade(t.id)}
+                                      title="Delete this trade and refund its cost"
+                                      className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  ) : (
+                                    <span title="Has shares sold against it — can't be deleted" className="text-slate-700">
+                                      <Trash2 size={12} />
+                                    </span>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                          {deleteError && p.openTrades.some((t) => t.id === deleteError.tradeId) ? (
+                            <p className="text-[11px] text-rose-400">{deleteError.message}</p>
+                          ) : null}
                         </div>
                       ) : r.quantityShortfall ? (
-                        <div className="flex items-center gap-2">
-                          <span className="flex items-center gap-1 text-xs text-amber-400">
-                            <ShieldAlert size={13} /> Missing {formatShares(r.verifiedUnits - p.totalShares)} shares
-                          </span>
-                          <button
-                            onClick={() => void acceptCurrent(p.ticker, p.totalShares)}
-                            className="rounded border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800"
-                          >
-                            Accept as current
-                          </button>
-                        </div>
+                        <span className="flex items-center gap-1 text-xs text-amber-400">
+                          <ShieldAlert size={13} /> Missing {formatShares(r.verifiedUnits - p.totalShares)} shares
+                        </span>
                       ) : (
                         <span className="flex items-center gap-1 text-xs text-emerald-400">
                           <ShieldCheck size={13} /> Matches broker

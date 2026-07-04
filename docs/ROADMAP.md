@@ -204,6 +204,18 @@ User-provided sample: a Thndr "Invoice" — a one-transaction-per-document PDF e
 
 - 2 new tests (233 total).
 
+### Post-sprint-7 — a real fix for reconciliation mismatches, and removing the fake one
+
+Direct user feedback on the reconciliation workflow: "Accept as current" only re-labeled the wrong computed share total as verified — it never fixed anything, just silenced the warning. The user explicitly asked for it to be removed, and for a real fix: the ability to find and delete the actual duplicate trade causing a `quantityMismatch`, so the ledger becomes correct on its own.
+
+- **`TradeService.deleteTrade`** (new): undoes a mistaken buy — refunds the exact cash it debited, removes its `Buy` timeline event and any journal entry, then deletes the trade row. Guarded to only ever delete a trade with zero shares closed against it (`remainingShares === shares`); a trade with any allocation is refused outright rather than risking orphaned `TradeAllocation` records or corrupted realized P/L.
+- **`PortfolioDetailPage`**'s `quantityMismatch` row now lists the ticker's open trades directly, each with a delete action (with confirmation) instead of the removed "Accept as current" button. `quantityShortfall` is now pure information with no action, for the same reason — the ledger is never auto-corrected by pretending a lower number is truth.
+- **`acceptComputedAsVerified`** and its UI were removed entirely (`reconciliation.ts`, both call sites).
+- **A pre-existing `useLiveQuery` reactivity gap was found and fixed** while verifying this end-to-end in a real browser: `positions`/`reconciliations` on this page didn't reliably re-run after a mutation (confirmed via direct IndexedDB inspection that the data itself was always correct — only the already-mounted page's view was stale until a manual reload; the old "Accept as current" had the exact same silent gap). Fixed with an explicit `refreshKey` state bumped after a delete, added to both queries' dependency arrays, forcing an immediate re-run rather than waiting on Dexie's own change-detection.
+- Verified end-to-end with a Playwright script driving the real running app (not mocked repos): created a portfolio, recorded a genuine duplicate buy, seeded a lower verified count directly via IndexedDB, confirmed the mismatch UI and delete buttons render, deleted the duplicate, and confirmed the row flips to "Matches broker" immediately — no reload required.
+
+- 3 new tests (235 total; net -1 after removing `acceptComputedAsVerified`'s test).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
