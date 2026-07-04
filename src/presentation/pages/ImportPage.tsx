@@ -593,6 +593,20 @@ export function ImportPage() {
    * page therefore piles up as separate pending rows with nothing flagging
    * the cause, inflating a ticker's extracted share total past its broker
    * screenshot with no way to fix it short of re-extracting from scratch.
+   *
+   * The same inflation happens for the opposite reason too: a pending
+   * candidate can duplicate a trade already committed from an earlier import
+   * (the same statement re-uploaded weeks later) — findDuplicateBuyMatch/
+   * findDuplicateSellMatch already flag that with the amber/rose "Possible
+   * duplicate"/"Duplicate" badge, but before this only ever informed the
+   * user; there was no action to actually discard the redundant pending row,
+   * so a ticker like this stayed permanently "Blocked" with its Mismatch
+   * banner pointing at a duplicate nothing could remove. Folding both cases
+   * into one set means "Clear suspected duplicates" and the per-row Discard
+   * button resolve either kind the same way — discarding a pending row is
+   * always safe regardless of which sibling or already-committed trade it
+   * duplicates, since nothing has been committed for it yet.
+   *
    * Computed only over rows still actually pending (excluding
    * added/skipped/dismissed) since those are already resolved one way or
    * another and out of this batch's editable pool.
@@ -601,8 +615,16 @@ export function ImportPage() {
     const stillPending = pendingCandidates.filter(
       (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
     );
-    return suggestDuplicatePendingCandidateKeysToDelete(stillPending);
-  }, [pendingCandidates, addedKeys, skippedKeys, dismissedKeys]);
+    const siblingDuplicateKeys = suggestDuplicatePendingCandidateKeysToDelete(stillPending);
+    const existingTradeDuplicateKeys = stillPending
+      .filter((e) =>
+        e.candidate.side === "BUY"
+          ? findDuplicateBuyMatch(e.candidate, existingTrades) !== undefined
+          : findDuplicateSellMatch(e.candidate, existingAllocations) !== undefined,
+      )
+      .map((e) => e.key);
+    return [...new Set([...siblingDuplicateKeys, ...existingTradeDuplicateKeys])];
+  }, [pendingCandidates, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingAllocations]);
   const pendingDuplicateCandidateKeySet = useMemo(() => new Set(pendingDuplicateCandidateKeys), [pendingDuplicateCandidateKeys]);
 
   /**
@@ -950,7 +972,7 @@ export function TickerGroupCard({
   dismissedKeys: Set<string>;
   rowErrors: Record<string, string>;
   duplicateMatch: (candidate: ParsedTradeCandidate) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
-  /** Keys of pending (not yet added/skipped/dismissed) candidates that duplicate a sibling in this same import batch — see suggestDuplicatePendingCandidateKeysToDelete. */
+  /** Keys of pending (not yet added/skipped/dismissed) candidates suggested for discard — either a duplicate of a sibling in this same batch, or of a trade already committed to the ledger. See ImportPage's pendingDuplicateCandidateKeys. */
   suspectedDuplicateKeys: Set<string>;
   onDeleteAutoAdded: (entry: CandidateEntry) => void;
   onDiscardPending: (entry: CandidateEntry) => void;
@@ -1250,7 +1272,7 @@ export function AutoCommitRow({
   /** True while confirmAndDistributeAll is actively committing this row's batch. */
   distributing: boolean;
   error?: string;
-  /** Flags a still-pending row as a likely repeat of a sibling in this same batch (see suggestDuplicatePendingCandidateKeysToDelete) — distinct from `match`, which only ever compares against already-committed trades. */
+  /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
   suspectedDuplicate?: boolean;
   onDelete: () => void;
   /** Discards this row from the pending pool outright — only relevant while it's still suspectedDuplicate and not yet added/skipped/dismissed. */
@@ -1293,7 +1315,7 @@ export function AutoCommitRow({
               <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
             </span>
           ) : null}
-          {canDiscard ? (
+          {canDiscard && !match ? (
             <span
               title="Same ticker, side, date and share count as another row still pending in this batch — very likely the same transaction read twice."
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
@@ -1380,7 +1402,7 @@ export function CandidateRow({
   onAction: () => void;
   disabled?: boolean;
   disabledReason?: string;
-  /** Flags a still-pending row as a likely repeat of a sibling in this same batch (see suggestDuplicatePendingCandidateKeysToDelete) — distinct from `match`, which only ever compares against already-committed trades. */
+  /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
   suspectedDuplicate?: boolean;
   /** Discards this row from the pending pool outright — only relevant while it's still suspectedDuplicate and not yet added. */
   onDiscardPending?: () => void;
@@ -1426,7 +1448,7 @@ export function CandidateRow({
               <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
             </span>
           ) : null}
-          {canDiscard ? (
+          {canDiscard && !match ? (
             <span
               title="Same ticker, side, date and share count as another row still pending in this batch — very likely the same transaction read twice."
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
