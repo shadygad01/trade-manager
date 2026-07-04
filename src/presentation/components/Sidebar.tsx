@@ -24,7 +24,7 @@ const NAV_ITEMS = [
 
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
   const [, dashboardParams] = useRoute("/");
-  const [, portfolioParams] = useRoute("/portfolios/:id/:rest*");
+  const [, portfolioParams] = useRoute("/portfolios/:id/:rest?");
   const [location] = useLocation();
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []);
   const [switcherOpen, setSwitcherOpen] = useState(false);
