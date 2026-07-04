@@ -454,9 +454,10 @@ describe("ThndrParser tracked-date-range guard", () => {
     expect(parser.parseStatementText(text)).toHaveLength(0);
   });
 
-  it("defaults to a rolling lookback rather than a fixed stale literal date", () => {
+  it("defaults to the product's fixed 2026-01-01 tracking start", () => {
     const parser = new ThndrParser();
-    expect(parser.isWithinTrackedRange("2020-01-01")).toBe(false);
+    expect(parser.isWithinTrackedRange("2025-12-31")).toBe(false);
+    expect(parser.isWithinTrackedRange("2026-01-01")).toBe(true);
     expect(parser.isWithinTrackedRange(new Date().toISOString().slice(0, 10))).toBe(true);
   });
 });

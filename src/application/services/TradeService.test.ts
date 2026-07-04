@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
 import { recordBuy, recordSell, computePositions, moveTrade, deleteTrade, renameTickerEverywhere } from "./TradeService";
-import { InsufficientCashError } from "./errors";
 
 function seedPortfolio(cash: number) {
   return createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: cash });
@@ -74,41 +73,21 @@ describe("recordBuy", () => {
     expect(trade.sector).toBe("Custom Sector");
   });
 
-  it("rejects a buy when portfolio cash is insufficient", async () => {
+  it("allows a buy that exceeds portfolio cash, letting cash go negative", async () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(100)] });
 
-    await expect(
-      recordBuy(repos, {
-        portfolioId: "p1",
-        ticker: "COMI",
-        shares: 100,
-        entryPrice: 50,
-        executionDate: "2026-01-05",
-        executionTime: "10:30",
-      })
-    ).rejects.toThrow(/insufficient cash/i);
-  });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
 
-  it("rejects with a structured InsufficientCashError carrying the exact shortfall", async () => {
-    const repos = createFakeRepositories({ portfolios: [seedPortfolio(100)] });
-
-    try {
-      await recordBuy(repos, {
-        portfolioId: "p1",
-        ticker: "COMI",
-        shares: 10,
-        entryPrice: 50,
-        executionDate: "2026-01-05",
-        executionTime: "10:30",
-      });
-      expect.unreachable("recordBuy should have thrown");
-    } catch (e) {
-      expect(e).toBeInstanceOf(InsufficientCashError);
-      const err = e as InsufficientCashError;
-      expect(err.portfolioId).toBe("p1");
-      expect(err.required).toBeCloseTo(500);
-      expect(err.available).toBeCloseTo(100);
-    }
+    expect(trade.shares).toBe(100);
+    const portfolio = await repos.portfolios.getById("p1");
+    expect(portfolio?.cash).toBeCloseTo(100 - 100 * 50);
   });
 
   it("throws for an unknown portfolio", async () => {
@@ -123,6 +102,20 @@ describe("recordBuy", () => {
         executionTime: "10:30",
       })
     ).rejects.toThrow(/not found/i);
+  });
+
+  it("rejects a buy dated before the 2026-01-01 tracking start", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    await expect(
+      recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2025-12-31",
+        executionTime: "10:30",
+      })
+    ).rejects.toThrow(/2026-01-01/);
   });
 });
 
@@ -411,6 +404,28 @@ describe("recordSell", () => {
       })
     ).rejects.toThrow(/ticker mismatch/i);
   });
+
+  it("rejects a sell dated before the 2026-01-01 tracking start", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    await expect(
+      recordSell(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        allocations: [{ tradeId: trade.id, shares: 10, exitPrice: 60 }],
+        executionDate: "2025-06-01",
+        executionTime: "11:00",
+      })
+    ).rejects.toThrow(/2026-01-01/);
+  });
 });
 
 describe("computePositions", () => {
@@ -590,7 +605,7 @@ describe("moveTrade", () => {
     expect(p2Events).toHaveLength(3); // 2 buys + 1 sell
   });
 
-  it("rejects the move when the target portfolio can't cover the net cost", async () => {
+  it("allows the move even when the target portfolio can't cover the net cost, letting cash go negative", async () => {
     const repos = createFakeRepositories({
       portfolios: [seedPortfolio(10_000), createPortfolio({ id: "p2", name: "Other", kind: "Trading", initialCash: 10 })],
     });
@@ -603,7 +618,10 @@ describe("moveTrade", () => {
       executionTime: "10:30",
     });
 
-    await expect(moveTrade(repos, trade.id, "p2")).rejects.toThrow(/insufficient cash/i);
+    await moveTrade(repos, trade.id, "p2");
+
+    const target = await repos.portfolios.getById("p2");
+    expect(target?.cash).toBeCloseTo(10 - 100 * 50);
   });
 
   it("is a no-op when the target is the same as the current portfolio", async () => {

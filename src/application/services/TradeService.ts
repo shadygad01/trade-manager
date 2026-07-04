@@ -6,11 +6,17 @@ import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { KNOWN_EGX_TICKERS } from "@domain/value-objects/knownTickers";
-import { InsufficientCashError } from "./errors";
+import { TRACKING_START_DATE, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
 
 function companyNameForTicker(ticker: string): string | undefined {
   return KNOWN_EGX_TICKERS.find((t) => t.ticker === ticker)?.companyName;
+}
+
+function assertWithinTrackingRange(executionDate: string): void {
+  if (isBeforeTrackingStart(executionDate)) {
+    throw new Error(`Transactions before ${TRACKING_START_DATE} are not tracked: got ${executionDate}`);
+  }
 }
 
 function toTimestamp(executionDate: string, executionTime: string): string {
@@ -42,6 +48,7 @@ export interface RecordBuyResult {
 }
 
 export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): Promise<RecordBuyResult> {
+  assertWithinTrackingRange(input.executionDate);
   const portfolio = await repos.portfolios.getById(input.portfolioId);
   if (!portfolio) {
     throw new Error(`Portfolio not found: ${input.portfolioId}`);
@@ -51,14 +58,6 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
   const taxes = input.taxes ?? 0;
   const totalCost = Money.from(input.shares * input.entryPrice).add(Money.from(fees)).add(Money.from(taxes));
   const currentCash = Money.from(portfolio.cash);
-  if (totalCost.greaterThan(currentCash)) {
-    throw new InsufficientCashError(
-      input.portfolioId,
-      totalCost.toNumber(),
-      currentCash.toNumber(),
-      `Insufficient cash in portfolio ${input.portfolioId}: need ${totalCost.toFixed()}, have ${currentCash.toFixed()}`
-    );
-  }
 
   const normalizedTicker = normalizeTicker(input.ticker);
   const trade = createTrade({
@@ -254,6 +253,7 @@ export async function recordSell(repos: AppRepositories, input: RecordSellInput)
   if (input.allocations.length === 0) {
     throw new Error("recordSell requires at least one allocation");
   }
+  assertWithinTrackingRange(input.executionDate);
 
   const portfolio = await repos.portfolios.getById(input.portfolioId);
   if (!portfolio) {
@@ -424,15 +424,6 @@ export async function moveTrade(
     )
   );
   const netCost = buyCost.subtract(netProceeds);
-
-  if (netCost.isPositive() && netCost.greaterThan(Money.from(targetPortfolio.cash))) {
-    throw new InsufficientCashError(
-      targetPortfolioId,
-      netCost.toNumber(),
-      Money.from(targetPortfolio.cash).toNumber(),
-      `Insufficient cash in target portfolio ${targetPortfolioId}: need ${netCost.toFixed()}, have ${Money.from(targetPortfolio.cash).toFixed()}`
-    );
-  }
 
   await repos.portfolios.save({ ...sourcePortfolio, cash: Money.from(sourcePortfolio.cash).add(netCost).toNumber() });
   await repos.portfolios.save({ ...targetPortfolio, cash: Money.from(targetPortfolio.cash).subtract(netCost).toNumber() });

@@ -11,6 +11,7 @@ import {
   recordRightsIssue,
   archivePortfolio,
   unarchivePortfolio,
+  renamePortfolio,
 } from "./PortfolioService";
 
 describe("createPortfolioAndSave", () => {
@@ -40,6 +41,23 @@ describe("archivePortfolio / unarchivePortfolio", () => {
   });
 });
 
+describe("renamePortfolio", () => {
+  it("updates the name without touching cash or any other field", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
+    const renamed = await renamePortfolio(repos, "p1", "Retirement Fund");
+    expect(renamed.name).toBe("Retirement Fund");
+    expect(renamed.cash).toBe(1000);
+    expect((await repos.portfolios.getById("p1"))?.name).toBe("Retirement Fund");
+  });
+
+  it("trims whitespace and rejects an empty name", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
+    const renamed = await renamePortfolio(repos, "p1", "  Trading  ");
+    expect(renamed.name).toBe("Trading");
+    await expect(renamePortfolio(repos, "p1", "   ")).rejects.toThrow(/name/i);
+  });
+});
+
 describe("deposit / withdraw", () => {
   it("deposit increases cash and appends a Deposit event", async () => {
     const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
@@ -59,9 +77,10 @@ describe("deposit / withdraw", () => {
     expect(events[0].amount).toBe(-400);
   });
 
-  it("withdraw rejects an amount larger than available cash", async () => {
+  it("withdraw allows an amount larger than available cash, letting cash go negative", async () => {
     const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 100 })] });
-    await expect(withdraw(repos, "p1", 200)).rejects.toThrow(/insufficient cash/i);
+    const updated = await withdraw(repos, "p1", 200);
+    expect(updated.cash).toBe(-100);
   });
 
   it("rejects non-positive amounts", async () => {
@@ -86,6 +105,13 @@ describe("recordDividend", () => {
     await recordDividend(repos, "p1", { ticker: "EAST", amount: 64.98, date: "2026-06-28" });
     const [event] = await repos.timeline.getByPortfolio("p1");
     expect(event.timestamp).toBe("2026-06-28T00:00");
+  });
+
+  it("rejects a dividend dated before the 2026-01-01 tracking start", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
+    await expect(recordDividend(repos, "p1", { ticker: "EAST", amount: 64.98, date: "2025-12-31" })).rejects.toThrow(
+      /2026-01-01/
+    );
   });
 });
 

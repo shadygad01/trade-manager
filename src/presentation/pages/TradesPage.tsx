@@ -7,6 +7,7 @@ import { recordBuy, moveTrade } from "@application/services/TradeService";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { getTradeStatus } from "@domain/entities/Trade";
+import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import { PageHeader } from "@presentation/components/PageHeader";
@@ -488,6 +489,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             Execution date
             <input
               type="date"
+              min={TRACKING_START_DATE}
               value={executionDate}
               onChange={(e) => setExecutionDate(e.target.value)}
               className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"

@@ -1,15 +1,8 @@
-/**
- * Shared tracked-date-range helper for BrokerParser implementations. A
- * hardcoded cutoff literal silently goes stale the moment "now" passes it;
- * deriving the default from call time (a rolling N-year lookback) never
- * goes stale, while remaining fully overridable per instance.
- */
-const DEFAULT_TRACKED_YEARS_BACK = 3;
+import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 
-export function defaultTrackedSince(yearsBack: number = DEFAULT_TRACKED_YEARS_BACK): string {
-  const d = new Date();
-  d.setUTCFullYear(d.getUTCFullYear() - yearsBack);
-  return d.toISOString().slice(0, 10);
+/** Shared tracked-date-range helper for BrokerParser implementations. */
+export function defaultTrackedSince(): string {
+  return TRACKING_START_DATE;
 }
 
 // A trade dated after "tomorrow" (a one-day grace window for timezone skew)

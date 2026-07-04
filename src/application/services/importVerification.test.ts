@@ -62,4 +62,29 @@ describe("checkTickerMatch", () => {
     expect(result.matched).toBe(true);
     expect(result.reason).toBe("no-shares-to-verify");
   });
+
+  it("is trivially matched for a fully sold-out ticker even with no broker screenshot", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 50,
+      pendingSellShares: 50,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBe("closed-position");
+    expect(result.netShares).toBe(0);
+  });
+
+  it("still requires a screenshot when net shares are nonzero and none was uploaded", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 50,
+      pendingSellShares: 20,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("no-verification");
+  });
 });
