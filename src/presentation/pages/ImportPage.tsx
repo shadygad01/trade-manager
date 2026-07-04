@@ -1,11 +1,17 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
-import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, Pencil, Trash2, XCircle } from "lucide-react";
+import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, Pencil, Trash2, XCircle, Eraser } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
-import { findDuplicateBuyMatch, findDuplicateSellMatch, dividendContentKey, buildExistingDividendKeys } from "@application/services/duplicateDetection";
+import {
+  findDuplicateBuyMatch,
+  findDuplicateSellMatch,
+  dividendContentKey,
+  buildExistingDividendKeys,
+  suggestDuplicatePendingCandidateKeysToDelete,
+} from "@application/services/duplicateDetection";
 import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -453,6 +459,30 @@ export function ImportPage() {
     setRecentFileResults([]);
   }
 
+  /**
+   * Discards suggested-duplicate pending candidates outright (unlike a
+   * committed trade's delete, which reverses cash — these were never
+   * committed, so there's nothing to refund). Never touches an
+   * already-added/skipped/dismissed row; only rows still genuinely pending
+   * are eligible, matching pendingDuplicateCandidateKeys below.
+   */
+  function clearPendingDuplicateCandidates() {
+    if (pendingDuplicateCandidateKeys.length === 0) return;
+    const keys = new Set(pendingDuplicateCandidateKeys);
+    importSession.update((prev) => ({
+      ...prev,
+      pendingCandidates: prev.pendingCandidates.filter((e) => !keys.has(e.key)),
+    }));
+  }
+
+  /** Discards one specific still-pending candidate — the single-row counterpart to clearPendingDuplicateCandidates. */
+  function discardPendingCandidate(key: string) {
+    importSession.update((prev) => ({
+      ...prev,
+      pendingCandidates: prev.pendingCandidates.filter((e) => e.key !== key),
+    }));
+  }
+
   async function addDividend(entry: DividendEntry, ticker: string) {
     try {
       const portfolioId = portfolioForTicker(ticker);
@@ -553,6 +583,27 @@ export function ImportPage() {
     }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [pendingCandidates, pendingVerifications, pendingDividends]);
+
+  /**
+   * Nothing dedupes a pending Buy/Sell candidate against its own siblings in
+   * the same batch the way processFiles already dedupes verifications and
+   * dividends at extraction time — findDuplicateBuyMatch/findDuplicateSellMatch
+   * (below, via duplicateMatch) only ever compare against trades already
+   * committed to the ledger. An overlapping multi-file drop or a repeated PDF
+   * page therefore piles up as separate pending rows with nothing flagging
+   * the cause, inflating a ticker's extracted share total past its broker
+   * screenshot with no way to fix it short of re-extracting from scratch.
+   * Computed only over rows still actually pending (excluding
+   * added/skipped/dismissed) since those are already resolved one way or
+   * another and out of this batch's editable pool.
+   */
+  const pendingDuplicateCandidateKeys = useMemo(() => {
+    const stillPending = pendingCandidates.filter(
+      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    );
+    return suggestDuplicatePendingCandidateKeysToDelete(stillPending);
+  }, [pendingCandidates, addedKeys, skippedKeys, dismissedKeys]);
+  const pendingDuplicateCandidateKeySet = useMemo(() => new Set(pendingDuplicateCandidateKeys), [pendingDuplicateCandidateKeys]);
 
   /**
    * The verification gate (Step 2 of the two-phase workflow): a ticker's
@@ -775,14 +826,25 @@ export function ImportPage() {
                     } to match a broker position screenshot before anything can be allocated to a portfolio.`}
               </p>
             </div>
-            <button
-              onClick={() => void confirmAndDistributeAll()}
-              disabled={!allTickersMatched || distributing || !initialDataLoaded}
-              className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:hover:bg-slate-700"
-            >
-              {distributing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-              Confirm — Distribute to Portfolios
-            </button>
+            <div className="flex items-center gap-2">
+              {pendingDuplicateCandidateKeys.length > 0 ? (
+                <button
+                  onClick={clearPendingDuplicateCandidates}
+                  className="flex items-center gap-1.5 rounded-md border border-rose-500/40 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10"
+                >
+                  <Eraser size={14} />
+                  Clear suspected duplicates ({pendingDuplicateCandidateKeys.length})
+                </button>
+              ) : null}
+              <button
+                onClick={() => void confirmAndDistributeAll()}
+                disabled={!allTickersMatched || distributing || !initialDataLoaded}
+                className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:hover:bg-slate-700"
+              >
+                {distributing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                Confirm — Distribute to Portfolios
+              </button>
+            </div>
           </div>
           {tickerGroups.map(([ticker, group]) => {
             const existingIds = existingPortfoliosByTicker.get(ticker);
@@ -804,7 +866,9 @@ export function ImportPage() {
                 dismissedKeys={dismissedKeys}
                 rowErrors={rowErrors}
                 duplicateMatch={duplicateMatch}
+                suspectedDuplicateKeys={pendingDuplicateCandidateKeySet}
                 onDeleteAutoAdded={(entry) => void deleteAutoAddedTrade(entry)}
+                onDiscardPending={(entry) => discardPendingCandidate(entry.key)}
                 onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
                 onRenameTicker={(newTicker) => void renameTickerGroup(ticker, newTicker)}
                 existingPortfolioHint={
@@ -861,7 +925,9 @@ export function TickerGroupCard({
   dismissedKeys,
   rowErrors,
   duplicateMatch,
+  suspectedDuplicateKeys,
   onDeleteAutoAdded,
+  onDiscardPending,
   onAllocateSell,
   onRenameTicker,
   existingPortfolioHint,
@@ -884,7 +950,10 @@ export function TickerGroupCard({
   dismissedKeys: Set<string>;
   rowErrors: Record<string, string>;
   duplicateMatch: (candidate: ParsedTradeCandidate) => { matchType: "exact" | "possible"; matchedId: string } | undefined;
+  /** Keys of pending (not yet added/skipped/dismissed) candidates that duplicate a sibling in this same import batch — see suggestDuplicatePendingCandidateKeysToDelete. */
+  suspectedDuplicateKeys: Set<string>;
   onDeleteAutoAdded: (entry: CandidateEntry) => void;
+  onDiscardPending: (entry: CandidateEntry) => void;
   onAllocateSell: (entry: CandidateEntry) => void;
   onRenameTicker: (newTicker: string) => void;
   existingPortfolioHint: { multiple: boolean; names: string[] } | undefined;
@@ -1026,7 +1095,9 @@ export function TickerGroupCard({
               matched={matched}
               distributing={distributing}
               error={rowErrors[entry.key]}
+              suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
               onDelete={() => onDeleteAutoAdded(entry)}
+              onDiscardPending={() => onDiscardPending(entry)}
             />
           );
         })}
@@ -1051,6 +1122,8 @@ export function TickerGroupCard({
                     ? "Pick a portfolio above first."
                     : undefined
               }
+              suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
+              onDiscardPending={() => onDiscardPending(entry)}
             />
           );
         })}
@@ -1162,7 +1235,9 @@ export function AutoCommitRow({
   matched,
   distributing,
   error,
+  suspectedDuplicate = false,
   onDelete,
+  onDiscardPending,
 }: {
   entry: CandidateEntry;
   match: { matchType: "exact" | "possible"; matchedId: string } | undefined;
@@ -1175,12 +1250,17 @@ export function AutoCommitRow({
   /** True while confirmAndDistributeAll is actively committing this row's batch. */
   distributing: boolean;
   error?: string;
+  /** Flags a still-pending row as a likely repeat of a sibling in this same batch (see suggestDuplicatePendingCandidateKeysToDelete) — distinct from `match`, which only ever compares against already-committed trades. */
+  suspectedDuplicate?: boolean;
   onDelete: () => void;
+  /** Discards this row from the pending pool outright — only relevant while it's still suspectedDuplicate and not yet added/skipped/dismissed. */
+  onDiscardPending?: () => void;
 }) {
   const c = entry.candidate;
   const isLowConfidence = c.confidence === "low";
+  const canDiscard = suspectedDuplicate && !added && !skipped && !dismissed;
   return (
-    <div className={`px-4 py-2.5 text-sm ${isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}>
+    <div className={`px-4 py-2.5 text-sm ${canDiscard ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
@@ -1213,6 +1293,14 @@ export function AutoCommitRow({
               <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
             </span>
           ) : null}
+          {canDiscard ? (
+            <span
+              title="Same ticker, side, date and share count as another row still pending in this batch — very likely the same transaction read twice."
+              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
+            >
+              <ShieldAlert size={11} /> Suspected duplicate
+            </span>
+          ) : null}
         </div>
         {skipped ? (
           <span className="flex items-center gap-1 text-xs text-slate-500">
@@ -1235,6 +1323,14 @@ export function AutoCommitRow({
               </button>
             ) : null}
           </span>
+        ) : canDiscard ? (
+          <button
+            onClick={onDiscardPending}
+            title="Discard this duplicate row — it was never committed, so there's nothing to refund"
+            className="flex items-center gap-1 rounded-md border border-rose-500/40 px-2 py-1 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
+          >
+            <Trash2 size={12} /> Discard
+          </button>
         ) : !matched ? (
           <span className="text-xs text-amber-300">Blocked — needs verification</span>
         ) : !portfolioResolved ? (
@@ -1273,6 +1369,8 @@ export function CandidateRow({
   onAction,
   disabled = false,
   disabledReason,
+  suspectedDuplicate = false,
+  onDiscardPending,
 }: {
   entry: CandidateEntry;
   match: { matchType: "exact" | "possible"; matchedId: string } | undefined;
@@ -1282,11 +1380,16 @@ export function CandidateRow({
   onAction: () => void;
   disabled?: boolean;
   disabledReason?: string;
+  /** Flags a still-pending row as a likely repeat of a sibling in this same batch (see suggestDuplicatePendingCandidateKeysToDelete) — distinct from `match`, which only ever compares against already-committed trades. */
+  suspectedDuplicate?: boolean;
+  /** Discards this row from the pending pool outright — only relevant while it's still suspectedDuplicate and not yet added. */
+  onDiscardPending?: () => void;
 }) {
   const c = entry.candidate;
   const isLowConfidence = c.confidence === "low";
+  const canDiscard = suspectedDuplicate && !added;
   return (
-    <div className={`px-4 py-2.5 text-sm ${isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}>
+    <div className={`px-4 py-2.5 text-sm ${canDiscard ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <span
@@ -1323,22 +1426,41 @@ export function CandidateRow({
               <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
             </span>
           ) : null}
+          {canDiscard ? (
+            <span
+              title="Same ticker, side, date and share count as another row still pending in this batch — very likely the same transaction read twice."
+              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
+            >
+              <ShieldAlert size={11} /> Suspected duplicate
+            </span>
+          ) : null}
         </div>
         {added ? (
           <span className="flex items-center gap-1 text-xs text-emerald-400">
             <CheckCircle2 size={14} /> Added
           </span>
         ) : (
-          <button
-            onClick={onAction}
-            disabled={disabled}
-            title={disabled ? disabledReason : undefined}
-            className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 ${
-              disabled ? "" : actionClassName
-            }`}
-          >
-            {actionLabel}
-          </button>
+          <span className="flex items-center gap-1.5">
+            {canDiscard ? (
+              <button
+                onClick={onDiscardPending}
+                title="Discard this duplicate row — it was never committed, so there's nothing to refund"
+                className="rounded p-1 text-rose-300 hover:bg-rose-500/10"
+              >
+                <Trash2 size={13} />
+              </button>
+            ) : null}
+            <button
+              onClick={onAction}
+              disabled={disabled}
+              title={disabled ? disabledReason : undefined}
+              className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 ${
+                disabled ? "" : actionClassName
+              }`}
+            >
+              {actionLabel}
+            </button>
+          </span>
         )}
       </div>
     </div>

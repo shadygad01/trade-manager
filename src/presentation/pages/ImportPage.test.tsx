@@ -42,7 +42,9 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -75,7 +77,9 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -104,7 +108,9 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -133,7 +139,9 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
         dismissedKeys={new Set()}
         rowErrors={{}}
         duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set()}
         onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
         onAllocateSell={vi.fn()}
         onRenameTicker={vi.fn()}
         existingPortfolioHint={undefined}
@@ -144,5 +152,108 @@ describe("TickerGroupCard — portfolio picker for a brand-new ticker in more th
     expect(select.value).toBe("p-smc");
     expect(screen.queryByText("Select a portfolio…")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allocate Sell" })).not.toBeDisabled();
+  });
+});
+
+describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismatch case)", () => {
+  it("flags a still-pending Buy suggested as a within-batch duplicate, and Discard removes just that row", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
+    const keep = buyEntry("keep");
+    const dupe = buyEntry("dupe");
+    render(
+      <TickerGroupCard
+        ticker="PHAR"
+        group={{ buys: [keep, dupe], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 60, verifiedUnits: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set(["dupe"])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={onDiscardPending}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Suspected duplicate")).toBeInTheDocument();
+    const discardButton = screen.getByRole("button", { name: /Discard/ });
+    await user.click(discardButton);
+    expect(onDiscardPending).toHaveBeenCalledWith(dupe);
+  });
+
+  it("flags a still-pending Sell suggested as a within-batch duplicate, and Discard removes just that row", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
+    const dupe = sellEntry("s-dupe");
+    render(
+      <TickerGroupCard
+        ticker="PHAR"
+        group={{ buys: [], sells: [dupe], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 82, verifiedUnits: 82 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set(["s-dupe"])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={onDiscardPending}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Suspected duplicate")).toBeInTheDocument();
+    const discardButton = screen.getByTitle("Discard this duplicate row — it was never committed, so there's nothing to refund");
+    await user.click(discardButton);
+    expect(onDiscardPending).toHaveBeenCalledWith(dupe);
+  });
+
+  it("does not show a Suspected duplicate badge or Discard button for a clean (non-flagged) row", () => {
+    render(
+      <TickerGroupCard
+        ticker="PHAR"
+        group={{ buys: [buyEntry("clean")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 30, verifiedUnits: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.queryByText("Suspected duplicate")).not.toBeInTheDocument();
+    expect(screen.queryByText("Discard")).not.toBeInTheDocument();
   });
 });
