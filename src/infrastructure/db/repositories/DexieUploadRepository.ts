@@ -5,6 +5,10 @@ import type { PortfolioOsDatabase } from "../db";
 export class DexieUploadRepository implements UploadRepository {
   constructor(private readonly db: PortfolioOsDatabase) {}
 
+  async getAll(): Promise<Upload[]> {
+    return this.db.uploads.toArray();
+  }
+
   async getByPortfolio(portfolioId: string): Promise<Upload[]> {
     return this.db.uploads.where("portfolioId").equals(portfolioId).toArray();
   }

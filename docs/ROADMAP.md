@@ -92,6 +92,15 @@ User-reported real gap, working from two Thndr "My Position" screenshots (EAST, 
 - `DashboardPage` gained a "Total Dividends" stat tile, summing `Dividend`-type timeline events across every portfolio. Confirmed (by reading `equityCurve.ts`/`portfolioReturn.ts` directly, no code change needed) that dividends already flowed correctly into both the equity curve (summed like any other timeline event) and portfolio return (excluded from the deposits/withdrawals-only contributed-capital denominator, so they show up purely as return).
 - 5 new tests (178 total).
 
+### Sprint 6 — Move trades between portfolios, Import "Clear all"
+
+Two user-reported real gaps from actually using the app: (1) no way to fix a trade assigned to the wrong portfolio, or to redistribute after changing their mind on how holdings should be split; (2) Import's "Start over" only cleared the in-progress extraction pool — a re-uploaded file was still flagged as a duplicate because its `Upload` record (used purely for hash-based dedup) stayed in IndexedDB forever.
+
+- **`TradeService.moveTrade(repos, tradeId, targetPortfolioId)`**: reassigns a `Trade` to a different portfolio. The buy's original cost is refunded to the source portfolio and charged to the target, and any of its sells' net proceeds move the same way, so cash correctness is never sacrificed for a data-entry fix. If the trade was closed together with other lots under one multi-trade `sellGroupId`, the move transitively pulls in every trade sharing that sell (BFS closure over the source portfolio's allocations) — a single sell action can never end up split across two portfolios. Only `Buy`/`Sell`/`PartialSell` timeline events whose `relatedTradeIds` are entirely inside the moving set travel with it; portfolio-level events (deposits, dividends, cash adjustments) never do, since they aren't lot-specific. Rejects the move (mirroring `recordBuy`'s own guard) if the target portfolio can't cover the net cost.
+- **`TradesPage`** gained a per-row "Move to another portfolio" action (a small icon button + modal, target-portfolio picker), with a heads-up alert when moving one lot pulled in others from a shared sell.
+- **Import "Clear all"** (renamed from "Start over"): now also deletes every persisted `Upload` record (`UploadRepository.getAll`, new), not just the in-memory/localStorage extraction pool — so a cleared session genuinely lets the same file be re-imported without tripping the duplicate-file check. `Upload` rows are dedup-only bookkeeping with no other reader in the app, so wiping them has no effect on trades/portfolios already recorded.
+- 6 new tests (184 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

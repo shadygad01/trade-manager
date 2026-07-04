@@ -49,4 +49,12 @@ describe("DexieUploadRepository", () => {
     await repo.delete("upload-1");
     expect(await repo.getByHash("hash-1")).toBeUndefined();
   });
+
+  it("getAll returns every upload regardless of portfolio, for a full duplicate-history reset", async () => {
+    await repo.save(makeUpload({ id: "upload-1", fileHash: "hash-1", portfolioId: "portfolio-1" }));
+    await repo.save(makeUpload({ id: "upload-2", fileHash: "hash-2", portfolioId: undefined }));
+
+    const all = await repo.getAll();
+    expect(all.map((u) => u.id).sort()).toEqual(["upload-1", "upload-2"]);
+  });
 });

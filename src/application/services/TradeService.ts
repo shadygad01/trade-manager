@@ -199,6 +199,119 @@ export async function recordSell(repos: AppRepositories, input: RecordSellInput)
   return { realizedPnl: microsToMoney(realizedMicros), allocations: createdAllocations };
 }
 
+export interface MoveTradeResult {
+  /** Every trade actually moved — includes the requested trade plus any other lot pulled in because it shares a sellGroupId (a multi-lot sell can't be split across two portfolios). */
+  movedTradeIds: string[];
+}
+
+/**
+ * Reassigns a trade (and everything economically tied to it) to a different
+ * portfolio — for fixing a trade assigned to the wrong portfolio at import
+ * time, or a change of mind about how holdings should be split. The buy's
+ * original cost is refunded to the source portfolio and charged to the
+ * target; any of its sells' net proceeds move the same way, so both
+ * portfolios' cash stays correct rather than the trade silently taking its
+ * cash history with it.
+ *
+ * If the trade was sold together with other lots in one multi-trade sell
+ * (shared `sellGroupId`), all of those lots move too — a single sell action
+ * can't end up split across two portfolios.
+ */
+export async function moveTrade(
+  repos: AppRepositories,
+  tradeId: string,
+  targetPortfolioId: string
+): Promise<MoveTradeResult> {
+  const trade = await repos.trades.getById(tradeId);
+  if (!trade) {
+    throw new Error(`Trade not found: ${tradeId}`);
+  }
+  const sourcePortfolioId = trade.portfolioId;
+  if (sourcePortfolioId === targetPortfolioId) {
+    return { movedTradeIds: [trade.id] };
+  }
+
+  const sourcePortfolio = await repos.portfolios.getById(sourcePortfolioId);
+  if (!sourcePortfolio) {
+    throw new Error(`Portfolio not found: ${sourcePortfolioId}`);
+  }
+  const targetPortfolio = await repos.portfolios.getById(targetPortfolioId);
+  if (!targetPortfolio) {
+    throw new Error(`Portfolio not found: ${targetPortfolioId}`);
+  }
+
+  const [portfolioTrades, portfolioAllocations, portfolioEvents] = await Promise.all([
+    repos.trades.getByPortfolio(sourcePortfolioId),
+    repos.allocations.getByPortfolio(sourcePortfolioId),
+    repos.timeline.getByPortfolio(sourcePortfolioId),
+  ]);
+  const tradeById = new Map(portfolioTrades.map((t) => [t.id, t]));
+
+  const allocationsByTrade = new Map<string, TradeAllocation[]>();
+  for (const allocation of portfolioAllocations) {
+    const list = allocationsByTrade.get(allocation.tradeId) ?? [];
+    list.push(allocation);
+    allocationsByTrade.set(allocation.tradeId, list);
+  }
+
+  const moveSet = new Set<string>([tradeId]);
+  const queue = [tradeId];
+  while (queue.length > 0) {
+    const current = queue.pop() as string;
+    for (const allocation of allocationsByTrade.get(current) ?? []) {
+      for (const sibling of portfolioAllocations) {
+        if (sibling.sellGroupId === allocation.sellGroupId && !moveSet.has(sibling.tradeId)) {
+          moveSet.add(sibling.tradeId);
+          queue.push(sibling.tradeId);
+        }
+      }
+    }
+  }
+
+  const tradesToMove = [...moveSet].map((id) => {
+    const t = tradeById.get(id);
+    if (!t) throw new Error(`Trade not found in source portfolio ${sourcePortfolioId}: ${id}`);
+    return t;
+  });
+  const allocationsToMove = portfolioAllocations.filter((a) => moveSet.has(a.tradeId));
+
+  const buyCost = Money.sum(tradesToMove.map((t) => Money.from(t.entryPrice * t.shares + t.fees + t.taxes)));
+  const netProceeds = Money.sum(
+    allocationsToMove.map((a) =>
+      Money.from(a.sharesClosed * a.exitPrice).subtract(Money.from(a.fees)).subtract(Money.from(a.taxes))
+    )
+  );
+  const netCost = buyCost.subtract(netProceeds);
+
+  if (netCost.isPositive() && netCost.greaterThan(Money.from(targetPortfolio.cash))) {
+    throw new Error(
+      `Insufficient cash in target portfolio ${targetPortfolioId}: need ${netCost.toFixed()}, have ${Money.from(targetPortfolio.cash).toFixed()}`
+    );
+  }
+
+  await repos.portfolios.save({ ...sourcePortfolio, cash: Money.from(sourcePortfolio.cash).add(netCost).toNumber() });
+  await repos.portfolios.save({ ...targetPortfolio, cash: Money.from(targetPortfolio.cash).subtract(netCost).toNumber() });
+
+  for (const t of tradesToMove) {
+    await repos.trades.save({ ...t, portfolioId: targetPortfolioId });
+  }
+  for (const a of allocationsToMove) {
+    await repos.allocations.save({ ...a, portfolioId: targetPortfolioId });
+  }
+
+  // Only Buy/Sell/PartialSell events narrate specific trades (relatedTradeIds);
+  // deposits, dividends, etc. are portfolio-level and never move with a trade.
+  const eventsToMove = portfolioEvents.filter((e) => {
+    const ids = e.relatedTradeIds;
+    return ids !== undefined && ids.length > 0 && ids.every((id) => moveSet.has(id));
+  });
+  for (const e of eventsToMove) {
+    await repos.timeline.save({ ...e, portfolioId: targetPortfolioId });
+  }
+
+  return { movedTradeIds: [...moveSet] };
+}
+
 export interface PositionAggregate {
   ticker: string;
   totalShares: number;

@@ -50,6 +50,7 @@ export interface VerificationRepository {
 }
 
 export interface UploadRepository {
+  getAll(): Promise<Upload[]>;
   getByPortfolio(portfolioId: string): Promise<Upload[]>;
   /** File-hash dedup is global — the same screenshot re-uploaded is a duplicate regardless of which portfolio its candidates end up assigned to. */
   getByHash(fileHash: string): Promise<Upload | undefined>;

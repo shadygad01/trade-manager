@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
-import { recordBuy, recordSell, computePositions } from "./TradeService";
+import { recordBuy, recordSell, computePositions, moveTrade } from "./TradeService";
 
 function seedPortfolio(cash: number) {
   return createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: cash });
@@ -300,5 +300,124 @@ describe("computePositions", () => {
 
     const positions = await computePositions(repos, "p1", {});
     expect(positions[0].costBasis).toBeCloseTo(100 * 50 + 20 + 30);
+  });
+});
+
+describe("moveTrade", () => {
+  it("moves an unsold buy's portfolioId and refunds/charges the cost between portfolios", async () => {
+    const repos = createFakeRepositories({
+      portfolios: [seedPortfolio(10_000), createPortfolio({ id: "p2", name: "Other", kind: "Trading", initialCash: 1_000 })],
+    });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 5,
+      fees: 10,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    const result = await moveTrade(repos, trade.id, "p2");
+    expect(result.movedTradeIds).toEqual([trade.id]);
+
+    const movedTrade = await repos.trades.getById(trade.id);
+    expect(movedTrade?.portfolioId).toBe("p2");
+
+    const p1 = await repos.portfolios.getById("p1");
+    const p2 = await repos.portfolios.getById("p2");
+    expect(p1?.cash).toBeCloseTo(10_000 - (100 * 5 + 10) + (100 * 5 + 10));
+    expect(p2?.cash).toBeCloseTo(1_000 - (100 * 5 + 10));
+
+    const p1Events = await repos.timeline.getByPortfolio("p1");
+    const p2Events = await repos.timeline.getByPortfolio("p2");
+    expect(p1Events).toHaveLength(0);
+    expect(p2Events).toHaveLength(1);
+    expect(p2Events[0].type).toBe("Buy");
+  });
+
+  it("moves every lot in a shared multi-trade sellGroup together, not just the requested one", async () => {
+    const repos = createFakeRepositories({
+      portfolios: [seedPortfolio(20_000), createPortfolio({ id: "p2", name: "Other", kind: "Trading", initialCash: 20_000 })],
+    });
+    const first = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 50,
+      entryPrice: 40,
+      executionDate: "2026-01-01",
+      executionTime: "10:00",
+    });
+    const second = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 50,
+      entryPrice: 42,
+      executionDate: "2026-01-02",
+      executionTime: "10:00",
+    });
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [
+        { tradeId: first.trade.id, shares: 50, exitPrice: 50 },
+        { tradeId: second.trade.id, shares: 50, exitPrice: 50 },
+      ],
+      executionDate: "2026-03-01",
+      executionTime: "12:00",
+    });
+
+    const result = await moveTrade(repos, first.trade.id, "p2");
+    expect(new Set(result.movedTradeIds)).toEqual(new Set([first.trade.id, second.trade.id]));
+
+    expect((await repos.trades.getById(first.trade.id))?.portfolioId).toBe("p2");
+    expect((await repos.trades.getById(second.trade.id))?.portfolioId).toBe("p2");
+
+    const p1Allocations = await repos.allocations.getByPortfolio("p1");
+    const p2Allocations = await repos.allocations.getByPortfolio("p2");
+    expect(p1Allocations).toHaveLength(0);
+    expect(p2Allocations).toHaveLength(2);
+
+    const p1Events = await repos.timeline.getByPortfolio("p1");
+    const p2Events = await repos.timeline.getByPortfolio("p2");
+    expect(p1Events).toHaveLength(0);
+    expect(p2Events).toHaveLength(3); // 2 buys + 1 sell
+  });
+
+  it("rejects the move when the target portfolio can't cover the net cost", async () => {
+    const repos = createFakeRepositories({
+      portfolios: [seedPortfolio(10_000), createPortfolio({ id: "p2", name: "Other", kind: "Trading", initialCash: 10 })],
+    });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    await expect(moveTrade(repos, trade.id, "p2")).rejects.toThrow(/insufficient cash/i);
+  });
+
+  it("is a no-op when the target is the same as the current portfolio", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    const result = await moveTrade(repos, trade.id, "p1");
+    expect(result.movedTradeIds).toEqual([trade.id]);
+    expect((await repos.portfolios.getById("p1"))?.cash).toBeCloseTo(10_000 - 500);
+  });
+
+  it("throws for an unknown trade", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    await expect(moveTrade(repos, "missing", "p1")).rejects.toThrow(/not found/i);
   });
 });

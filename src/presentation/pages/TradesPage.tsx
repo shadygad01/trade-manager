@@ -1,11 +1,12 @@
 import { Fragment, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { Plus, ArrowLeftRight, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { recordBuy } from "@application/services/TradeService";
+import { recordBuy, moveTrade } from "@application/services/TradeService";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { getTradeStatus } from "@domain/entities/Trade";
+import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
@@ -20,10 +21,13 @@ export function TradesPage() {
   const [sellOpen, setSellOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [buyZoneTicker, setBuyZoneTicker] = useState<string | undefined>(undefined);
+  const [moveTradeTarget, setMoveTradeTarget] = useState<Trade | null>(null);
 
   const trades = useLiveQuery(() => repos.trades.getByPortfolio(portfolioId), [portfolioId]);
   const allocations = useLiveQuery(() => repos.tradeAllocations.getByPortfolio(portfolioId), [portfolioId]);
   const priceMap = useLiveQuery(() => repos.prices.getAllPrices(), []);
+  const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []) ?? [];
+  const otherPortfolios = useMemo(() => portfolios.filter((p) => p.id !== portfolioId), [portfolios, portfolioId]);
 
   const allocationsByTrade = useMemo(() => {
     const map = new Map<string, TradeAllocation[]>();
@@ -131,6 +135,7 @@ export function TradesPage() {
                 <th className="px-4 py-2 text-right">Entry Price</th>
                 <th className="px-4 py-2 text-right">Fees</th>
                 <th className="px-4 py-2">Status</th>
+                <th className="w-8 px-4 py-2"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
@@ -173,10 +178,24 @@ export function TradesPage() {
                           {status === "open" ? "Open" : status === "partial" ? "Partial" : "Closed"}
                         </span>
                       </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {otherPortfolios.length > 0 ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMoveTradeTarget(trade);
+                            }}
+                            title="Move to another portfolio"
+                            className="rounded-md p-1 text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+                          >
+                            <FolderSymlink size={14} />
+                          </button>
+                        ) : null}
+                      </td>
                     </tr>
                     {isExpanded && tradeAllocations.length > 0 ? (
                       <tr>
-                        <td colSpan={8} className="bg-slate-950/40 px-4 py-3">
+                        <td colSpan={9} className="bg-slate-950/40 px-4 py-3">
                           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                             Sells closing this lot
                           </p>
@@ -220,7 +239,89 @@ export function TradesPage() {
         open={sellOpen}
         onClose={() => setSellOpen(false)}
       />
+      <MoveTradeModal
+        trade={moveTradeTarget}
+        otherPortfolios={otherPortfolios}
+        onClose={() => setMoveTradeTarget(null)}
+      />
     </div>
+  );
+}
+
+function MoveTradeModal({
+  trade,
+  otherPortfolios,
+  onClose,
+}: {
+  trade: Trade | null;
+  otherPortfolios: { id: string; name: string }[];
+  onClose: () => void;
+}) {
+  const [targetPortfolioId, setTargetPortfolioId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const activeTarget = targetPortfolioId || otherPortfolios[0]?.id || "";
+
+  async function handleMove() {
+    if (!trade || !activeTarget) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await moveTrade(repos, trade.id, activeTarget);
+      if (result.movedTradeIds.length > 1) {
+        alert(
+          `${result.movedTradeIds.length} lots moved together — this trade was sold in the same transaction as ${
+            result.movedTradeIds.length - 1
+          } other lot(s), so they moved as one unit.`
+        );
+      }
+      setTargetPortfolioId("");
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to move trade.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal title={`Move ${trade?.ticker ?? ""} to another portfolio`} open={trade !== null} onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-xs text-slate-400">
+          Moves this buy — and any sell that closed it together with another lot — to a different portfolio. Cash
+          moves with it: the original cost is refunded here and charged there, and any sale proceeds follow the
+          same way.
+        </p>
+        <label className="block text-xs text-slate-400 space-y-1">
+          Target portfolio
+          <select
+            value={activeTarget}
+            onChange={(e) => setTargetPortfolioId(e.target.value)}
+            className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+          >
+            {otherPortfolios.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {error ? <p className="text-sm text-rose-400">{error}</p> : null}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
+            Cancel
+          </button>
+          <button
+            onClick={() => void handleMove()}
+            disabled={submitting || !activeTarget}
+            className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
+          >
+            {submitting ? "Moving…" : "Move"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

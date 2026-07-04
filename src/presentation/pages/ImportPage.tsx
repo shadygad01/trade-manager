@@ -155,6 +155,13 @@ export function ImportPage() {
     importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
   }
 
+  async function clearAll() {
+    const uploads = await repos.uploads.getAll();
+    await Promise.all(uploads.map((u) => repos.uploads.delete(u.id)));
+    importSession.clear();
+    setRecentFileResults([]);
+  }
+
   async function addDividend(entry: DividendEntry, ticker: string) {
     const portfolioId = portfolioForTicker(ticker);
     await recordDividend(repos, portfolioId, {
@@ -209,17 +216,20 @@ export function ImportPage() {
         title="Import"
         description="Step 1: extract every transaction from as many screenshots/PDFs/CSVs as you need. Step 2: assign each stock to a portfolio."
         actions={
-          totalPending > 0 ? (
+          totalPending > 0 || recentFileResults.length > 0 ? (
             <button
               onClick={() => {
-                if (confirm("Clear the extracted list? Trades you've already added are not affected.")) {
-                  importSession.clear();
-                  setRecentFileResults([]);
+                if (
+                  confirm(
+                    "Clear all? This wipes the extracted list and this device's uploaded-file history (so a re-uploaded file is no longer treated as a duplicate). Trades you've already added are not affected."
+                  )
+                ) {
+                  void clearAll();
                 }
               }}
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
             >
-              <RotateCcw size={14} /> Start over
+              <RotateCcw size={14} /> Clear all
             </button>
           ) : undefined
         }
