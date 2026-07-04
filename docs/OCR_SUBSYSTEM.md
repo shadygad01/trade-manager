@@ -2,7 +2,12 @@
 
 Portfolio OS can import trades directly from broker screenshots and PDF statements, entirely client-side — no image or text ever leaves the browser. The reference broker is [Thndr](https://thndr.app), a popular Egyptian brokerage app, with support for Buy/Sell confirmations, order-history screens, portfolio/position screenshots, and statement PDFs, in both Arabic and English.
 
-Import (`/import`) is a global page, not scoped to one portfolio: a single statement can hold trades meant for more than one of a user's portfolios (e.g. some shares bought for "Investment", others for "Trading"), so each parsed candidate — and each position-verification row — gets its own portfolio picker at review time, defaulting to the first portfolio but changeable per row before confirming. `Upload.portfolioId` is therefore optional; the file-hash dedup check (`UploadRepository.getByHash`) and the possible-duplicate check against existing trades (`duplicateDetection.ts`) are both global, not per-portfolio, since a re-uploaded file or a duplicated trade is a duplicate regardless of which portfolio it's assigned to.
+Import (`/import`) is a global page, not scoped to one portfolio, and runs as an explicit two-phase workflow:
+
+1. **Extract** — drop as many files as needed (screenshots, PDFs, CSVs); every run's candidates and position-verification rows accumulate into one pool rather than replacing the previous file's results, with a running "N transactions from M files" count as the confirmation that extraction is complete before moving on.
+2. **Distribute** — the accumulated pool is grouped by ticker, and each ticker group gets exactly **one** portfolio picker shared by every buy, sell, and verification row for that ticker. This is deliberate: a sell only makes sense against the specific portfolio holding the shares it closes, so assigning a ticker's buys to a portfolio must carry its sells along automatically rather than asking the user to repeat the same choice per row.
+
+`Upload.portfolioId` is therefore optional; the file-hash dedup check (`UploadRepository.getByHash`) and the possible-duplicate check against existing trades (`duplicateDetection.ts`) are both global, not per-portfolio, since a re-uploaded file or a duplicated trade is a duplicate regardless of which portfolio it's assigned to.
 
 ## Pipeline (`src/infrastructure/ocr/ImportOrchestrator.ts`)
 

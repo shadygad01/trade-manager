@@ -60,6 +60,14 @@ User-reported real workflow gap: Import was scoped to one portfolio (`/portfolio
 - `Upload.portfolioId` is now optional and `UploadRepository.getByHash` is global (file-hash dedup no longer scoped per portfolio) — a re-uploaded file is a duplicate regardless of which portfolio its candidates end up in. Duplicate-trade detection (`duplicateDetection.ts`) now checks against every portfolio's trades/allocations (`TradeRepository.getAll()`, new `TradeAllocationRepository.getAll()`), not just one.
 - 5 new tests (173 total).
 
+### Post-sprint-4 fix #2 — explicit two-phase Import workflow, grouped by ticker
+
+Follow-up user feedback refined the order further: extract everything first and confirm extraction is complete, *then* distribute — and a ticker's sells must automatically follow its buys to whichever portfolio they're assigned to, not be assigned separately.
+
+- `ImportPage` rebuilt around two explicit phases: **Step 1 — Extract** (drop as many files as needed; every file's candidates/verifications accumulate into one pool instead of replacing the previous file's results, with a running "N transactions from M files" counter as the completion signal) and **Step 2 — Distribute** (the pool grouped by ticker, one card per ticker).
+- Each ticker card has exactly **one** portfolio picker shared by every buy, sell, and verification row for that ticker — assigning a ticker to a portfolio carries its sells along automatically, since a sell can only allocate against lots that exist in a specific portfolio.
+- Buys within a ticker group are listed before sells, so the natural click order (add buys, then allocate sells) always has open lots to allocate against by the time the user reaches them.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
