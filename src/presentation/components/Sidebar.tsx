@@ -9,6 +9,7 @@ import {
   BarChart3,
   UploadCloud,
   ChevronDown,
+  Database,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { repos } from "@presentation/lib/data";
@@ -71,6 +72,15 @@ export function Sidebar() {
         >
           <UploadCloud size={16} />
           Import
+        </Link>
+        <Link
+          href="/data"
+          className={`mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+            location.startsWith("/data") ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
+          }`}
+        >
+          <Database size={16} />
+          Data
         </Link>
       </nav>
 

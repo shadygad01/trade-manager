@@ -30,11 +30,19 @@ This is the core design decision in the whole product (see [ARCHITECTURE.md ADR-
 
 `Split` and `RightsIssue` are currently **record-only**: they log the event (ratio/details in `notes`) but do not automatically rebase existing trades' share counts or entry prices. Automatic rebasing was scoped out to avoid speculative complexity — add it as a deliberate follow-up if/when it's actually needed, not preemptively.
 
-`Dividend` events can be dated to when the payout actually happened rather than to now — `PortfolioService.recordDividend` accepts an optional `date`, used by the OCR import flow (see [OCR_SUBSYSTEM.md](OCR_SUBSYSTEM.md#dividend-history-extraction)) so a dividend read from a broker's payout history lands on the timeline at its real historical date instead of clustering everything at import time. Manually-entered dividends omit `date` and default to now.
+`Dividend` events can be dated to when the payout actually happened rather than to now — `PortfolioService.recordDividend` accepts an optional `date`, used both by the OCR import flow (see [OCR_SUBSYSTEM.md](OCR_SUBSYSTEM.md#dividend-history-extraction)) and by the manual "Record Dividend" action on `PortfolioDetailPage`, so a dividend lands on the timeline at its real payout date rather than clustering at entry time. Leaving the date blank defaults to now.
+
+`CashAdjustment`, `Split`, and `RightsIssue` are all reachable from `PortfolioDetailPage`'s header actions ("Adjust Cash" and "Corporate Action") — `PortfolioService.recordCashAdjustment`/`recordSplit`/`recordRightsIssue` existed and were tested before the UI did; there is no remaining service-layer function without a UI path to reach it.
 
 ## Journal vs. Trade notes
 
 `Trade.notes` / `Trade.strategyTags` are quick, execution-time fields set at fill time. `JournalEntry` (one per trade, `tradeId`-keyed) is the richer, reflective record: entry/exit reasoning, lessons learned, images, attachments. Both exist because they answer different questions ("what did I tag this trade as when I placed it" vs. "what did I learn after closing it").
+
+Both entities carry their own `strategyTags`, and they're allowed to disagree — a tag added later during Journal reflection doesn't rewrite `Trade.strategyTags`. `strategyAttribution()` (see [ANALYTICS_ENGINE.md](ANALYTICS_ENGINE.md)) attributes by the **union** of both per trade, so a tag from either source counts, rather than only ever reading the fill-time one.
+
+## Backup: export / import
+
+`BackupService.exportLedger`/`importLedger` (`/data` page) move the *entire* ledger — every `Portfolio`, `Trade`, `TradeAllocation`, `TimelineEvent`, `JournalEntry`, and `PositionVerification` — in or out as one versioned JSON snapshot (`schemaVersion`, currently `1`). `Upload` rows are deliberately excluded: they're OCR duplicate-file bookkeeping with no other reader in the app (see [OCR_SUBSYSTEM.md](OCR_SUBSYSTEM.md)), not financial data, and are meaningless to replay on a different browser. Import is a **full replace** — every existing row in the six exported tables is deleted before the snapshot's rows are inserted — never a merge; see the file's own doc comment for why a merge's conflict-resolution problem is out of scope for a single-profile-at-a-time app.
 
 ## Ground-truth verification
 

@@ -28,7 +28,9 @@ This means the entire trade/allocation/analytics logic is testable with in-memor
 
 **Why:** The product must ship its own GitHub Pages deployment (static hosting only) and its own database. A hosted backend would mean a second piece of infrastructure to run, pay for, and keep independent from any other project. A purely client-side app satisfies both constraints directly: GitHub Pages serves the static bundle, and IndexedDB *is* the database — no server in between.
 
-**Trade-off accepted:** No multi-device sync, no server-side backup. A user's ledger lives in one browser profile. This is an explicit, accepted limitation, not an oversight — revisit only if multi-device sync becomes a real requirement, and treat it as a new ADR (e.g. an opt-in export/import or sync layer), not a silent architecture change.
+**Trade-off accepted:** No multi-device sync, no automatic server-side backup. A user's ledger lives in one browser profile. This is an explicit, accepted limitation, not an oversight — revisit only if real-time multi-device sync becomes a requirement, and treat it as a new ADR (e.g. a sync layer), not a silent architecture change.
+
+A **manual** escape hatch for this trade-off does exist: `BackupService.exportLedger`/`importLedger` (`/data` page) produce and restore a single versioned JSON snapshot of every portfolio, trade, allocation, timeline event, journal entry, and verification — moving a ledger between devices, or recovering from a cleared browser profile, without introducing any server. Import is a full replace, never a merge, by deliberate design (see the file's own doc comment) — conflict resolution for a merge is a materially harder problem this app doesn't need to solve for a single-user, one-profile-at-a-time workflow.
 
 ### ADR-002: Explicit per-trade allocation, never FIFO/average-cost
 

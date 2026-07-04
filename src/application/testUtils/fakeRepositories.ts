@@ -3,12 +3,14 @@ import type {
   TradeRepository,
   TradeAllocationRepository,
   TimelineRepository,
+  JournalRepository,
   VerificationRepository,
 } from "@domain/repositories";
 import type { Portfolio } from "@domain/entities/Portfolio";
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
+import type { JournalEntry } from "@domain/entities/JournalEntry";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import type { AppRepositories } from "@application/services/types";
 
@@ -80,6 +82,9 @@ export function createFakeTradeAllocationRepository(seed: TradeAllocation[] = []
 export function createFakeTimelineRepository(seed: TimelineEvent[] = []): TimelineRepository {
   const store = new Map(seed.map((e) => [e.id, e]));
   return {
+    async getAll() {
+      return [...store.values()];
+    },
     async getByPortfolio(portfolioId) {
       return [...store.values()].filter((e) => e.portfolioId === portfolioId);
     },
@@ -92,9 +97,33 @@ export function createFakeTimelineRepository(seed: TimelineEvent[] = []): Timeli
   };
 }
 
+export function createFakeJournalRepository(seed: JournalEntry[] = []): JournalRepository {
+  const store = new Map(seed.map((e) => [e.id, e]));
+  return {
+    async getAll() {
+      return [...store.values()];
+    },
+    async getByTrade(tradeId) {
+      return [...store.values()].find((e) => e.tradeId === tradeId);
+    },
+    async getByPortfolio(portfolioId) {
+      return [...store.values()].filter((e) => e.portfolioId === portfolioId);
+    },
+    async save(entry) {
+      store.set(entry.id, entry);
+    },
+    async delete(id) {
+      store.delete(id);
+    },
+  };
+}
+
 export function createFakeVerificationRepository(seed: PositionVerification[] = []): VerificationRepository {
   const store = new Map(seed.map((v) => [v.id, v]));
   return {
+    async getAll() {
+      return [...store.values()];
+    },
     async getByPortfolio(portfolioId) {
       return [...store.values()].filter((v) => v.portfolioId === portfolioId);
     },
@@ -105,6 +134,9 @@ export function createFakeVerificationRepository(seed: PositionVerification[] = 
     async save(verification) {
       store.set(verification.id, verification);
     },
+    async delete(id) {
+      store.delete(id);
+    },
   };
 }
 
@@ -113,6 +145,7 @@ export function createFakeRepositories(seed?: {
   trades?: Trade[];
   allocations?: TradeAllocation[];
   timeline?: TimelineEvent[];
+  journal?: JournalEntry[];
   verifications?: PositionVerification[];
 }): AppRepositories {
   return {
@@ -120,6 +153,7 @@ export function createFakeRepositories(seed?: {
     trades: createFakeTradeRepository(seed?.trades),
     allocations: createFakeTradeAllocationRepository(seed?.allocations),
     timeline: createFakeTimelineRepository(seed?.timeline),
+    journal: createFakeJournalRepository(seed?.journal),
     verifications: createFakeVerificationRepository(seed?.verifications),
   };
 }

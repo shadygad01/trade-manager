@@ -57,4 +57,16 @@ describe("DexieVerificationRepository", () => {
   it("returns undefined when there is no matching verification", async () => {
     expect(await repo.getLatest("portfolio-1", "COMI")).toBeUndefined();
   });
+
+  it("getAll returns every verification across every portfolio", async () => {
+    await repo.save(verification({ id: "v-1" }));
+    await repo.save(verification({ id: "v-2", portfolioId: "portfolio-2" }));
+    expect((await repo.getAll()).map((v) => v.id).sort()).toEqual(["v-1", "v-2"]);
+  });
+
+  it("deletes a verification", async () => {
+    await repo.save(verification({ id: "v-1" }));
+    await repo.delete("v-1");
+    expect(await repo.getAll()).toHaveLength(0);
+  });
 });

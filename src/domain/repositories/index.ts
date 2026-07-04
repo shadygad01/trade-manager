@@ -31,12 +31,14 @@ export interface TradeAllocationRepository {
 }
 
 export interface TimelineRepository {
+  getAll(): Promise<TimelineEvent[]>;
   getByPortfolio(portfolioId: string): Promise<TimelineEvent[]>;
   save(event: TimelineEvent): Promise<void>;
   delete(id: string): Promise<void>;
 }
 
 export interface JournalRepository {
+  getAll(): Promise<JournalEntry[]>;
   getByTrade(tradeId: string): Promise<JournalEntry | undefined>;
   getByPortfolio(portfolioId: string): Promise<JournalEntry[]>;
   save(entry: JournalEntry): Promise<void>;
@@ -44,9 +46,11 @@ export interface JournalRepository {
 }
 
 export interface VerificationRepository {
+  getAll(): Promise<PositionVerification[]>;
   getByPortfolio(portfolioId: string): Promise<PositionVerification[]>;
   getLatest(portfolioId: string, ticker: string): Promise<PositionVerification | undefined>;
   save(verification: PositionVerification): Promise<void>;
+  delete(id: string): Promise<void>;
 }
 
 export interface UploadRepository {

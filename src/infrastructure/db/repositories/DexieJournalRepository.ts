@@ -5,6 +5,10 @@ import type { PortfolioOsDatabase } from "../db";
 export class DexieJournalRepository implements JournalRepository {
   constructor(private readonly db: PortfolioOsDatabase) {}
 
+  async getAll(): Promise<JournalEntry[]> {
+    return this.db.journalEntries.toArray();
+  }
+
   async getByTrade(tradeId: string): Promise<JournalEntry | undefined> {
     return this.db.journalEntries.where("tradeId").equals(tradeId).first();
   }

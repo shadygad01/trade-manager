@@ -5,6 +5,10 @@ import type { PortfolioOsDatabase } from "../db";
 export class DexieTimelineRepository implements TimelineRepository {
   constructor(private readonly db: PortfolioOsDatabase) {}
 
+  async getAll(): Promise<TimelineEvent[]> {
+    return this.db.timelineEvents.toArray();
+  }
+
   async getByPortfolio(portfolioId: string): Promise<TimelineEvent[]> {
     return this.db.timelineEvents.where("portfolioId").equals(portfolioId).toArray();
   }

@@ -16,6 +16,7 @@ const AnalyticsPage = lazy(() => import("@presentation/pages/AnalyticsPage").the
 // lazy — on top of ImportOrchestrator's own dynamic import in data.ts —
 // ensures every other page's initial load never pays for it.
 const ImportPage = lazy(() => import("@presentation/pages/ImportPage").then((m) => ({ default: m.ImportPage })));
+const DataPage = lazy(() => import("@presentation/pages/DataPage").then((m) => ({ default: m.DataPage })));
 
 // import.meta.env.BASE_URL mirrors vite.config.ts's `base: "/trade-manager/"`;
 // wouter needs it without the trailing slash.
@@ -37,6 +38,7 @@ export function App() {
               <Route path="/portfolios/:id/journal" component={JournalPage} />
               <Route path="/portfolios/:id/analytics" component={AnalyticsPage} />
               <Route path="/import" component={ImportPage} />
+              <Route path="/data" component={DataPage} />
               <Route>
                 <Redirect to="/" />
               </Route>
