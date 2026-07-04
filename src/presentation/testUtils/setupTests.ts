@@ -17,3 +17,19 @@ import { cleanup } from "@testing-library/react";
  * elements. Registering it once here keeps every component test isolated.
  */
 afterEach(cleanup);
+
+/**
+ * jsdom has no ResizeObserver, which recharts' ResponsiveContainer requires
+ * at mount — without this stub, any test that renders a chart throws an
+ * uncaught exception (the assertions themselves may still pass, but the
+ * noise obscures real failures). jsdom also reports zero layout size, so a
+ * chart's actual marks still won't reliably render — this only silences the
+ * missing-API crash, it doesn't make chart internals testable.
+ */
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}

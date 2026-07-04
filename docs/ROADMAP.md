@@ -181,6 +181,14 @@ Live user bug report: Import wouldn't load, and refreshing "made the whole proje
 
 Fixed with the standard [spa-github-pages](https://github.com/rafgraph/spa-github-pages) redirect trick (see [ARCHITECTURE.md](ARCHITECTURE.md#adr-001-fully-client-side-no-backend)): `public/404.html` re-encodes the requested path into a query string and redirects to the site root; a matching inline script in `index.html` decodes it and restores the real path via `history.replaceState` before `wouter` reads `window.location`. Verified end-to-end with a Playwright script against a GitHub-Pages-accurate static server (one that serves `404.html`'s body with a 404 status for any unmatched path, unlike a plain file server) — confirmed a direct request to `/trade-manager/import` and `/trade-manager/data` both land back on the correct rendered page instead of a 404.
 
+### Post-sprint-7 — DashboardPage Sector Allocation test coverage, ResizeObserver stub
+
+A fresh gap-check after the GitHub Pages routing fix (which found no other static-hosting landmines — `SnapshotPriceRepository` already builds its fetch path from `import.meta.env.BASE_URL`, and Vite already rewrites `index.html`'s script tag through the same base at build time) continued the presentation-layer test-coverage priority: `DashboardPage`'s Sector Allocation panel now has page-level tests for its two chart-independent states (the top-level "no portfolios" empty state, and the panel's own "no open positions" empty state).
+
+The panel's actual pie/legend rendering is **not** covered at the page level: jsdom has no `ResizeObserver` (recharts' `ResponsiveContainer` throws without one — now stubbed globally in `setupTests.ts` so any chart-rendering test doesn't crash with an unrelated missing-API error) and reports zero layout size regardless, so `ResponsiveContainer` won't reliably mount its children in a test environment. The sector-grouping logic itself (including the Unclassified fold) is already fully covered at the calculator level (`sectorAllocation.test.ts`), so nothing here is undertested — the boundary was chosen deliberately, not left as a gap.
+
+- 2 new component tests (230 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
