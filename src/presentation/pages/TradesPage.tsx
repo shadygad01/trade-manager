@@ -1,9 +1,9 @@
 import { Fragment, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink } from "lucide-react";
+import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink, Pencil, Check, X } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { recordBuy, moveTrade } from "@application/services/TradeService";
+import { recordBuy, moveTrade, correctTradeExecutionDate } from "@application/services/TradeService";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { getTradeStatus } from "@domain/entities/Trade";
@@ -25,6 +25,19 @@ export function TradesPage() {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [buyZoneTicker, setBuyZoneTicker] = useState<string | undefined>(undefined);
   const [moveTradeTarget, setMoveTradeTarget] = useState<Trade | null>(null);
+  const [editingDate, setEditingDate] = useState<{ tradeId: string; value: string } | null>(null);
+  const [dateError, setDateError] = useState<{ tradeId: string; message: string } | null>(null);
+
+  async function saveCorrectedDate() {
+    if (!editingDate) return;
+    try {
+      await correctTradeExecutionDate(repos, editingDate.tradeId, editingDate.value);
+      setDateError(null);
+      setEditingDate(null);
+    } catch (e) {
+      setDateError({ tradeId: editingDate.tradeId, message: e instanceof Error ? e.message : "Failed to correct the date." });
+    }
+  }
 
   const trades = useLiveQuery(() => repos.trades.getByPortfolio(portfolioId), [portfolioId]);
   const allocations = useLiveQuery(() => repos.tradeAllocations.getByPortfolio(portfolioId), [portfolioId]);
@@ -164,7 +177,66 @@ export function TradesPage() {
                           <span className="ml-2 text-xs font-normal text-slate-500">{trade.companyName}</span>
                         ) : null}
                       </td>
-                      <td className="px-4 py-2.5 text-slate-300">{formatDate(trade.executionDate)}</td>
+                      <td className="px-4 py-2.5 text-slate-300" onClick={(e) => e.stopPropagation()}>
+                        {editingDate?.tradeId === trade.id ? (
+                          <span className="flex items-center gap-1">
+                            <input
+                              type="date"
+                              autoFocus
+                              value={editingDate.value}
+                              min={TRACKING_START_DATE}
+                              max={new Date().toISOString().slice(0, 10)}
+                              onChange={(e) => setEditingDate({ tradeId: trade.id, value: e.target.value })}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void saveCorrectedDate();
+                                if (e.key === "Escape") setEditingDate(null);
+                              }}
+                              className="rounded border border-cyan-500/50 bg-slate-800 px-1.5 py-0.5 text-xs text-slate-100"
+                            />
+                            <button
+                              onClick={() => void saveCorrectedDate()}
+                              title="Save the corrected date"
+                              className="rounded p-1 text-emerald-400 hover:bg-emerald-500/10"
+                            >
+                              <Check size={13} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingDate(null);
+                                setDateError(null);
+                              }}
+                              className="rounded p-1 text-slate-500 hover:bg-slate-800"
+                            >
+                              <X size={13} />
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1.5">
+                            {formatDate(trade.executionDate)}
+                            {trade.notes?.startsWith("Opening balance") ? (
+                              <span
+                                title="Not a real purchase date — this lot was booked as an opening balance at the tracking floor because the actual buy predates 01 Jan 2026 (or its invoice was unavailable). Its avg cost came from a broker position screenshot."
+                                className="inline-flex items-center rounded-full bg-slate-700/40 px-2 py-0.5 text-[11px] font-medium text-slate-400"
+                              >
+                                Opening balance
+                              </span>
+                            ) : null}
+                            <button
+                              onClick={() => {
+                                setDateError(null);
+                                setEditingDate({ tradeId: trade.id, value: trade.executionDate });
+                              }}
+                              title="Correct this execution date — only the date changes; shares, price and sell history stay untouched."
+                              className="rounded p-1 text-slate-600 hover:bg-slate-800 hover:text-slate-300"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                          </span>
+                        )}
+                        {dateError?.tradeId === trade.id ? (
+                          <p className="mt-1 text-xs text-rose-400">{dateError.message}</p>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatShares(trade.shares)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatShares(trade.remainingShares)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatMoney(trade.entryPrice)}</td>

@@ -8,6 +8,7 @@ import {
   moveTrade,
   deleteTrade,
   renameTickerEverywhere,
+  correctTradeExecutionDate,
   findTickersSplitAcrossPortfolios,
   consolidateTicker,
 } from "./TradeService";
@@ -175,6 +176,69 @@ describe("deleteTrade", () => {
   it("rejects an unknown trade id", async () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
     await expect(deleteTrade(repos, "nope")).rejects.toThrow(/not found/i);
+  });
+});
+
+describe("correctTradeExecutionDate", () => {
+  it("moves the trade's date and its Buy timeline event together, touching nothing else", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-01-01",
+      executionTime: "10:30",
+    });
+
+    await correctTradeExecutionDate(repos, trade.id, "2026-02-10");
+
+    const updated = await repos.trades.getById(trade.id);
+    expect(updated?.executionDate).toBe("2026-02-10");
+    expect(updated?.shares).toBe(100);
+    expect(updated?.entryPrice).toBe(50);
+
+    const events = await repos.timeline.getByPortfolio("p1");
+    const buyEvent = events.find((e) => e.type === "Buy" && e.relatedTradeIds?.includes(trade.id));
+    expect(buyEvent?.timestamp).toBe("2026-02-10T10:30");
+  });
+
+  it("rejects a date before the tracking floor or in the future", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+
+    await expect(correctTradeExecutionDate(repos, trade.id, "2025-12-31")).rejects.toThrow(/not tracked/);
+    await expect(correctTradeExecutionDate(repos, trade.id, "2100-01-01")).rejects.toThrow(/future/);
+  });
+
+  it("refuses a buy date after a sell that already closed shares from the lot", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [{ tradeId: trade.id, shares: 40, exitPrice: 60 }],
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+
+    await expect(correctTradeExecutionDate(repos, trade.id, "2026-03-01")).rejects.toThrow(/can't be after/);
+    await correctTradeExecutionDate(repos, trade.id, "2026-01-20");
+    expect((await repos.trades.getById(trade.id))?.executionDate).toBe("2026-01-20");
   });
 });
 
