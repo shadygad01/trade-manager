@@ -96,6 +96,39 @@ describe("ThndrParser.parseStatementText", () => {
     const [candidate] = parser.parseStatementText(text);
     expect(candidate.ticker).toBe("COMI");
     expect(candidate.shares).toBe(10);
+    expect(candidate.confidence).toBe("high");
+  });
+
+  it("resolves a company name previously missing from the known-ticker map (Arabian Cement, Orascom Construction, Orascom Development Egypt)", () => {
+    const arcc = parser.parseStatementText("2/2/2026 Buy Arabian Cement (42@47.4700) -1,999.23")[0];
+    expect(arcc).toMatchObject({ ticker: "ARCC", confidence: "high" });
+
+    const oras = parser.parseStatementText("2/2/2026 Buy Orascom Construction (6@404.0000)")[0];
+    expect(oras).toMatchObject({ ticker: "ORAS", confidence: "high" });
+
+    const orhd = parser.parseStatementText("2/2/2026 Buy Orascom Development Egypt (20@23.5800)")[0];
+    expect(orhd).toMatchObject({ ticker: "ORHD", confidence: "high" });
+  });
+
+  it("resolves the same real stock to one ticker regardless of a trailing bracketed symbol OCR'd with a different bracket glyph", () => {
+    // Real observed failure: the exact same company split into two Import
+    // ticker groups — "Egyptian International Pharmaceuticals (EIPICO)" from
+    // one screenshot and "... {EIPICO}" from another (OCR read the bracket
+    // differently) — because the un-stripped bracket became part of the
+    // fallback "ticker" string itself.
+    const withParen = parser.parseStatementText("2/2/2026 Buy Egyptian International Pharmaceuticals (EIPICO) (12@86.7200)")[0];
+    const withBrace = parser.parseStatementText("2/2/2026 Buy Egyptian International Pharmaceuticals {EIPICO} (19@78.5600)")[0];
+    expect(withParen.ticker).toBe("PHAR");
+    expect(withBrace.ticker).toBe("PHAR");
+    expect(withParen.confidence).toBe("high");
+    expect(withBrace.confidence).toBe("high");
+  });
+
+  it("still falls back to a stable low-confidence ticker (with any trailing bracket stripped) for a genuinely unknown company", () => {
+    const withParen = parser.parseStatementText("2/2/2026 Buy Some Totally Unknown Company (XYZQ) (10@75.000)")[0];
+    const withBrace = parser.parseStatementText("2/2/2026 Buy Some Totally Unknown Company {XYZQ} (10@75.000)")[0];
+    expect(withParen.ticker).toBe(withBrace.ticker);
+    expect(withParen.confidence).toBe("low");
   });
 
   it("excludes non-stock instruments like Thndr's money-market product", () => {

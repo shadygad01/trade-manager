@@ -1,6 +1,6 @@
 import type { ParsedDividendCandidate, ParsedTradeCandidate, ParseConfidence } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
-import { KNOWN_EGX_TICKERS, NON_STOCK_INSTRUMENTS } from "@domain/value-objects/knownTickers";
+import { COMPANY_NAME_ALIASES, KNOWN_EGX_TICKERS, NON_STOCK_INSTRUMENTS } from "@domain/value-objects/knownTickers";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { BrokerParser, OrderRowText, OrderRowsParseResult, OrdersScreenParseResult } from "./BrokerParser";
 import { defaultTrackedSince, isWithinTrackedRange, partitionByRange } from "./trackedDateRange";
@@ -62,6 +62,9 @@ const COMPANY_TICKER_MAP: Record<string, string> = {};
 for (const { ticker, companyName } of KNOWN_EGX_TICKERS) {
   COMPANY_TICKER_MAP[normalizeCompanyKey(companyName)] = ticker;
 }
+for (const { ticker, companyName } of COMPANY_NAME_ALIASES) {
+  COMPANY_TICKER_MAP[normalizeCompanyKey(companyName)] = ticker;
+}
 
 const CANONICAL_NAMES: Record<string, string> = {};
 for (const { ticker, companyName } of KNOWN_EGX_TICKERS) {
@@ -98,6 +101,25 @@ export function fuzzyMatchTicker(key: string): string | null {
 // "ticker" group around noise.
 const MIN_UNMAPPED_NAME_LENGTH = 3;
 
+// Thndr sometimes appends a bracketed annotation right after a company's
+// full name — a trading-symbol short-form ("Egyptian International
+// Pharmaceuticals (EIPICO)") or a qualifier ("Commercial International Bank
+// (Egypt)"). OCR renders the bracket glyph inconsistently ("(" vs "{"), and
+// normalizeCompanyKey doesn't strip it, so the exact same company — read
+// from two documents that happened to OCR the bracket differently — used to
+// normalize to two different strings and, whenever the name itself wasn't
+// in KNOWN_EGX_TICKERS, spawn two separate fallback "ticker" groups for one
+// real stock. Stripping the annotation before matching/falling back means
+// both variants collapse to the identical name, so they always resolve the
+// same way regardless of which bracket character OCR produced. None of
+// KNOWN_EGX_TICKERS's own company names end in a bracket, so this can only
+// improve a match, never mask an intentional one.
+const TRAILING_BRACKET_PATTERN = /\s*[({[][^(){}[\]]{1,20}[)}\]]\s*$/;
+
+function stripTrailingBracket(key: string): string {
+  return key.replace(TRAILING_BRACKET_PATTERN, "").trim();
+}
+
 /**
  * Resolves a Description-column company name to a ticker symbol: exact
  * normalized match ("high" confidence), then prefix match ("medium" — the
@@ -110,9 +132,14 @@ const MIN_UNMAPPED_NAME_LENGTH = 3;
  * caller drops the row instead of fabricating a group around noise.
  */
 function resolveTicker(description: string): { ticker: string; confidence: ParseConfidence } | null {
-  const key = normalizeCompanyKey(description);
-  if (COMPANY_TICKER_MAP[key]) return { ticker: COMPANY_TICKER_MAP[key], confidence: "high" };
-  if (key.length < MIN_UNMAPPED_NAME_LENGTH) return null;
+  const rawKey = normalizeCompanyKey(description);
+  if (COMPANY_TICKER_MAP[rawKey]) return { ticker: COMPANY_TICKER_MAP[rawKey], confidence: "high" };
+  if (rawKey.length < MIN_UNMAPPED_NAME_LENGTH) return null;
+
+  const stripped = stripTrailingBracket(rawKey);
+  const key = stripped.length >= MIN_UNMAPPED_NAME_LENGTH ? stripped : rawKey;
+  if (key !== rawKey && COMPANY_TICKER_MAP[key]) return { ticker: COMPANY_TICKER_MAP[key], confidence: "high" };
+
   // name.startsWith(key) is only a meaningful "OCR truncated this" signal
   // once key itself is long enough to identify a specific company — a short
   // key (already rejected above) would otherwise spuriously "prefix-match"
