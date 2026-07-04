@@ -56,7 +56,7 @@ vi.mock("@presentation/lib/data", () => ({
         return Promise.resolve();
       },
     },
-    prices: { getAllPrices: () => Promise.resolve({}) },
+    prices: { getAllPrices: () => Promise.resolve({}), getSnapshotInfo: () => Promise.resolve(undefined) },
   },
 }));
 

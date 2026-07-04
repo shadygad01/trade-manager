@@ -12,7 +12,14 @@ const OUTPUT_PATH = path.resolve(
   "../../public/price-snapshot.json"
 );
 
-async function fetchFromYahoo(ticker: string): Promise<number | undefined> {
+interface Quote {
+  price: number;
+  /** Market time of the quote (Yahoo's regularMarketTime) — after the EGX session this IS the official close time; during the session it's the live tick time. Absent when the provider doesn't report one. */
+  quotedAt?: string;
+  source: "yahoo" | "tradingview";
+}
+
+async function fetchFromYahoo(ticker: string): Promise<Quote> {
   const response = await fetch(YAHOO_CHART_URL(ticker), {
     headers: { "User-Agent": "Mozilla/5.0" },
   });
@@ -20,14 +27,20 @@ async function fetchFromYahoo(ticker: string): Promise<number | undefined> {
     throw new Error(`Yahoo responded ${response.status} for ${ticker}`);
   }
   const data = await response.json();
-  const price = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+  const meta = data?.chart?.result?.[0]?.meta;
+  const price = meta?.regularMarketPrice;
   if (typeof price !== "number") {
     throw new Error(`Yahoo returned no regularMarketPrice for ${ticker}`);
   }
-  return price;
+  const marketTime = meta?.regularMarketTime;
+  return {
+    price,
+    quotedAt: typeof marketTime === "number" ? new Date(marketTime * 1000).toISOString() : undefined,
+    source: "yahoo",
+  };
 }
 
-async function fetchFromTradingView(ticker: string): Promise<number | undefined> {
+async function fetchFromTradingView(ticker: string): Promise<Quote> {
   const response = await fetch(TRADINGVIEW_SCAN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -44,7 +57,7 @@ async function fetchFromTradingView(ticker: string): Promise<number | undefined>
   if (typeof close !== "number") {
     throw new Error(`TradingView returned no close for ${ticker}`);
   }
-  return close;
+  return { price: close, source: "tradingview" };
 }
 
 /**
@@ -52,7 +65,7 @@ async function fetchFromTradingView(ticker: string): Promise<number | undefined>
  * ends up missing from the snapshot if both public endpoints fail, and one
  * flaky ticker never blocks the rest of the batch.
  */
-async function fetchPrice(ticker: string): Promise<number | undefined> {
+async function fetchPrice(ticker: string): Promise<Quote | undefined> {
   try {
     return await fetchFromYahoo(ticker);
   } catch (yahooError) {
@@ -72,20 +85,25 @@ async function fetchPrice(ticker: string): Promise<number | undefined> {
 
 async function main(): Promise<void> {
   const prices: Record<string, number> = {};
+  const quotes: Record<string, Quote> = {};
   const failed: string[] = [];
 
   for (const { ticker } of KNOWN_EGX_TICKERS) {
-    const price = await fetchPrice(ticker);
-    if (price === undefined) {
+    const quote = await fetchPrice(ticker);
+    if (quote === undefined) {
       failed.push(ticker);
     } else {
-      prices[ticker] = price;
+      prices[ticker] = quote.price;
+      quotes[ticker] = quote;
     }
   }
 
+  // `prices` is kept alongside the richer `quotes` so an already-deployed
+  // bundle (which only reads `prices`) keeps working across a format bump.
   const snapshot = {
     asOf: new Date().toISOString(),
     prices,
+    quotes,
   };
 
   await mkdir(path.dirname(OUTPUT_PATH), { recursive: true });

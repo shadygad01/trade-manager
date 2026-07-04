@@ -11,6 +11,7 @@ import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import { PageHeader } from "@presentation/components/PageHeader";
+import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
 import { SellAllocationForm } from "@presentation/components/SellAllocationForm";
@@ -93,6 +94,7 @@ export function TradesPage() {
           </>
         }
       />
+      <PriceFreshness />
 
       {allTickers.length > 0 ? (
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">

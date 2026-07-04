@@ -2,9 +2,12 @@ name: Update Price Snapshot
 
 on:
   schedule:
-    # EGX trades ~10:00-14:30 Cairo time (UTC+2/+3) Sun-Thu.
-    # Runs every 30 minutes across 07:00-12:30 UTC to cover the session with margin.
-    - cron: "*/30 7-12 * * 0-4"
+    # EGX trades ~10:00-14:30 Cairo time (UTC+2 winter / UTC+3 summer), Sun-Thu.
+    # Runs every 30 minutes across 07:00-13:30 UTC: the whole session in both
+    # DST regimes PLUS at least two post-close runs (close is 11:30 UTC in
+    # summer, 12:30 UTC in winter), so the day's final snapshot always captures
+    # the official closing price rather than a mid-session tick.
+    - cron: "*/30 7-13 * * 0-4"
   workflow_dispatch:
 
 permissions:

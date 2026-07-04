@@ -7,6 +7,7 @@ import { createPortfolioAndSave, unarchivePortfolio } from "@application/service
 import type { Portfolio, PortfolioKind } from "@domain/entities/Portfolio";
 import { computePositions, findTickersSplitAcrossPortfolios, consolidateTicker, type SplitTickerEntry } from "@application/services/TradeService";
 import { PageHeader } from "@presentation/components/PageHeader";
+import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
 import { formatMoney, formatShares } from "@presentation/lib/format";
@@ -58,6 +59,7 @@ export function PortfoliosPage() {
           </button>
         }
       />
+      <PriceFreshness />
 
       {splitTickers && splitTickers.length > 0 ? (
         <SplitTickersBanner splitTickers={splitTickers} portfolios={portfolios ?? []} />
