@@ -302,6 +302,16 @@ Direct user report (screenshots): a broker "My Position" screenshot verified TMG
 - Verified end-to-end against a real running build: seeded exactly the reported scenario (TMGH verified at 35 units/76.68 avg, zero trades), clicked "Record as opening balance," and confirmed a real Trade landed (35 sh @ 76.68, dated 2026-01-01) with the Holdings row immediately reading "Matches broker" and the warning gone.
 - 2 new component tests (275 total): booking the opening balance from the broker's units/avg cost; the action is absent (with an explanatory hint) when the screenshot has no avg cost.
 
+### Post-sprint-8 — Consolidate a ticker split across portfolios
+
+Direct user report, two-part: (1) some stocks (named examples: CSAG, COMI) ended up with trades in two different portfolios by mistake, and there was no way to merge them; (2) some tickers read "verified"/"Matches broker" despite the numbers actually being wrong. Investigated (2) rather than guessing: a broker "My Position" screenshot reflects one real account's total regardless of which app-side portfolio a buy was filed under, so once a ticker's trades are split across portfolios, each portfolio's own reconciliation only ever compares an incomplete subset of the real position against whatever verification happens to be filed there — a spurious match/mismatch is a direct, expected symptom of the split, not an independent bug. (1) is therefore the actual fix for (2) as well.
+
+- **`findTickersSplitAcrossPortfolios`** (`TradeService.ts`, new): pure function grouping open trades' remaining shares by ticker then portfolio, returning every ticker held (nonzero shares) in more than one portfolio.
+- **`consolidateTicker`** (`TradeService.ts`, new): moves every trade for a ticker (via the existing `moveTrade`, so cash/sell-groups/timeline all stay correct) plus any broker-position verification recorded for it under a different portfolio, into one target portfolio.
+- **`PortfoliosPage`** gained a "Stocks split across portfolios" banner (the natural cross-portfolio overview page) — one row per split ticker showing each portfolio's share count, a target-portfolio picker (defaulting to whichever portfolio already holds the most shares), and a "Consolidate" button.
+- Verified end-to-end against a real running build: recorded CSAG buys under two different portfolios (50 sh in one, 30 in the other) exactly reproducing the reported scenario, confirmed the banner surfaced it correctly, clicked "Consolidate," and confirmed both trades landed in the target portfolio with the other portfolio's cash fully refunded and the banner gone.
+- 6 new tests (281 total): `findTickersSplitAcrossPortfolios` (flags a split, doesn't flag a ticker closed out in one of the two portfolios) and `consolidateTicker` (moves trades + verifications, no-op when everything's already in the target) in `TradeService.test.ts`; the banner's presence/consolidate action and its absence when nothing is split, in `PortfoliosPage.test.tsx`.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Link } from "wouter";
-import { Plus, Briefcase, ArrowRight, Archive, ArchiveRestore, ChevronDown, ChevronRight } from "lucide-react";
+import { Plus, Briefcase, ArrowRight, Archive, ArchiveRestore, ChevronDown, ChevronRight, ShieldAlert, FolderSymlink } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { createPortfolioAndSave, unarchivePortfolio } from "@application/services/PortfolioService";
 import type { Portfolio, PortfolioKind } from "@domain/entities/Portfolio";
-import { computePositions } from "@application/services/TradeService";
+import { computePositions, findTickersSplitAcrossPortfolios, consolidateTicker, type SplitTickerEntry } from "@application/services/TradeService";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
-import { formatMoney } from "@presentation/lib/format";
+import { formatMoney, formatShares } from "@presentation/lib/format";
 
 const KINDS: PortfolioKind[] = ["Investment", "Trading", "Swing", "Experiments", "Retirement", "Education", "Custom"];
 
@@ -39,6 +39,11 @@ export function PortfoliosPage() {
     return map;
   }, [portfolios]);
 
+  const splitTickers = useLiveQuery(async () => {
+    const trades = await repos.trades.getAll();
+    return findTickersSplitAcrossPortfolios(trades);
+  }, []);
+
   return (
     <div>
       <PageHeader
@@ -53,6 +58,10 @@ export function PortfoliosPage() {
           </button>
         }
       />
+
+      {splitTickers && splitTickers.length > 0 ? (
+        <SplitTickersBanner splitTickers={splitTickers} portfolios={portfolios ?? []} />
+      ) : null}
 
       {portfolios && active.length === 0 && archived.length === 0 ? (
         <EmptyState
@@ -107,6 +116,93 @@ export function PortfoliosPage() {
       ) : null}
 
       <CreatePortfolioModal open={modalOpen} onClose={() => setModalOpen(false)} />
+    </div>
+  );
+}
+
+function SplitTickersBanner({
+  splitTickers,
+  portfolios,
+}: {
+  splitTickers: SplitTickerEntry[];
+  portfolios: Portfolio[];
+}) {
+  const portfolioName = (id: string) => portfolios.find((p) => p.id === id)?.name ?? "?";
+  const [targetByTicker, setTargetByTicker] = useState<Record<string, string>>({});
+  const [consolidating, setConsolidating] = useState<string | null>(null);
+  const [error, setError] = useState<{ ticker: string; message: string } | null>(null);
+
+  async function handleConsolidate(entry: SplitTickerEntry) {
+    // Defaults to whichever portfolio already holds the most shares — the
+    // smaller holding(s) are more likely the accidental one to fold in.
+    const defaultTarget = [...entry.portfolios].sort((a, b) => b.shares - a.shares)[0].portfolioId;
+    const target = targetByTicker[entry.ticker] ?? defaultTarget;
+    if (
+      !confirm(
+        `Move every ${entry.ticker} trade (and any broker verification for it) from every other portfolio into "${portfolioName(target)}"? Cash moves with each trade. This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    setConsolidating(entry.ticker);
+    try {
+      await consolidateTicker(repos, entry.ticker, target);
+    } catch (e) {
+      setError({ ticker: entry.ticker, message: e instanceof Error ? e.message : "Consolidation failed." });
+    } finally {
+      setConsolidating(null);
+    }
+  }
+
+  return (
+    <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+      <p className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-400">
+        <ShieldAlert size={16} /> Stocks split across portfolios
+      </p>
+      <p className="mb-3 text-xs text-amber-300/70">
+        Each of these is held in more than one portfolio — usually a mistake, since a broker account is one real
+        position regardless of which portfolio a buy landed in. Consolidating moves every trade for that ticker (and
+        any broker verification) into one portfolio.
+      </p>
+      <ul className="space-y-2">
+        {splitTickers.map((entry) => {
+          const defaultTarget = [...entry.portfolios].sort((a, b) => b.shares - a.shares)[0].portfolioId;
+          const target = targetByTicker[entry.ticker] ?? defaultTarget;
+          return (
+            <li key={entry.ticker} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-900/40 px-3 py-2 text-sm">
+              <span className="text-slate-200">
+                <span className="font-semibold">{entry.ticker}</span>{" "}
+                <span className="text-slate-400">
+                  ({entry.portfolios.map((p) => `${formatShares(p.shares)} sh in ${portfolioName(p.portfolioId)}`).join(", ")})
+                </span>
+              </span>
+              <span className="flex items-center gap-2">
+                <select
+                  value={target}
+                  onChange={(e) => setTargetByTicker((prev) => ({ ...prev, [entry.ticker]: e.target.value }))}
+                  className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+                >
+                  {entry.portfolios.map((p) => (
+                    <option key={p.portfolioId} value={p.portfolioId}>
+                      Consolidate into {portfolioName(p.portfolioId)}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => void handleConsolidate(entry)}
+                  disabled={consolidating === entry.ticker}
+                  className="flex items-center gap-1.5 rounded-md border border-amber-400/40 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+                >
+                  <FolderSymlink size={12} />
+                  {consolidating === entry.ticker ? "Consolidating…" : "Consolidate"}
+                </button>
+              </span>
+              {error && error.ticker === entry.ticker ? <p className="w-full text-[11px] text-rose-400">{error.message}</p> : null}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
