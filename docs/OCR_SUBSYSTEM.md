@@ -1,6 +1,6 @@
 # OCR Subsystem — Screenshot Import
 
-Portfolio OS can import trades directly from broker screenshots and PDF statements, entirely client-side — no image or text ever leaves the browser. The reference broker is [Thndr](https://thndr.app), a popular Egyptian brokerage app, with support for Buy/Sell confirmations, order-history screens, portfolio/position screenshots, and statement PDFs, in both Arabic and English.
+Portfolio OS can import trades directly from broker screenshots and PDF statements, entirely client-side — no image or text ever leaves the browser. The reference broker is [Thndr](https://thndr.app), a popular Egyptian brokerage app, with support for Buy/Sell confirmations, order-history screens, portfolio/position screenshots, per-trade invoice PDFs, and statement PDFs, in both Arabic and English.
 
 Import (`/import`) is a global page, not scoped to one portfolio, and runs as an explicit two-phase workflow:
 
@@ -30,6 +30,8 @@ File
 ```
 
 Each stage that finds nothing hands off to the next; warnings (incomplete rows, status-count mismatches, out-of-range dates) are carried through to the final `ImportResult` rather than silently dropped, so the user can tell *why* a screenshot only produced a partial result.
+
+`parseStatementText` itself routes between two genuinely different Thndr document shapes rather than being a single format: the dated "Customer Account Statement" (`Buy X (qty@price)` inline rows, price derived from the Value column) and a per-trade "Invoice" PDF — a one-transaction-per-document email receipt with every field explicitly labeled ("Security Name", "Total Quantity", "Total Fees", ...) instead of positionally guessed at. `looksLikeInvoiceImpl` detects the latter (its own footer states "the text in this invoice is standardized"), letting that path trust `Average Price`/`Total Cost`/`Total Fees` directly — a more reliable source than any screenshot this file otherwise parses — rather than deriving price from a Value column.
 
 ## Why OCR quality required this many stages
 

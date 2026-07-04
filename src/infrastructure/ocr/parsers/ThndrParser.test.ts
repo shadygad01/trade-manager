@@ -141,6 +141,54 @@ describe("ThndrParser.parseStatementText", () => {
   });
 });
 
+describe("ThndrParser.parseStatementText — per-trade Invoice PDF", () => {
+  const parser = new ThndrParser("2020-01-01");
+
+  // Real Thndr "Invoice" document text (a per-trade PDF email receipt,
+  // fields explicitly labeled rather than inline "Buy X (qty@price)").
+  const invoiceText = `
+    Thndr Securities Brokerage                                  Invoice
+    Shady Gadelrab Masood Ibrahim               Custodian: Thndr Technology Holding
+    24/06/2026
+
+    Security Name    Symbol Code       Transaction Type   Average Cost
+    EFG HOLDING      EGS69101C011      Buy                27.09 EGP
+
+    Transaction No.        Quantity    Price        Value
+    N000248458443          39          26.98 EGP    1,052.22 EGP
+                           Total Quantity   Average Price   Total Cost
+                           39               26.98 EGP       1,052.22 EGP
+
+    Fees                          Amount
+    EGX Services                  0.11 EGP
+    MCDR Services                 0.11 EGP
+    FRA Services                  1.00 EGP
+    Risk Insurance                0.05 EGP
+    Brokerage & Custody Fees      1.05 EGP
+    Brokerage Order Fees          2.00 EGP
+    Total Fees                    4.32 EGP
+    Grand Total                   1,056.54 EGP
+  `;
+
+  it("parses the invoice's labeled fields into a single high-confidence candidate", () => {
+    const [candidate] = parser.parseStatementText(invoiceText);
+    expect(candidate).toMatchObject({
+      ticker: "HRHO",
+      side: "BUY",
+      shares: 39,
+      price: 26.98,
+      fees: 4.32,
+      date: "2026-06-24",
+      confidence: "high",
+    });
+  });
+
+  it("returns no candidates when the invoice's totals row is missing (rather than guessing)", () => {
+    const truncated = invoiceText.split("Total Quantity")[0];
+    expect(parser.parseStatementText(truncated)).toHaveLength(0);
+  });
+});
+
 describe("ThndrParser.parseOrdersScreenText", () => {
   const parser = new ThndrParser("2020-01-01");
   const header = "ORAS\nOrascom Construction PLC\n";

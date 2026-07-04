@@ -198,6 +198,12 @@ Two live user bug reports (screenshots), fixed together:
 
 - 1 new test (231 total).
 
+### Post-sprint-7 — a new Thndr document shape: per-trade Invoice PDFs
+
+User-provided sample: a Thndr "Invoice" — a one-transaction-per-document PDF email receipt, structurally nothing like the existing statement/orders-screen formats (every field explicitly labeled: "Security Name", "Symbol Code", "Total Quantity", "Total Fees", "Grand Total", instead of an inline "Buy X (qty@price)" sentence or a flat orders table). `ThndrParser.parseStatementText` now detects this shape (`looksLikeInvoiceImpl`, anchored on the invoice's own "the text in this invoice is standardized" guarantee) and parses it directly from its labeled fields — trusting `Average Price`/`Total Cost`/`Total Fees` outright rather than deriving price from a Value column, since every field here is unambiguously anchored rather than positionally guessed at. An exact company-name match (e.g. "EFG HOLDING" → HRHO) resolves at "high" confidence, same as the statement path.
+
+- 2 new tests (233 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

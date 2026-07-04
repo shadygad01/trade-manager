@@ -192,6 +192,70 @@ function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
   return candidates;
 }
 
+// ─── Format 1b: Thndr per-trade "Invoice" (PDF email receipt) ──────────────
+// A completely different document from the statement/orders screens above:
+// a one-transaction-per-document PDF receipt with explicit field labels
+// ("Security Name", "Quantity", "Total Cost", "Total Fees", ...) rather than
+// an inline "Buy X (qty@price)" sentence. The invoice's own footer states
+// "the text in this invoice is standardized", so — unlike the OCR'd
+// screenshots this file otherwise parses — every field here is anchored to
+// a fixed label instead of being positionally guessed at, which is why this
+// path can trust "Average Price"/"Total Cost"/"Total Fees" directly rather
+// than deriving price from a Value column the way parseStatementTextImpl
+// has to.
+const looksLikeInvoicePattern = /invoice/i;
+
+function looksLikeInvoiceImpl(text: string): boolean {
+  return looksLikeInvoicePattern.test(text) && /security name/i.test(text) && /thndr/i.test(text);
+}
+
+function parseInvoiceTextImpl(text: string): ParsedTradeCandidate[] {
+  const normalized = text.replace(/\s+/g, " ");
+
+  const dateMatch = normalized.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (!dateMatch) return [];
+  const date = toIsoDate(parseInt(dateMatch[3], 10), parseInt(dateMatch[2], 10), parseInt(dateMatch[1], 10));
+  if (!date) return [];
+
+  // "Security Name / Symbol Code / Transaction Type / Average Cost" header
+  // immediately followed by that row's values, in the same left-to-right
+  // reading order — the invoice's fixed table layout, not a guess.
+  const headerMatch = normalized.match(
+    /Security Name\s+Symbol Code\s+Transaction Type\s+Average Cost\s+(.+?)\s+([A-Z]{2}[A-Z0-9]{6,})\s+(Buy|Sell)\s+[\d,]+(?:\.\d+)?\s*EGP/i,
+  );
+  if (!headerMatch) return [];
+  const [, securityName, , sideRaw] = headerMatch;
+
+  const totalsMatch = normalized.match(
+    /Total Quantity\s+Average Price\s+Total Cost\s+([\d,]+(?:\.\d+)?)\s+([\d,]+(?:\.\d+)?)\s*EGP\s+([\d,]+(?:\.\d+)?)\s*EGP/i,
+  );
+  if (!totalsMatch) return [];
+  const shares = parseFloat(totalsMatch[1].replace(/,/g, ""));
+  const price = parseFloat(totalsMatch[2].replace(/,/g, ""));
+  if (!shares || !price) return [];
+
+  const feesMatch = normalized.match(/Total Fees\s+([\d,]+(?:\.\d+)?)\s*EGP/i);
+  const fees = feesMatch ? parseFloat(feesMatch[1].replace(/,/g, "")) : 0;
+
+  const resolved = resolveTicker(securityName.trim());
+  if (!resolved) return [];
+  const { ticker, confidence } = resolved;
+  if (NON_STOCK_INSTRUMENTS.has(ticker.toUpperCase())) return [];
+
+  return [
+    {
+      ticker: normalizeTicker(ticker),
+      companyName: canonicalNameForTicker(normalizeTicker(ticker)),
+      side: /buy/i.test(sideRaw) ? "BUY" : "SELL",
+      confidence,
+      shares,
+      price,
+      fees,
+      date,
+    },
+  ];
+}
+
 // ─── Format 2: Thndr app "Orders" screen (screenshot) ──────────────────────
 const MONTH_MAP: Record<string, number> = {
   jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
@@ -566,7 +630,8 @@ export class ThndrParser implements BrokerParser {
   }
 
   parseStatementText(text: string): ParsedTradeCandidate[] {
-    const { inRange } = partitionByRange(parseStatementTextImpl(text), (d) => this.isWithinTrackedRange(d));
+    const raw = looksLikeInvoiceImpl(text) ? parseInvoiceTextImpl(text) : parseStatementTextImpl(text);
+    const { inRange } = partitionByRange(raw, (d) => this.isWithinTrackedRange(d));
     return inRange;
   }
 
