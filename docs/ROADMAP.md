@@ -169,6 +169,12 @@ The new `sectorAllocation` calculator groups open-position market value (falling
 
 - 10 new tests (5 sectorAllocation, 3 recordBuy sector-assignment, 2 knownSectors) — 225 total.
 
+### Post-sprint-7 — RecordBuyModal sector-suggestion coverage
+
+With both remaining next-recommended-sprint items deferred pending a real trigger/data, a fresh gap-check found the Sector Allocation feature's own UX (the auto-suggest-while-blank behavior in `TradesPage`'s `RecordBuyModal`) had unit coverage for the service-layer default but no test proving the form itself behaves correctly for a user. `RecordBuyModal` is now exported (same pattern as `CandidateRow`) and covered directly: a known ticker suggests its sector while the field is blank, an unknown ticker leaves it blank rather than guessing, and a sector the user already typed is never overwritten by a later ticker change.
+
+- 3 new component tests (228 total).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
