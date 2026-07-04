@@ -585,6 +585,113 @@ describe("TickerGroupCard — mismatch auto-reconcile suggestion (the ORHD 99-vs
   });
 });
 
+describe("TickerGroupCard — reconciliation transparency and company-name-fallback rename", () => {
+  it("shows the existing + batch = broker breakdown when a verified count includes invisible ledger shares (the ORHD 20+54=74 case)", () => {
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [buyEntry("b1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 74, existingRemainingShares: 20, verifiedUnits: 74 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/20 already on the ledger \+ 54 in this batch = 74/)).toBeInTheDocument();
+  });
+
+  it("offers a one-click rename when the group's 'ticker' is a known company name (the DELTA SUGAR case)", async () => {
+    const user = userEvent.setup();
+    const onRenameTicker = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="DELTA SUGAR"
+        group={{ buys: [buyEntry("d1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "closed-position", netShares: 0 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={onRenameTicker}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+        knownTickerSuggestion="SUGR"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename to SUGR" }));
+    expect(onRenameTicker).toHaveBeenCalledWith("SUGR");
+  });
+
+  it("excludes a committed sell's own allocations from its duplicate check (the MEDINET Added+Duplicate case)", () => {
+    const duplicateMatch = vi.fn(() => undefined);
+    const entry = sellEntry("s1");
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [entry], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 0, verifiedUnits: 0 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set(["s1"])}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={duplicateMatch}
+        addedTradeIds={{}}
+        addedAllocationIds={{ s1: ["alloc-1", "alloc-2"] }}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(duplicateMatch).toHaveBeenCalledWith(entry.candidate, undefined, ["alloc-1", "alloc-2"]);
+    expect(screen.getByText("Added")).toBeInTheDocument();
+    expect(screen.queryByText("Duplicate")).not.toBeInTheDocument();
+  });
+});
+
 describe("TickerGroupCard — per-ticker Confirm (the ORWE case: verified but blocked by an unrelated stuck ticker)", () => {
   it("shows a Confirm {ticker} button once matched and portfolio-resolved, independent of any other ticker", async () => {
     const user = userEvent.setup();

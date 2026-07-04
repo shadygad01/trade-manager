@@ -9,7 +9,8 @@ import { formatDate, formatMoney, formatShares } from "@presentation/lib/format"
 interface SellAllocationFormProps {
   portfolioId: string;
   ticker: string;
-  onDone: () => void;
+  /** `created.allocationIds` are the TradeAllocation ids this sell just wrote — callers that show the sell row afterward can exclude them from duplicate checks so the row never "matches" itself (see ImportPage's duplicateMatch). */
+  onDone: (created?: { allocationIds: string[] }) => void;
   onCancel?: () => void;
   initial?: {
     exitPrice?: number;
@@ -130,8 +131,8 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
         executionTime,
       };
 
-      await recordSell(repos, input);
-      onDone();
+      const result = await recordSell(repos, input);
+      onDone({ allocationIds: result.allocations.map((a) => a.id) });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to record sell.");
     } finally {

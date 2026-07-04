@@ -29,6 +29,8 @@ export const KNOWN_EGX_TICKERS: readonly { ticker: string; companyName: string }
   { ticker: "ORAS", companyName: "ORASCOM CONSTRUCTION" },
   { ticker: "ARCC", companyName: "ARABIAN CEMENT" },
   { ticker: "ORHD", companyName: "ORASCOM DEVELOPMENT EGYPT" },
+  { ticker: "SUGR", companyName: "DELTA SUGAR" },
+  { ticker: "MASR", companyName: "MEDINET MASR HOUSING" },
 ];
 
 /**
@@ -52,3 +54,22 @@ export const COMPANY_NAME_ALIASES: readonly { ticker: string; companyName: strin
 
 /** Instruments a broker may report that are not tradeable equities (exclude from ticker resolution). */
 export const NON_STOCK_INSTRUMENTS = new Set(["THNDRSAVINGS", "AZG"]);
+
+/**
+ * Resolves a company-name-as-ticker fallback back to its real EGX symbol.
+ * When OCR can't map a company name it files the whole ticker group under
+ * the raw name itself (e.g. a "DELTA SUGAR" group instead of SUGR) — and
+ * once the mapping is later added to KNOWN_EGX_TICKERS, new imports resolve
+ * correctly but the already-created group (and any trades committed under
+ * the fallback name) keep the wrong identity forever. This lets the Import
+ * page recognize such a group and offer a one-click rename to the real
+ * symbol. Exact normalized match only — a rename rewrites committed rows,
+ * so a fuzzy guess is not acceptable here.
+ */
+export function tickerForCompanyNameFallback(name: string): string | undefined {
+  const key = name.trim().toUpperCase();
+  if (key.length < 5 || !key.includes(" ")) return undefined;
+  const match =
+    KNOWN_EGX_TICKERS.find((t) => t.companyName === key) ?? COMPANY_NAME_ALIASES.find((t) => t.companyName === key);
+  return match?.ticker;
+}

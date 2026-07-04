@@ -27,6 +27,8 @@ export interface ImportSessionState {
   dismissedKeys: string[];
   /** Entry key -> the real Trade.id it became, so an auto-added row can still be deleted directly from Import. */
   addedTradeIds: Record<string, string>;
+  /** Sell entry key -> the TradeAllocation ids its "Allocate Sell" created — the Sell-side twin of addedTradeIds, excluding a committed sell's own allocations from its duplicate check (see ImportPage's duplicateMatch). */
+  addedAllocationIds: Record<string, string[]>;
   tickerPortfolio: Record<string, string>;
   uploadSeq: number;
   filesProcessed: number;
@@ -44,6 +46,7 @@ function emptyState(): ImportSessionState {
     skippedKeys: [],
     dismissedKeys: [],
     addedTradeIds: {},
+    addedAllocationIds: {},
     tickerPortfolio: {},
     uploadSeq: 0,
     filesProcessed: 0,

@@ -25,6 +25,7 @@ describe("checkTickerMatch", () => {
     });
     expect(result.matched).toBe(true);
     expect(result.netShares).toBe(90);
+    expect(result.existingRemainingShares).toBe(100);
   });
 
   it("flags a mismatch when the net shares differ from the verified units", () => {
