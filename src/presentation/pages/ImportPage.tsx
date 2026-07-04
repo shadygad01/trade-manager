@@ -1220,9 +1220,11 @@ export function TickerGroupCard({
         </div>
       ) : matchStatus?.reason === "mismatch" ? (
         <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          Mismatch: extracted transactions total {formatShares(matchStatus.netShares)} shares, but the broker screenshot
-          shows {formatShares(matchStatus.verifiedUnits ?? 0)} — fix a duplicate/missing row or re-upload before this can
-          be distributed.
+          Mismatch: extracted transactions total {formatShares(matchStatus.netShares)} shares, but the broker's "My
+          Position" screenshot — the trusted source — shows {formatShares(matchStatus.verifiedUnits ?? 0)}. The
+          transaction list below is the likely cause: look for a duplicate or misclassified row (remove it with the icon
+          on the right to test-fix the match), or upload an Orders screenshot to confirm the exact transaction count
+          before this can be distributed.
         </div>
       ) : !portfolioResolved ? (
         <div className="border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">

@@ -437,6 +437,15 @@ Direct user follow-up on ORHD's still-unresolved Mismatch (5 Buy rows, 99 vs 74 
 - 2 new tests in `ImportPage.test.tsx`/`AutoCommitRow.test.tsx` (a clean, unflagged Mismatch row still offers a working remove button; clicking it calls `onDiscardPending` with the right entry) — 326 total.
 - Verified end-to-end against a real production build: seeded the exact ORHD shape (5 unflagged Buy rows totalling more shares than a broker screenshot verified) — confirmed all 5 rows show the small remove button, and that manually removing the two rows accounting for the excess collapsed the ticker straight to "Verified" with a working per-ticker Confirm button, exactly the workflow requested.
 
+### Post-sprint-8 fix — Mismatch banner copy points at the actual likely cause
+
+Direct user follow-up (still on ORHD): explained their own mental model for this class of problem — the broker's "My Position" screenshot is the trusted ground truth, so a Mismatch means the *extracted transaction list* is wrong, not the position count. To confirm the transaction list, request an Orders screenshot (broker order history); the discrepancy is likely a duplicate or a misclassified row. The previous banner copy ("fix a duplicate/missing row or re-upload") didn't say any of this — it read as a generic, undirected error rather than actionable guidance.
+
+- Reworded the plain "mismatch" banner (`TickerGroupCard` in `ImportPage.tsx`) to state explicitly that the broker position screenshot is the trusted source, that the transaction list is the likely cause, and to suggest two concrete next steps: use the (already-shipped) remove icon on a suspected duplicate/misclassified row to test-fix the match, or upload an Orders screenshot to confirm the exact transaction count.
+- Copy-only change — no new detection logic, since the underlying "which row is wrong" problem still isn't mechanically solvable in the general case (per the previous fix above).
+- Updated the one existing test asserting on this banner's exact wording (`ImportPage.test.tsx`) — 326 total, no new tests needed for a text-only change.
+- Verified end-to-end against a real production build: seeded the ORHD shape again and confirmed the new banner text renders correctly end to end.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

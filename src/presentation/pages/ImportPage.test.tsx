@@ -503,7 +503,7 @@ describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (
         mergeSuggestion={undefined}
       />,
     );
-    expect(screen.getByText(/fix a duplicate\/missing row or re-upload/)).toBeInTheDocument();
+    expect(screen.getByText(/upload an Orders screenshot to confirm the exact transaction count/)).toBeInTheDocument();
     expect(screen.queryByText("Discard all pending for ORHD")).not.toBeInTheDocument();
   });
 });
