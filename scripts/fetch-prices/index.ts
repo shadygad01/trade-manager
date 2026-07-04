@@ -40,47 +40,87 @@ async function fetchFromYahoo(ticker: string): Promise<Quote> {
   };
 }
 
-async function fetchFromTradingView(ticker: string): Promise<Quote> {
+async function tradingViewScan(ticker: string, columns: string[]): Promise<(number | null)[]> {
   const response = await fetch(TRADINGVIEW_SCAN_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       symbols: { tickers: [`EGX:${ticker}`], query: { types: [] } },
-      columns: ["close"],
+      columns,
     }),
   });
   if (!response.ok) {
     throw new Error(`TradingView responded ${response.status} for ${ticker}`);
   }
   const data = await response.json();
-  const close = data?.data?.[0]?.d?.[0];
+  const row = data?.data?.[0]?.d;
+  if (!Array.isArray(row)) {
+    throw new Error(`TradingView returned no data row for ${ticker}`);
+  }
+  return row;
+}
+
+async function fetchFromTradingView(ticker: string): Promise<Quote> {
+  let close: unknown;
+  let time: unknown;
+  try {
+    [close, time] = await tradingViewScan(ticker, ["close", "time"]);
+  } catch {
+    [close] = await tradingViewScan(ticker, ["close"]);
+  }
   if (typeof close !== "number") {
     throw new Error(`TradingView returned no close for ${ticker}`);
   }
-  return { price: close, source: "tradingview" };
+  const epochMs = typeof time === "number" ? (time > 1e12 ? time : time * 1000) : undefined;
+  return {
+    price: close,
+    quotedAt: epochMs !== undefined ? new Date(epochMs).toISOString() : undefined,
+    source: "tradingview",
+  };
 }
 
 /**
- * Two-step fallback chain: Yahoo first, TradingView second. A ticker only
- * ends up missing from the snapshot if both public endpoints fail, and one
- * flaky ticker never blocks the rest of the batch.
+ * A provider can fail two ways: an outright error, or "succeeding" with
+ * years-old data — Yahoo's EGX coverage did exactly that (every ticker's
+ * regularMarketTime frozen in mid-2024 while the request returned 200), so
+ * a plain error-only fallback chain happily wrote a whole snapshot of stale
+ * prices. A quote only counts as fresh if the provider reports a market
+ * time within the EGX's longest normal quiet stretch; TradingView (which
+ * actively covers the EGX) is asked first, Yahoo second, and the first
+ * FRESH quote wins. If neither is provably fresh, the newest stale quote
+ * still gets written rather than nothing — the app's PriceFreshness
+ * indicator is what tells the user it's outdated.
  */
+const MAX_QUOTE_AGE_DAYS = 7;
+
+function isFresh(quote: Quote): boolean {
+  if (!quote.quotedAt) return false;
+  return Date.now() - new Date(quote.quotedAt).getTime() <= MAX_QUOTE_AGE_DAYS * 86_400_000;
+}
+
 async function fetchPrice(ticker: string): Promise<Quote | undefined> {
-  try {
-    return await fetchFromYahoo(ticker);
-  } catch (yahooError) {
+  const candidates: Quote[] = [];
+  const errors: string[] = [];
+  for (const provider of [fetchFromTradingView, fetchFromYahoo]) {
     try {
-      return await fetchFromTradingView(ticker);
-    } catch (tradingViewError) {
-      console.error(
-        `[fetch-prices] Failed to fetch ${ticker} from both providers:`,
-        (yahooError as Error).message,
-        "|",
-        (tradingViewError as Error).message
-      );
-      return undefined;
+      const quote = await provider(ticker);
+      if (isFresh(quote)) return quote;
+      candidates.push(quote);
+    } catch (error) {
+      errors.push((error as Error).message);
     }
   }
+  if (candidates.length > 0) {
+    // A quote with no market time is unknown-freshness; one with a stale
+    // market time is KNOWN stale — unknown beats known-stale, in provider
+    // preference order.
+    const unknown = candidates.find((c) => !c.quotedAt);
+    const pick = unknown ?? candidates.reduce((a, b) => ((a.quotedAt ?? "") >= (b.quotedAt ?? "") ? a : b));
+    console.warn(`[fetch-prices] No provably fresh quote for ${ticker} — using ${pick.source} (${pick.quotedAt ?? "no quote time"})`);
+    return pick;
+  }
+  console.error(`[fetch-prices] Failed to fetch ${ticker} from both providers:`, errors.join(" | "));
+  return undefined;
 }
 
 async function main(): Promise<void> {
