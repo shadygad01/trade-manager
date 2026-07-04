@@ -1,4 +1,4 @@
-import type { ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedTradeCandidate, ParseConfidence } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { KNOWN_EGX_TICKERS, NON_STOCK_INSTRUMENTS } from "@domain/value-objects/knownTickers";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -27,6 +27,13 @@ function parseStatementDate(str: string): string | null {
 
 function titleCase(s: string): string {
   return s.replace(/\w\S*/g, (w) => w.charAt(0) + w.slice(1).toLowerCase());
+}
+
+const CONFIDENCE_RANK: Record<ParseConfidence, number> = { low: 0, medium: 1, high: 2 };
+
+/** The weaker of two confidence levels — used when a candidate passes through more than one uncertain step. */
+function downgrade(a: ParseConfidence, b: ParseConfidence): ParseConfidence {
+  return CONFIDENCE_RANK[a] <= CONFIDENCE_RANK[b] ? a : b;
 }
 
 export function normalizeCompanyKey(name: string): string {
@@ -81,21 +88,24 @@ export function fuzzyMatchTicker(key: string): string | null {
   return null;
 }
 
-// Resolves a Description-column company name to a ticker symbol: exact
-// normalized match, then prefix match (either direction, since the known
-// map's company names and Thndr's own descriptions truncate/extend
-// differently), then fuzzy match. Falls back to the normalized company name
-// itself when nothing matches — a consistent unmapped label beats a guessed,
-// possibly wrong, ticker.
-function resolveTicker(description: string): string {
+/**
+ * Resolves a Description-column company name to a ticker symbol: exact
+ * normalized match ("high" confidence), then prefix match ("medium" — the
+ * known map's company names and Thndr's own descriptions truncate/extend
+ * differently), then fuzzy match ("medium" — tolerates a couple of
+ * OCR-garbled letters, but is still a guess). Falls back to the normalized
+ * company name itself when nothing matches ("low" confidence) — a
+ * consistent unmapped label beats a guessed, possibly wrong, ticker.
+ */
+function resolveTicker(description: string): { ticker: string; confidence: ParseConfidence } {
   const key = normalizeCompanyKey(description);
-  if (COMPANY_TICKER_MAP[key]) return COMPANY_TICKER_MAP[key];
+  if (COMPANY_TICKER_MAP[key]) return { ticker: COMPANY_TICKER_MAP[key], confidence: "high" };
   for (const [name, ticker] of Object.entries(COMPANY_TICKER_MAP)) {
-    if (key.startsWith(name) || name.startsWith(key)) return ticker;
+    if (key.startsWith(name) || name.startsWith(key)) return { ticker, confidence: "medium" };
   }
   const fuzzy = fuzzyMatchTicker(key);
-  if (fuzzy) return fuzzy;
-  return key || description.toUpperCase();
+  if (fuzzy) return { ticker: fuzzy, confidence: "medium" };
+  return { ticker: key || description.toUpperCase(), confidence: "low" };
 }
 
 // Thndr "Customer Account Statement" rows look like:
@@ -146,13 +156,14 @@ function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
     if (!date) continue;
 
     const isBuy = /buy|شراء/i.test(typeStr);
-    const ticker = resolveTicker(description.trim());
+    const { ticker, confidence } = resolveTicker(description.trim());
     if (NON_STOCK_INSTRUMENTS.has(ticker.toUpperCase())) continue;
 
     candidates.push({
       ticker: normalizeTicker(ticker),
       companyName: canonicalNameForTicker(normalizeTicker(ticker)),
       side: isBuy ? "BUY" : "SELL",
+      confidence,
       shares,
       price,
       date,
@@ -208,20 +219,20 @@ const NON_TICKER_WORDS = new Set(["EGP", "PLC", "LTD", "SAE", "ALL", "USD", "GBP
 // Prefer matching the company name against the known map (more OCR-robust
 // than a 2-6 letter ticker code rendered in small text); fall back to the
 // first plausible all-caps ticker-looking token.
-function resolveHeaderTickerImpl(text: string): string | null {
+function resolveHeaderTickerImpl(text: string): { ticker: string; confidence: ParseConfidence } | null {
   const head = text.slice(0, 400);
   const key = normalizeCompanyKey(head);
   for (const [name, ticker] of Object.entries(COMPANY_TICKER_MAP)) {
-    if (key.includes(name)) return ticker;
+    if (key.includes(name)) return { ticker, confidence: "high" };
     // The app's own header truncates long company names with "…", so the
     // OCR'd text may only contain a prefix of the full name — match on that
     // prefix too rather than requiring the whole name.
     const prefixLen = Math.min(name.length, 15);
-    if (prefixLen >= 8 && key.includes(name.slice(0, prefixLen))) return ticker;
+    if (prefixLen >= 8 && key.includes(name.slice(0, prefixLen))) return { ticker, confidence: "medium" };
   }
   const candidates = head.match(/\b[A-Z]{2,6}\b/g) ?? [];
   for (const c of candidates) {
-    if (!NON_TICKER_WORDS.has(c)) return c;
+    if (!NON_TICKER_WORDS.has(c)) return { ticker: c, confidence: "low" };
   }
   return null;
 }
@@ -265,10 +276,15 @@ function parseOrdersScreenTextImpl(text: string): OrdersScreenParseResult {
     return { candidates, incompleteRowCount, fulfilledStatusCount: 0, statusCountMismatch: false };
   }
 
-  const ticker = resolveHeaderTickerImpl(text);
-  if (!ticker || NON_STOCK_INSTRUMENTS.has(ticker.toUpperCase())) {
+  const header = resolveHeaderTickerImpl(text);
+  if (!header || NON_STOCK_INSTRUMENTS.has(header.ticker.toUpperCase())) {
     return { candidates, incompleteRowCount, fulfilledStatusCount: 0, statusCountMismatch: false };
   }
+  const { ticker } = header;
+  // Positional (non-row-isolated) field pairing has a documented failure
+  // mode — capping at "medium" here even for an exact header-ticker match
+  // reflects that risk, independent of how well the ticker itself resolved.
+  const confidence = downgrade(header.confidence, "medium");
 
   const prices = [...section.matchAll(strict ? orderPriceStrictPattern : orderPriceLenientPattern)];
   const dates = [...section.matchAll(orderDateTimePattern)];
@@ -303,6 +319,7 @@ function parseOrdersScreenTextImpl(text: string): OrdersScreenParseResult {
       ticker: normalizeTicker(ticker),
       companyName: canonicalNameForTicker(normalizeTicker(ticker)),
       side: /buy|شراء/i.test(actions[i][1]) ? "BUY" : "SELL",
+      confidence,
       shares,
       price,
       date,
@@ -345,10 +362,15 @@ function parseOrderRowsTextImpl(rows: OrderRowText[], ticker: string): OrderRows
     // Pixel color is the primary status source; the OCR'd word is only
     // consulted when no status color was found — precisely because a
     // misread status *word* is the failure this path exists to eliminate.
+    // That fallback is also strictly less reliable, so it caps this row's
+    // confidence at "medium" even though row-isolation itself is otherwise
+    // the most trustworthy parse path.
     let status: string | null = row.colorStatus;
+    let confidence: ParseConfidence = "high";
     if (!status) {
       const statusWord = rowStatusPattern.exec(normalized);
       if (statusWord) status = statusWord[1].toLowerCase();
+      confidence = "medium";
     }
 
     if (!status) {
@@ -384,6 +406,7 @@ function parseOrderRowsTextImpl(rows: OrderRowText[], ticker: string): OrderRows
       ticker: normalizeTicker(ticker),
       companyName: canonicalNameForTicker(normalizeTicker(ticker)),
       side: /buy|شراء/i.test(action[1]) ? "BUY" : "SELL",
+      confidence,
       shares,
       price,
       date,
@@ -412,8 +435,9 @@ function numbersAfter(section: string, label: RegExp): string[] {
 
 function parsePositionVerificationTextImpl(text: string): Omit<PositionVerification, "id" | "portfolioId"> | null {
   const normalized = text.replace(/\s+/g, " ");
-  const ticker = resolveHeaderTickerImpl(text);
-  if (!ticker) return null;
+  const header = resolveHeaderTickerImpl(text);
+  if (!header) return null;
+  const { ticker } = header;
 
   // Scope to the position card itself, stopping before "Earned Cash
   // Dividends" (which has its own EGP-prefixed numbers that must never be
@@ -529,7 +553,7 @@ export class ThndrParser implements BrokerParser {
   }
 
   resolveHeaderTicker(text: string): string | null {
-    return resolveHeaderTickerImpl(text);
+    return resolveHeaderTickerImpl(text)?.ticker ?? null;
   }
 
   parseOrderRowsText(rows: OrderRowText[], ticker: string): OrderRowsParseResult {

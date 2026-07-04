@@ -32,14 +32,24 @@ Added `reconcilePositions` (mismatch/shortfall/staleness detection against broke
 
 **Deliberately deferred** (see Next Sprint): Buy Zone visualization, Sell Map visualization, Capital Deployment flow diagram, cross-portfolio equity comparison, OCR confidence scoring. These are UI/visualization-heavy and independent of the correctness fix and analytics additions above — bundling them into the same sprint would have diluted review quality on both.
 
+### Sprint 3 — Buy Zone, Sell Map, Capital Deployment, portfolio comparison, OCR confidence
+
+Executed the full "Next recommended sprint" list from Sprint 2 in one pass (user directed a longer run than the usual 2-3 item cap):
+
+- **Buy Zone visualization** (`BuyZoneChart`, on `TradesPage`): one horizontal bar per Buy lot at its entry price, with a reference line at the current price, so an investor sees exactly where capital entered relative to today's market.
+- **Sell Map**: folded into the same chart — bar color/opacity encodes each lot's `getTradeStatus()` (open/partial/closed) plus a labeled count legend, since "which lots are still open" and "where did they enter" are one visual question, not two.
+- **Palette finding**: running the dataviz skill's validator against this app's dark chart surface showed `STATUS.warning` fails the lightness-band check standalone (only `STATUS.good`+`STATUS.critical` pass together). `BuyZoneChart` avoids the failing color entirely — "partial" is `STATUS.good` at reduced opacity (a sanctioned secondary encoding) and "closed" reuses the existing neutral `CHART_AXIS` token, rather than introducing a new unvalidated hue.
+- **Capital Deployment flow** (`CapitalDeploymentFlow`, on `PortfolioDetailPage`): a chronological, horizontally-scrollable strip of cash/trade events — not a chart (no axes/magnitude encoding), so it reuses `TimelinePage`'s existing icon/color mapping instead of going through the chart-color procedure.
+- **Cross-portfolio equity comparison** (`DashboardPage`, "Portfolio Comparison"): each portfolio's equity curve indexed to 100 at its first point (so wildly different portfolio sizes share one axis as growth %, never a dual-axis chart), one line per portfolio in the app's validated categorical order, capped at 8 with a note if more exist.
+- **OCR confidence scoring**: `ParsedTradeCandidate.confidence` (`"high"|"medium"|"low"`), computed from how the ticker was resolved (exact/prefix/fuzzy/unmapped match) combined with how reliable the parse path itself is (row-isolated rescan > flat orders-screen parse; pixel-color status > OCR'd status word) — surfaced as a labeled dot in `ImportPage`'s candidate table. Never hides a candidate, only cues the user to double-check it.
+- 6 new tests (155 total); all previously-passing tests unchanged.
+
 ## Next recommended sprint
 
-Priority-ordered, pick the top 2-3 per the "implement highest-priority only" rule:
-
-1. **Buy Zone visualization** (`TradesPage`, grouped by ticker): plot each open lot's entry price so an investor sees exactly where capital entered — the most-cited differentiator in the product vision and the cheapest to build (data already exists in `openTrades`).
-2. **Sell Map**: extend the existing lot-expansion UI on `TradesPage` into a clear open/partial/closed visual grouping per ticker (partial infrastructure already shipped this sprint via `getTradeStatus`).
-3. **Capital Deployment flow**: a simple Sankey-style or stepped visualization of cash → ticker → cash movements, sourced from `TimelineEvent` + `Trade`/`TradeAllocation` history.
-4. **Cross-portfolio equity comparison**: overlay each portfolio's equity curve (data already computed per-portfolio via `equityCurve`; needs a multi-portfolio aggregation view, likely on `DashboardPage`).
-5. **OCR confidence scoring**: attach a per-candidate confidence signal to `ImportOrchestrator`'s output (e.g. based on which parse path resolved it — flat vs. row-isolated rescan — and whether digit-normalization/fuzzy-ticker-matching had to intervene) so low-confidence rows are visually distinct before the user confirms them.
+1. **Multi-broker OCR**: implement a second `BrokerParser` (the interface was designed for this from Sprint 1) to validate the "modular and continuously extensible" OCR requirement against a real second broker, not just Thndr.
+2. **Journal-driven lessons view**: surface `JournalEntry.lessonsLearned` across all trades in one place (e.g. "what mistakes am I repeating" per the product vision's UX philosophy) rather than only per-trade.
+3. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
+4. **Chunk-size / code-splitting**: the production bundle is ~1.26MB gzipped ~365KB, mostly Tesseract.js/pdf.js; dynamic `import()` for the OCR subsystem (only needed on the Import page) would shrink the initial load for every other page.
+5. **Sector Allocation**: still honestly unmodeled (no sector field on `Trade`/`Portfolio`) — either add one deliberately or keep the dashboard's honest "not yet modeled" empty state; don't fabricate data to fill the chart.
 
 Each of these should get its own gap-check at sprint start — this list is a starting point, not a commitment, and should be re-prioritized against whatever the repo audit finds at that time.

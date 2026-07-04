@@ -113,6 +113,25 @@ describe("ThndrParser.parseStatementText", () => {
     const text = "2/2/2026 Cash Deposit 5,000.00 5,000.00";
     expect(parser.parseStatementText(text)).toHaveLength(0);
   });
+
+  it("is 'high' confidence for an exact company-name match", () => {
+    const text = "2/2/2026 Buy Eastern Co. (50@39.3800)";
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.confidence).toBe("high");
+  });
+
+  it("is 'medium' confidence for a fuzzy (OCR-garbled) company-name match", () => {
+    // "INTEMATIONAL" is a one-letter-off OCR garble of a mapped name containing "INTERNATIONAL".
+    const text = "2/2/2026 Buy Commercial INTEMATIONAL Bank (10@75.000) -750.00";
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.confidence).toBe("medium");
+  });
+
+  it("is 'low' confidence when the company name doesn't resolve to any known ticker", () => {
+    const text = "2/2/2026 Buy Some Totally Unknown Company (10@75.000)";
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.confidence).toBe("low");
+  });
 });
 
 describe("ThndrParser.parseOrdersScreenText", () => {

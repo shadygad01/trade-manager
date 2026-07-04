@@ -11,6 +11,7 @@ import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
 import { SellAllocationForm } from "@presentation/components/SellAllocationForm";
+import { BuyZoneChart } from "@presentation/components/BuyZoneChart";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
 
 export function TradesPage() {
@@ -18,9 +19,11 @@ export function TradesPage() {
   const [buyOpen, setBuyOpen] = useState(false);
   const [sellOpen, setSellOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [buyZoneTicker, setBuyZoneTicker] = useState<string | undefined>(undefined);
 
   const trades = useLiveQuery(() => repos.trades.getByPortfolio(portfolioId), [portfolioId]);
   const allocations = useLiveQuery(() => repos.tradeAllocations.getByPortfolio(portfolioId), [portfolioId]);
+  const priceMap = useLiveQuery(() => repos.prices.getAllPrices(), []);
 
   const allocationsByTrade = useMemo(() => {
     const map = new Map<string, TradeAllocation[]>();
@@ -40,6 +43,16 @@ export function TradesPage() {
   const openTickers = useMemo(
     () => Array.from(new Set((trades ?? []).filter((t) => t.remainingShares > 0).map((t) => t.ticker))).sort(),
     [trades],
+  );
+
+  const allTickers = useMemo(
+    () => Array.from(new Set((trades ?? []).map((t) => t.ticker))).sort(),
+    [trades],
+  );
+  const activeBuyZoneTicker = buyZoneTicker ?? allTickers[0];
+  const buyZoneTrades = useMemo(
+    () => (trades ?? []).filter((t) => t.ticker === activeBuyZoneTicker),
+    [trades, activeBuyZoneTicker],
   );
 
   function toggle(id: string) {
@@ -74,6 +87,26 @@ export function TradesPage() {
           </>
         }
       />
+
+      {allTickers.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-200">Buy Zone &amp; Sell Map</h3>
+            <select
+              value={activeBuyZoneTicker}
+              onChange={(e) => setBuyZoneTicker(e.target.value)}
+              className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+            >
+              {allTickers.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </div>
+          <BuyZoneChart trades={buyZoneTrades} currentPrice={priceMap?.[activeBuyZoneTicker ?? ""]} />
+        </div>
+      ) : null}
 
       {sorted.length === 0 ? (
         <EmptyState

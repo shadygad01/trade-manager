@@ -27,7 +27,9 @@ import { StatTile } from "@presentation/components/StatTile";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatMoney, formatMoneyCompact, formatPercent, signClass } from "@presentation/lib/format";
-import { CATEGORICAL, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
+import { CATEGORICAL, categoricalColor, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
+
+const MAX_COMPARED_PORTFOLIOS = CATEGORICAL.length;
 
 interface PortfolioSummary {
   portfolio: Portfolio;
@@ -51,6 +53,31 @@ function mergeEquityCurves(curves: EquityPoint[][]): EquityPoint[] {
       return sum + last;
     }, 0);
     return { date, equity };
+  });
+}
+
+/** Rebases an equity curve to start at 100 so portfolios of very different sizes can share one axis (never a dual-axis chart) as growth %, not raw EGP. */
+function indexEquityCurve(curve: EquityPoint[]): { date: string; index: number }[] {
+  if (curve.length === 0) return [];
+  const base = curve[0].equity;
+  if (base === 0) return curve.map((p) => ({ date: p.date, index: 100 }));
+  return curve.map((p) => ({ date: p.date, index: (p.equity / base) * 100 }));
+}
+
+function mergeIndexedCurves(portfolios: { name: string; curve: EquityPoint[] }[]): Record<string, number | string>[] {
+  const indexed = portfolios.map((p) => ({ name: p.name, points: indexEquityCurve(p.curve) }));
+  const allDates = Array.from(new Set(indexed.flatMap((p) => p.points.map((pt) => pt.date)))).sort();
+  return allDates.map((date) => {
+    const row: Record<string, number | string> = { date };
+    for (const p of indexed) {
+      let last: number | undefined;
+      for (const pt of p.points) {
+        if (pt.date <= date) last = pt.index;
+        else break;
+      }
+      if (last !== undefined) row[p.name] = last;
+    }
+    return row;
   });
 }
 
@@ -121,6 +148,10 @@ export function DashboardPage() {
     );
     const equityCurve = mergeEquityCurves(dashboard.map((d) => d.analytics.equityCurve));
     const monthlyReturn = mergeMonthlyReturns(dashboard.map((d) => d.analytics.monthlyReturn));
+    const comparedPortfolios = dashboard.slice(0, MAX_COMPARED_PORTFOLIOS);
+    const comparisonData = mergeIndexedCurves(
+      comparedPortfolios.map((d) => ({ name: d.portfolio.name, curve: d.analytics.equityCurve })),
+    );
     return {
       totalCash,
       totalMarketValue,
@@ -134,6 +165,8 @@ export function DashboardPage() {
       worst,
       equityCurve,
       monthlyReturn,
+      comparedPortfolios,
+      comparisonData,
     };
   }, [dashboard]);
 
@@ -282,6 +315,47 @@ export function DashboardPage() {
           )}
         </div>
       </div>
+
+      {totals.comparedPortfolios.length > 1 ? (
+        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+          <h3 className="mb-3 text-sm font-semibold text-slate-200">Portfolio Comparison</h3>
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={totals.comparisonData}>
+              <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="date" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
+              <YAxis
+                tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
+                tickLine={false}
+                axisLine={{ stroke: CHART_GRID }}
+                tickFormatter={(v: number) => `${v}`}
+                width={48}
+              />
+              <Tooltip
+                contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
+                labelStyle={{ color: "#c3c2b7" }}
+                formatter={(v: number) => v.toFixed(1)}
+              />
+              <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+              {totals.comparedPortfolios.map((d, i) => (
+                <Line
+                  key={d.portfolio.id}
+                  type="monotone"
+                  dataKey={d.portfolio.name}
+                  stroke={categoricalColor(i)}
+                  strokeWidth={2}
+                  dot={false}
+                  connectNulls
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+          <p className="mt-2 text-[11px] text-slate-500">
+            Each portfolio&apos;s equity indexed to 100 at its first data point, so portfolios of very different sizes
+            can be compared as growth rather than raw EGP on one axis.
+            {dashboard.length > MAX_COMPARED_PORTFOLIOS ? ` Showing the first ${MAX_COMPARED_PORTFOLIOS} portfolios.` : ""}
+          </p>
+        </div>
+      ) : null}
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">

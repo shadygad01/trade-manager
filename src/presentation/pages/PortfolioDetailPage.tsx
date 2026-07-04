@@ -11,6 +11,7 @@ import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
 import { StatTile } from "@presentation/components/StatTile";
+import { CapitalDeploymentFlow } from "@presentation/components/CapitalDeploymentFlow";
 import { formatMoney, formatPercent, formatShares, signClass } from "@presentation/lib/format";
 
 type CashModalKind = "deposit" | "withdraw" | "dividend" | null;
@@ -34,6 +35,7 @@ export function PortfolioDetailPage() {
     return reconcilePositions(positions, verifications, trades, allocations);
   }, [id, positions]);
   const reconciliationByTicker = new Map((reconciliations ?? []).map((r) => [r.ticker, r]));
+  const timelineEvents = useLiveQuery(() => repos.timeline.getByPortfolio(id), [id]);
 
   async function acceptCurrent(ticker: string, computedShares: number) {
     await acceptComputedAsVerified(repos, id, ticker, computedShares);
@@ -91,6 +93,11 @@ export function PortfolioDetailPage() {
           sublabel={formatPercent(unrealizedPnlPct)}
         />
         <StatTile label="Total Assets" value={formatMoney(marketValue + portfolio.cash)} />
+      </div>
+
+      <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">Capital Deployment</h3>
+        <CapitalDeploymentFlow events={timelineEvents ?? []} />
       </div>
 
       <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60">

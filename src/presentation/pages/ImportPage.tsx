@@ -13,6 +13,13 @@ import { PageHeader } from "@presentation/components/PageHeader";
 import { Modal } from "@presentation/components/Modal";
 import { SellAllocationForm } from "@presentation/components/SellAllocationForm";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
+import { STATUS } from "@presentation/lib/chartColors";
+
+const CONFIDENCE_STYLE: Record<"high" | "medium" | "low", { label: string; color: string }> = {
+  high: { label: "High", color: STATUS.good },
+  medium: { label: "Medium", color: STATUS.warning },
+  low: { label: "Low", color: STATUS.critical },
+};
 
 type Stage = "idle" | "reading" | "done" | "error";
 
@@ -212,6 +219,7 @@ export function ImportPage() {
                     <th className="px-4 py-2 text-right">Price</th>
                     <th className="px-4 py-2 text-right">Fees</th>
                     <th className="px-4 py-2">Date</th>
+                    <th className="px-4 py-2">Confidence</th>
                     <th className="px-4 py-2"></th>
                   </tr>
                 </thead>
@@ -252,6 +260,19 @@ export function ImportPage() {
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatMoney(c.price)}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatMoney(c.fees ?? 0)}</td>
                       <td className="px-4 py-2.5 text-slate-300">{formatDate(c.date)}</td>
+                      <td className="px-4 py-2.5">
+                        {c.confidence ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-slate-300">
+                            <span
+                              className="inline-block h-2 w-2 rounded-full"
+                              style={{ backgroundColor: CONFIDENCE_STYLE[c.confidence].color }}
+                            />
+                            {CONFIDENCE_STYLE[c.confidence].label}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-600">—</span>
+                        )}
+                      </td>
                       <td className="px-4 py-2.5 text-right">
                         {addedTickers.has(i) ? (
                           <span className="flex items-center justify-end gap-1 text-xs text-emerald-400">

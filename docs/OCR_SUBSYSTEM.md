@@ -47,3 +47,12 @@ This is surfaced on `PortfolioDetailPage`'s holdings table (with an "Accept as c
 ## Duplicate-trade detection on import
 
 `src/application/services/duplicateDetection.ts` checks each freshly parsed candidate against trades/allocations already on the ledger (same ticker, date, and share count): an **exact** match (price matches too) usually means the same file was re-imported; a **possible** match (price differs) usually means the same real trade was parsed from two different document formats — one commission-inclusive, one not (see the price-from-value note above). `ImportPage` surfaces this as a badge next to the candidate and relabels the action button ("Add anyway" / "Allocate anyway") — it never blocks the action, since a false positive should never prevent recording a real trade.
+
+## Confidence scoring
+
+Every `ParsedTradeCandidate` carries a `confidence: "high" | "medium" | "low"` (see `ThndrParser.ts`), combining two independent signals — whichever is weaker wins (`downgrade()`):
+
+1. **Ticker resolution**: exact company-name match = high, prefix or Levenshtein-fuzzy match = medium, unmapped fallback = low.
+2. **Parse-path reliability**: statement rows are anchored/regex-strict (no path penalty); the flat orders-screen parse pairs fields positionally and has a documented mispairing failure mode, so it's capped at medium regardless of ticker confidence; the row-isolated rescan is otherwise the most reliable path, but is capped at medium for rows whose status came from the OCR'd status word rather than pixel color (the less reliable of the two status sources — see above).
+
+`ImportPage` shows this as a labeled colored dot next to each candidate. It is a cue to double-check, never a filter — a low-confidence candidate is still fully actionable, just flagged.
