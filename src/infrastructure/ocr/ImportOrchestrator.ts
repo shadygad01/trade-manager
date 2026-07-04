@@ -5,6 +5,7 @@ import { loadImageToCanvas, cropHeaderBand, preprocessForOcr, segmentOrderRows }
 import { recognizeWithFallback, recognizeBatch } from "./tesseractClient";
 import type { BrokerParser, OrderRowText } from "./parsers/BrokerParser";
 import { ThndrParser } from "./parsers/ThndrParser";
+import { CsvStatementParser } from "./parsers/CsvStatementParser";
 
 export type ImportDocType = "statement" | "orders-screen" | "position-verification";
 
@@ -36,13 +37,14 @@ const MIN_TEXT_LENGTH = 20;
  * from a file input or drop zone and renders the returned ImportResult.
  */
 export class ImportOrchestrator {
-  constructor(private readonly parsers: BrokerParser[] = [new ThndrParser()]) {}
+  constructor(private readonly parsers: BrokerParser[] = [new ThndrParser(), new CsvStatementParser()]) {}
 
   async importFile(file: File): Promise<ImportResult> {
     const buffer = await file.arrayBuffer();
     const fileHash = await sha256Hex(buffer);
 
     const isImage = file.type.startsWith("image/");
+    const isPdf = file.type === "application/pdf";
     let rawText = "";
     let sourceCanvas: HTMLCanvasElement | null = null;
 
@@ -59,8 +61,12 @@ export class ImportOrchestrator {
         this.parsers.some((p) => p.looksLikeOwnDocument(text) || p.looksLikePositionVerification(text));
       const { text } = await recognizeWithFallback(headerBand, body, isRecognizedDocument);
       rawText = text;
-    } else {
+    } else if (isPdf) {
       rawText = await extractPdfText(buffer);
+    } else {
+      // CSV/plain-text broker exports carry no images to OCR and no PDF text
+      // layer to extract — the file's bytes already are the text.
+      rawText = new TextDecoder("utf-8").decode(buffer);
     }
 
     if (!rawText || rawText.trim().length < MIN_TEXT_LENGTH) {

@@ -34,6 +34,10 @@ Each stage that finds nothing hands off to the next; warnings (incomplete rows, 
 
 Implement `BrokerParser` (`src/infrastructure/ocr/parsers/BrokerParser.ts`) and add an instance to the `parsers` array passed into `ImportOrchestrator`. Each parser is responsible for recognizing its own documents (`looksLikeOwnDocument`) so multiple brokers' parsers can coexist without one's regexes accidentally matching another's screenshot. Do not add broker-specific branches inside `ThndrParser.ts` — that file is Thndr-only by design.
 
+`CsvStatementParser` (`src/infrastructure/ocr/parsers/CsvStatementParser.ts`) is the second implementation, proving the extension point against a genuinely different input shape: a plain CSV/TSV transaction export (flexible header aliases, comma/semicolon/tab delimiter auto-detection, d/m/y or ISO dates), which involves no OCR/image processing at all — `ImportOrchestrator` routes any non-image, non-PDF file straight to its raw decoded text. Screenshot-only interface methods (`parseOrdersScreenText`, `parsePositionVerification`, `resolveHeaderTicker`, `parseOrderRowsText`) are legitimately empty no-ops for this parser, since those concepts don't exist in a CSV export.
+
+Both parsers share `trackedDateRange.ts`'s rolling-cutoff helpers rather than each maintaining their own copy — extend that module, don't fork it, if a new parser needs date-range logic.
+
 ## Ground truth: position verification and reconciliation
 
 A "My Position" screenshot (units, average cost) is parsed independently of trade history and stored as a `PositionVerification` (see [DATA_MODEL.md](DATA_MODEL.md#ground-truth-verification)). `src/application/services/reconciliation.ts` (`reconcilePositions`) compares the trade-ledger-derived position for each ticker against the most recent verification and flags:

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useParams } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, AlertTriangle, ShieldCheck, ShieldAlert, CheckCircle2, Loader2 } from "lucide-react";
-import { repos, importOrchestrator } from "@presentation/lib/data";
+import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import type { ImportResult } from "@infrastructure/ocr/ImportOrchestrator";
 import { recordBuy } from "@application/services/TradeService";
 import { findDuplicateBuyMatch, findDuplicateSellMatch } from "@application/services/duplicateDetection";
@@ -63,7 +63,8 @@ export function ImportPage() {
     setStage("reading");
     setStatusMessage("Running OCR and parsing document…");
     try {
-      const result = await importOrchestrator.importFile(file);
+      const orchestrator = await getImportOrchestrator();
+      const result = await orchestrator.importFile(file);
 
       const existingUpload = await repos.uploads.getByHash(portfolioId, result.fileHash);
       if (existingUpload) {
@@ -125,7 +126,7 @@ export function ImportPage() {
     <div>
       <PageHeader
         title="Import"
-        description="Drop a broker statement screenshot or PDF and turn it into trades and position checks."
+        description="Drop a broker statement screenshot, PDF, or CSV export and turn it into trades and position checks."
       />
 
       <div
@@ -146,14 +147,14 @@ export function ImportPage() {
       >
         <UploadCloud size={32} className="text-slate-500" />
         <div>
-          <p className="text-sm font-medium text-slate-200">Drag & drop a screenshot or PDF here</p>
+          <p className="text-sm font-medium text-slate-200">Drag & drop a screenshot, PDF, or CSV here</p>
           <p className="text-xs text-slate-500">or</p>
         </div>
         <label className="cursor-pointer rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400">
           Choose file
           <input
             type="file"
-            accept="image/*,application/pdf"
+            accept="image/*,application/pdf,text/csv,.csv"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];

@@ -1,6 +1,6 @@
 import { createRepositories } from "@infrastructure/db/repositories";
 import { SnapshotPriceRepository } from "@infrastructure/market-data/SnapshotPriceRepository";
-import { ImportOrchestrator } from "@infrastructure/ocr/ImportOrchestrator";
+import type { ImportOrchestrator } from "@infrastructure/ocr/ImportOrchestrator";
 import type { PriceRepository } from "@domain/repositories";
 
 /**
@@ -24,4 +24,18 @@ export const repos = {
 
 export type Repos = typeof repos;
 
-export const importOrchestrator = new ImportOrchestrator();
+/**
+ * Tesseract.js and pdfjs-dist (pulled in transitively by ImportOrchestrator)
+ * are by far the largest dependencies in this app and are only ever needed
+ * on the Import page — a dynamic import here keeps them out of the main
+ * bundle entirely, fetched once on first use and memoized rather than on
+ * every page load.
+ */
+let importOrchestratorPromise: Promise<ImportOrchestrator> | null = null;
+
+export function getImportOrchestrator(): Promise<ImportOrchestrator> {
+  if (!importOrchestratorPromise) {
+    importOrchestratorPromise = import("@infrastructure/ocr/ImportOrchestrator").then((m) => new m.ImportOrchestrator());
+  }
+  return importOrchestratorPromise;
+}

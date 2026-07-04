@@ -3,6 +3,7 @@ import type { PositionVerification } from "@domain/entities/PositionVerification
 import { KNOWN_EGX_TICKERS, NON_STOCK_INSTRUMENTS } from "@domain/value-objects/knownTickers";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { BrokerParser, OrderRowText, OrderRowsParseResult, OrdersScreenParseResult } from "./BrokerParser";
+import { defaultTrackedSince, isWithinTrackedRange, partitionByRange } from "./trackedDateRange";
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -477,38 +478,6 @@ function parsePositionVerificationTextImpl(text: string): Omit<PositionVerificat
 const looksLikeOwnDocumentPattern = /customer account statement|thndr/i;
 const looksLikePositionVerificationPattern = /my\s+current\s+position/i;
 
-// The reference implementation hardcoded its tracked-range cutoff as a
-// literal date (`TRACKING_START_DATE = '2026-01-01'`) that silently goes
-// stale the moment "now" passes it — every user of that code would
-// eventually need to hand-edit a source file just to keep importing new
-// statements. Deriving the default from the constructor call time instead
-// (a rolling N-year lookback) never goes stale, while still being fully
-// overridable per instance for callers who want a specific cutoff.
-const DEFAULT_TRACKED_YEARS_BACK = 3;
-
-function defaultTrackedSince(): string {
-  const d = new Date();
-  d.setUTCFullYear(d.getUTCFullYear() - DEFAULT_TRACKED_YEARS_BACK);
-  return d.toISOString().slice(0, 10);
-}
-
-// A trade dated after "tomorrow" (a one-day grace window for timezone
-// skew) is essentially always a misread OCR date rather than a genuine
-// future-dated trade, so it's excluded by the same guard as a too-old trade.
-function isoTomorrow(): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() + 1);
-  return d.toISOString().slice(0, 10);
-}
-
-function partitionByRange(
-  candidates: ParsedTradeCandidate[],
-  isWithinRange: (dateIso: string) => boolean,
-): { inRange: ParsedTradeCandidate[]; outOfRangeCount: number } {
-  const inRange = candidates.filter((c) => isWithinRange(c.date));
-  return { inRange, outOfRangeCount: candidates.length - inRange.length };
-}
-
 /**
  * Thndr brokerage OCR/text parser — first (and currently only) implementation
  * of the pluggable BrokerParser extension point.
@@ -523,7 +492,7 @@ export class ThndrParser implements BrokerParser {
 
   /** True for dates on/after the configured cutoff and not more than one day in the future. */
   isWithinTrackedRange(dateIso: string): boolean {
-    return dateIso >= this.trackedSince && dateIso <= isoTomorrow();
+    return isWithinTrackedRange(dateIso, this.trackedSince);
   }
 
   looksLikeOwnDocument(text: string): boolean {

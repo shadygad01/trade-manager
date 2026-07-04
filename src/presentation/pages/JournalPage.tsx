@@ -1,14 +1,16 @@
 import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { BookOpen, Image as ImageIcon, Paperclip, X } from "lucide-react";
+import { BookOpen, Image as ImageIcon, Paperclip, X, Lightbulb } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { createJournalEntry } from "@domain/entities/JournalEntry";
+import { createJournalEntry, type JournalEntry } from "@domain/entities/JournalEntry";
 import { generateId } from "@domain/value-objects/id";
 import type { Trade } from "@domain/entities/Trade";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
+
+type JournalTab = "byTrade" | "lessons";
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -22,6 +24,7 @@ function readAsDataUrl(file: File): Promise<string> {
 export function JournalPage() {
   const { id: portfolioId } = useParams<{ id: string }>();
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
+  const [tab, setTab] = useState<JournalTab>("byTrade");
 
   const trades = useLiveQuery(async () => {
     const all = await repos.trades.getByPortfolio(portfolioId);
@@ -36,12 +39,41 @@ export function JournalPage() {
     return map;
   }, [entries]);
 
+  const tradesById = useMemo(() => new Map((trades ?? []).map((t) => [t.id, t])), [trades]);
+
+  const lessons = useMemo(() => {
+    return (entries ?? [])
+      .filter((e) => e.lessonsLearned && e.lessonsLearned.trim().length > 0)
+      .map((e) => ({ entry: e, trade: tradesById.get(e.tradeId) }))
+      .filter((row): row is { entry: JournalEntry; trade: Trade } => row.trade !== undefined)
+      .sort((a, b) => b.trade.executionDate.localeCompare(a.trade.executionDate));
+  }, [entries, tradesById]);
+
   const activeTradeId = selectedTradeId ?? trades?.[0]?.id ?? null;
   const activeTrade = trades?.find((t) => t.id === activeTradeId);
 
   return (
     <div>
-      <PageHeader title="Journal" description="Reflections per trade: why you took it, why you exited, and what you learned." />
+      <PageHeader
+        title="Journal"
+        description="Reflections per trade: why you took it, why you exited, and what you learned."
+        actions={
+          <div className="flex rounded-md border border-slate-700 p-0.5 text-xs">
+            <button
+              onClick={() => setTab("byTrade")}
+              className={`rounded px-3 py-1.5 ${tab === "byTrade" ? "bg-cyan-500 text-slate-950 font-medium" : "text-slate-300 hover:bg-slate-800"}`}
+            >
+              By Trade
+            </button>
+            <button
+              onClick={() => setTab("lessons")}
+              className={`flex items-center gap-1 rounded px-3 py-1.5 ${tab === "lessons" ? "bg-cyan-500 text-slate-950 font-medium" : "text-slate-300 hover:bg-slate-800"}`}
+            >
+              <Lightbulb size={12} /> Lessons Learned
+            </button>
+          </div>
+        }
+      />
 
       {!trades || trades.length === 0 ? (
         <EmptyState
@@ -49,6 +81,8 @@ export function JournalPage() {
           title="No trades to journal yet"
           description="Record a buy trade first, then come back here to journal it."
         />
+      ) : tab === "lessons" ? (
+        <LessonsLearnedView lessons={lessons} onOpenTrade={(tradeId) => { setSelectedTradeId(tradeId); setTab("byTrade"); }} />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
           <div className="rounded-xl border border-slate-800 bg-slate-900/60">
@@ -84,6 +118,54 @@ export function JournalPage() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function LessonsLearnedView({
+  lessons,
+  onOpenTrade,
+}: {
+  lessons: { entry: { lessonsLearned?: string; strategyTags: string[] }; trade: Trade }[];
+  onOpenTrade: (tradeId: string) => void;
+}) {
+  if (lessons.length === 0) {
+    return (
+      <EmptyState
+        icon={<Lightbulb size={28} />}
+        title="No lessons recorded yet"
+        description="Fill in 'Lessons learned' on a trade's journal entry, and it'll show up here — across every trade, in one place, so you can spot mistakes you keep repeating."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      {lessons.map(({ entry, trade }) => (
+        <button
+          key={trade.id}
+          onClick={() => onOpenTrade(trade.id)}
+          className="block w-full rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-left hover:border-slate-700"
+        >
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-sm font-medium text-slate-100">
+              {trade.ticker}
+              {trade.companyName ? <span className="ml-2 text-xs font-normal text-slate-500">{trade.companyName}</span> : null}
+            </span>
+            <span className="text-xs text-slate-500">{formatDate(trade.executionDate)}</span>
+          </div>
+          <p className="text-sm text-slate-300">{entry.lessonsLearned}</p>
+          {entry.strategyTags.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {entry.strategyTags.map((tag) => (
+                <span key={tag} className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-400">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </button>
+      ))}
     </div>
   );
 }

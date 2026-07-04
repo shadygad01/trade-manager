@@ -44,12 +44,19 @@ Executed the full "Next recommended sprint" list from Sprint 2 in one pass (user
 - **OCR confidence scoring**: `ParsedTradeCandidate.confidence` (`"high"|"medium"|"low"`), computed from how the ticker was resolved (exact/prefix/fuzzy/unmapped match) combined with how reliable the parse path itself is (row-isolated rescan > flat orders-screen parse; pixel-color status > OCR'd status word) — surfaced as a labeled dot in `ImportPage`'s candidate table. Never hides a candidate, only cues the user to double-check it.
 - 6 new tests (155 total); all previously-passing tests unchanged.
 
+### Sprint 4 — Multi-broker OCR, Lessons Learned view, code-splitting
+
+- **`CsvStatementParser`**: second `BrokerParser` implementation (plain CSV/TSV transaction exports — flexible header aliases, delimiter auto-detection, d/m/y or ISO dates), proving the pluggable OCR interface against a real second input shape rather than just Thndr. `ImportOrchestrator` now routes non-image/non-PDF files to their raw decoded text instead of assuming everything non-image is a PDF. Extracted `trackedDateRange.ts` out of `ThndrParser.ts` first (shared rolling-cutoff helper) so the second parser didn't have to fork that logic.
+- **Lessons Learned view** (`JournalPage`): a "Lessons Learned" tab aggregating `JournalEntry.lessonsLearned` across every trade in the portfolio, most recent first, each linking back to its trade's full journal entry — answers "what mistakes am I repeating" without clicking into every trade individually.
+- **Code-splitting**: `ImportOrchestrator` (and transitively Tesseract.js/pdfjs-dist) is now a dynamic `import()` in `data.ts` instead of a static one, and every page is now `React.lazy`-loaded in `App.tsx`. Main entry bundle dropped from ~1.27MB (gzip ~365KB) to ~266KB (gzip ~87KB); the OCR subsystem is now its own ~472KB chunk fetched only when a user actually opens Import. No more Vite chunk-size warning.
+- 19 new tests (168 total).
+
 ## Next recommended sprint
 
-1. **Multi-broker OCR**: implement a second `BrokerParser` (the interface was designed for this from Sprint 1) to validate the "modular and continuously extensible" OCR requirement against a real second broker, not just Thndr.
-2. **Journal-driven lessons view**: surface `JournalEntry.lessonsLearned` across all trades in one place (e.g. "what mistakes am I repeating" per the product vision's UX philosophy) rather than only per-trade.
-3. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
-4. **Chunk-size / code-splitting**: the production bundle is ~1.26MB gzipped ~365KB, mostly Tesseract.js/pdf.js; dynamic `import()` for the OCR subsystem (only needed on the Import page) would shrink the initial load for every other page.
-5. **Sector Allocation**: still honestly unmodeled (no sector field on `Trade`/`Portfolio`) — either add one deliberately or keep the dashboard's honest "not yet modeled" empty state; don't fabricate data to fill the chart.
+1. **Split/Rights Issue automatic rebasing**: Sprint 2 deliberately left these record-only (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
+2. **Sector Allocation**: still honestly unmodeled (no sector field on `Trade`/`Portfolio`) — either add one deliberately or keep the dashboard's honest "not yet modeled" empty state; don't fabricate data to fill the chart.
+3. **Multi-device sync / export-import**: ADR-001 accepted "no multi-device sync" as a limitation of the fully-client-side architecture — an explicit export/import (e.g. a signed JSON snapshot) would let a user move their ledger between devices without standing up a backend.
+4. **OCR confidence-aware UX**: Sprint 3 added `confidence` scoring but it's only a passive badge today — consider auto-collapsing/deprioritizing low-confidence candidates in the Import review list, or requiring an explicit confirmation step before a "low" candidate can be added as a trade.
+5. **A real second broker's screenshot format**: `CsvStatementParser` validated the interface with a non-OCR input; the OCR-specific parts of the interface (`parseOrdersScreenText`, `parseOrderRowsText`, `resolveHeaderTicker`) still only have one real implementation (Thndr) — worth validating against an actual second brokerage app's screenshots if/when real sample data is available.
 
 Each of these should get its own gap-check at sprint start — this list is a starting point, not a commitment, and should be re-prioritized against whatever the repo audit finds at that time.
