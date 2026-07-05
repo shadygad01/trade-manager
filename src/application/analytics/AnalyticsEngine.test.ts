@@ -31,7 +31,10 @@ describe("computeAnalytics", () => {
     expect(result.exposure).toBe(0);
     expect(result.cashRatio).toBe(0);
     expect(result.drawdown).toBe(0);
-    expect(result.equityCurve).toEqual([{ date: "2026-01-01", equity: 0, contributed: 0 }]);
+    expect(result.realizedReturnPct).toBe(0);
+    expect(result.dividendReturnPct).toBe(0);
+    expect(result.unrealizedReturnPct).toBe(0);
+    expect(result.performanceCurve).toEqual([{ date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 }]);
   });
 
   it("composes open-position and realized-P/L data into one flat result", () => {
@@ -58,26 +61,26 @@ describe("computeAnalytics", () => {
 
     expect(result.winRate).toBe(100);
     expect(result.exposure).toBeGreaterThan(0);
-    expect(result.equityCurve[result.equityCurve.length - 1].date).toBe("2026-03-01");
+    expect(result.realizedReturnPct).toBeGreaterThan(0); // (25-20)*50 = 250 profit over 5000 contributed
+    expect(result.performanceCurve[result.performanceCurve.length - 1].date).toBe("2026-03-01");
   });
 
-  it("does not let a large unrealized gain on open positions spike the current month's monthlyReturn (the reported July bug)", () => {
+  it("does not let a large unrealized gain on open positions spike monthlyPerformance (the reported July bug) — unrealized P/L never enters realized/dividend return at all", () => {
     const openTrade = makeTrade({ id: "open1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-01" });
 
     const result = computeAnalytics({
       trades: [openTrade],
       allocations: [],
-      // A second July-dated event alongside "today" so the July bucket has
-      // two points to compare, exactly like the reported real shape — a
-      // single-point bucket would trivially show 0% regardless of this fix.
       timelineEvents: [depositEvent("2026-01-01T09:00", 1000), depositEvent("2026-07-01T09:00", 50)],
       priceMap: { COMI: 500 }, // a huge unrealized gain purely from a big price snapshot
       cash: -1000 + 50,
       today: "2026-07-05",
     });
 
-    const july = result.monthlyReturn.find((r) => r.period === "2026-07");
-    expect(july?.returnPct ?? 0).toBe(0);
+    const july = result.monthlyPerformance.find((r) => r.period === "2026-07");
+    expect((july?.realizedReturnPct ?? 0) + (july?.dividendReturnPct ?? 0)).toBe(0);
+    // The unrealized gain is still visible — just as today's snapshot stat, never blended into a time series.
+    expect(result.unrealizedReturnPct).toBeGreaterThan(0);
   });
 
   it("exposes every metric name in the calculators registry for introspection", () => {
@@ -90,11 +93,10 @@ describe("computeAnalytics", () => {
         "holdingTime",
         "exposure",
         "cashRatio",
-        "drawdown",
-        "equityCurve",
+        "performanceDrawdown",
+        "performanceCurve",
         "capitalDeployment",
-        "monthlyReturn",
-        "annualReturn",
+        "bucketPerformance",
         "portfolioReturn",
         "portfolioHealth",
         "strategyAttribution",
