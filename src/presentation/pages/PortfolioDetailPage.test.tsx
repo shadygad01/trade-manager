@@ -179,4 +179,25 @@ describe("PortfolioDetailPage — a verified-but-untracked position points at Im
       expect(state.verifications).toHaveLength(0);
     });
   });
+
+  it("discards every stray verification for the ticker, not just the single latest one shown", async () => {
+    // Two separate misfiled readings for the same ticker — deleting only the
+    // one reconcilePositions currently surfaces would leave the other behind
+    // under the same ticker, and the banner row would look unchanged.
+    state.verifications = [
+      { id: "v1", portfolioId: "p1", ticker: "TMGH", units: 35, avgCost: 76.68, capturedAt: "2026-05-01T00:00", source: "screenshot" },
+      { id: "v2", portfolioId: "p1", ticker: "TMGH", units: 35, avgCost: 76.68, capturedAt: "2026-06-01T00:00", source: "screenshot" },
+    ];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderPage("p1");
+
+    expect(await screen.findByText(/TMGH: the broker screenshot shows/)).toBeInTheDocument();
+
+    await user.click(screen.getByTitle(/discard this verification/i));
+
+    await waitFor(() => {
+      expect(state.verifications).toHaveLength(0);
+    });
+  });
 });
