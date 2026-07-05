@@ -503,6 +503,14 @@ Direct user correction of the previous fix's framing ("انا مش موافق �
 - Tests: the two opening-balance tests replaced by one asserting the banner shows import guidance and no record button; the pill/delete flows covered by the existing deleteTrade suite — 354 total.
 - Verified end-to-end against a real production build: recorded a placeholder-shaped EAST lot — the amber pill rendered; the trash button removed it from the table entirely.
 
+### Post-sprint-8 — one-click "replace placeholder with real rows" in Import (the CSAG proof)
+
+Direct user follow-up with the decisive evidence: CSAG's real Thndr Orders screen — five buys across Feb–Mar 2026 (48+51+50+5+50) totalling exactly the 204 shares its placeholder lot carried. This confirmed the placeholders represent real 2026 transactions whose documents simply hadn't been imported yet — and exposed a trap in the delete-then-import workflow: if the user uploads the real orders BEFORE deleting the placeholder, `alreadyFullyRecorded` fires (existing 204 alone matches the broker's 204) and its "Discard all pending" banner suggests throwing away the REAL rows and keeping the dateless placeholder — the exact wrong direction.
+
+- **`placeholderReplacements`** (ImportPage): for an `alreadyFullyRecorded` mismatch where every existing open share is a deletable opening-balance placeholder (notes marker, no shares closed against it) AND the batch's pending rows alone reconcile exactly with the broker, the banner flips from "discard pending" to a cyan **"Replace placeholder with real rows"** — one click deletes the placeholder lot(s) (cost refunds to cash via the existing `deleteTrade`), Dexie's live queries recompute, and the ticker lands straight on Verified with its per-ticker Confirm live. Only offered for the clean swap, so it can never half-apply; a placeholder with sells against it falls back to the old banner untouched.
+- 1 new test in `ImportPage.test.tsx` (the CSAG shape renders the replace banner, not the discard one, and fires the right callback) — 355 total.
+- Verified end-to-end against a real production build with the user's exact numbers: a 204-share CSAG placeholder on the ledger + the five real Feb–Mar rows + a 204-unit broker check — the replace banner appeared instead of the discard trap, and one click deleted the placeholder, flipped CSAG to Verified with Confirm live, and left the Trades page clean of the 01 Jan lot.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

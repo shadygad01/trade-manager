@@ -506,6 +506,54 @@ describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (
     expect(screen.getByText(/upload an Orders screenshot to confirm the exact transaction count/)).toBeInTheDocument();
     expect(screen.queryByText("Discard all pending for ORHD")).not.toBeInTheDocument();
   });
+
+  it("offers to replace an opening-balance placeholder with the batch's real dated rows instead of discarding them (the CSAG case)", async () => {
+    const user = userEvent.setup();
+    const onReplacePlaceholder = vi.fn();
+    const onDiscardAllPending = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="CSAG"
+        group={{ buys: [buyEntry("real-1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "mismatch",
+          netShares: 408,
+          existingRemainingShares: 204,
+          verifiedUnits: 204,
+          alreadyFullyRecorded: true,
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        placeholderReplacement
+        onReplacePlaceholder={onReplacePlaceholder}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={onDiscardAllPending}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/recorded position is an opening-balance placeholder/)).toBeInTheDocument();
+    expect(screen.queryByText("Discard all pending for CSAG")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Replace placeholder with real rows" }));
+    expect(onReplacePlaceholder).toHaveBeenCalledTimes(1);
+    expect(onDiscardAllPending).not.toHaveBeenCalled();
+  });
 });
 
 describe("TickerGroupCard — mismatch auto-reconcile suggestion (the ORHD 99-vs-74 case)", () => {
