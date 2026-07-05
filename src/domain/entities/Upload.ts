@@ -22,14 +22,47 @@ export interface ParsedTradeCandidate {
    */
   confidence?: ParseConfidence;
   /**
-   * "invoice" marks a candidate read from a standardized per-trade Invoice
-   * document (see ThndrParser's Invoice format) rather than an OCR'd
-   * screenshot/statement — trusted as sufficient verification for its own
-   * transaction on its own, without needing a broker "My Position"
-   * screenshot too (see importVerification's checkTickerMatch). Undefined
-   * for every other source.
+   * Which document type this candidate was read from — the basis of the
+   * dual-source verification rule: the same transaction (identical
+   * ticker/side/date/share count) read from TWO DIFFERENT document types is
+   * independently corroborated and needs no broker "My Position" recount
+   * (see duplicateDetection's findCrossSourceVerifiedKeys). Two reads from
+   * the SAME type (two statements, two orders screenshots) are never a pair
+   * — that's a re-upload, not independent confirmation. "invoice" is
+   * additionally trusted as sufficient verification entirely on its own
+   * (standardized, field-labeled document — see checkTickerMatch's
+   * invoice-verified). Undefined only on candidates extracted before this
+   * field existed; those can still pair with an invoice (the original
+   * cross-verification rule) but never with each other.
    */
-  source?: "invoice";
+  source?: "statement" | "invoice" | "orders-screen" | "csv";
+}
+
+/**
+ * One order row read from a broker's account-wide "Orders" timeline screen —
+ * the full-account order history (every ticker mixed together), each row
+ * carrying the real ticker code, side, order type, limit/execution price,
+ * the order's total value, and a Fulfilled/Cancelled status, but NO
+ * execution date and no printed share count (shares are derived from
+ * totalValue / price, which lands on a whole number for a real row — the
+ * parser uses that as a self-check). Because rows are undated they are never
+ * imported as trades themselves; they corroborate transactions extracted
+ * from other documents (see application/services/orderEvidence.ts): a
+ * pending candidate matched by a fulfilled order here is confirmed by the
+ * broker's own order history, and a candidate whose shares/price match
+ * another ticker's order is likely misfiled under a wrong ticker guess.
+ */
+export interface ParsedOrderEvidence {
+  ticker: string;
+  companyName?: string;
+  side: "BUY" | "SELL";
+  orderType: "limit" | "market";
+  /** Derived: totalValue / price, rounded to the whole-share count it lands on. */
+  shares: number;
+  price: number;
+  totalValue: number;
+  status: "fulfilled" | "cancelled";
+  confidence?: ParseConfidence;
 }
 
 /** A dividend payout read from a broker's "My Position" / dividends history screen. */

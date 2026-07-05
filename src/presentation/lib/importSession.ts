@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedOrderEvidence, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 
 export interface CandidateEntry {
@@ -14,11 +14,26 @@ export interface DividendEntry {
   key: string;
   dividend: ParsedDividendCandidate;
 }
+export interface OrderEvidenceEntry {
+  key: string;
+  evidence: ParsedOrderEvidence;
+}
 
 export interface ImportSessionState {
   pendingCandidates: CandidateEntry[];
   pendingVerifications: VerificationEntry[];
   pendingDividends: DividendEntry[];
+  /** Undated order rows read from account-wide "Orders" timeline screenshots — corroborating evidence only, never committed anywhere (see ParsedOrderEvidence). */
+  pendingOrderEvidences: OrderEvidenceEntry[];
+  /**
+   * Candidates the user discarded from the pending pool (duplicate cleanup,
+   * manual remove). Kept — not deleted — because a discarded duplicate is
+   * still a real READ of its document: removing the redundant copy of a
+   * statement+orders-screenshot pair must not un-verify the surviving row's
+   * dual-source confirmation (see ImportPage's crossVerifiedKeys). Never
+   * rendered, never committed — corroboration evidence only.
+   */
+  discardedCandidates: CandidateEntry[];
   addedKeys: string[];
   acceptedKeys: string[];
   /** Buy candidates auto-skipped as an exact duplicate (same ticker/date/shares/price as an already-recorded trade) — never became a real trade. */
@@ -41,6 +56,8 @@ function emptyState(): ImportSessionState {
     pendingCandidates: [],
     pendingVerifications: [],
     pendingDividends: [],
+    pendingOrderEvidences: [],
+    discardedCandidates: [],
     addedKeys: [],
     acceptedKeys: [],
     skippedKeys: [],

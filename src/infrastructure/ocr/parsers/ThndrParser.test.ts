@@ -65,7 +65,7 @@ describe("ThndrParser.parseStatementText", () => {
     expect(candidates).toHaveLength(2);
     expect(candidates[0]).toMatchObject({ ticker: "EAST", side: "BUY", shares: 50, date: "2026-02-02" });
     expect(candidates[1]).toMatchObject({ ticker: "HRHO", side: "SELL", shares: 45, date: "2026-02-19" });
-    expect(candidates[0].source).toBeUndefined();
+    expect(candidates[0].source).toBe("statement");
   });
 
   it("derives price from the Value column instead of the printed per-share price (commission adjustment)", () => {
@@ -224,6 +224,86 @@ describe("ThndrParser.parseStatementText — per-trade Invoice PDF", () => {
   });
 });
 
+describe("ThndrParser orders timeline", () => {
+  const parser = new ThndrParser("2020-01-01");
+
+  // OCR-shaped text from the real account-wide "Orders" screen: status bar,
+  // title, filter tabs, then rows read as "<TICKER> <total>" followed by
+  // "<Buy/Sell> <Limit/Market> @<price> <status>".
+  const timelineText =
+    "12:11 5G Orders All Pending Completed Cancelled " +
+    "SUGR 315.00 Buy Limit @45.00 Cancelled " +
+    "SKPC 445.50 Buy Limit @14.85 Fulfilled " +
+    "SUGR 275.52 Buy Market @45.92 Fulfilled " +
+    "ORHD 337.50 Buy Limit @22.50 Fulfilled " +
+    "HRHO 361.20 Buy Limit @24.08 Cancelled";
+
+  it("recognizes an account-wide Orders timeline and not the other document shapes", () => {
+    expect(parser.looksLikeOrdersTimeline(timelineText)).toBe(true);
+    expect(parser.looksLikeOrdersTimeline("2/2/2026 Buy Eastern Co. (50@39.3800) -1,974.47")).toBe(false);
+    expect(
+      parser.looksLikeOrdersTimeline("ORAS Orascom Construction All orders Buy • 3 shares @ EGP 448.000 11 Feb 26 – 11:00AM Fulfilled"),
+    ).toBe(false);
+  });
+
+  it("parses each row's ticker, side, order type, price and status, deriving whole shares from total/price", () => {
+    const { evidences, unreadRowCount } = parser.parseOrdersTimeline(timelineText);
+    expect(unreadRowCount).toBe(0);
+    expect(evidences).toHaveLength(5);
+    expect(evidences[0]).toMatchObject({ ticker: "SUGR", side: "BUY", orderType: "limit", shares: 7, price: 45, status: "cancelled" });
+    expect(evidences[1]).toMatchObject({ ticker: "SKPC", shares: 30, price: 14.85, status: "fulfilled", confidence: "high" });
+    expect(evidences[2]).toMatchObject({ ticker: "SUGR", orderType: "market", shares: 6, totalValue: 275.52, status: "fulfilled" });
+    expect(evidences[3]).toMatchObject({ ticker: "ORHD", shares: 15, status: "fulfilled" });
+    expect(evidences[4]).toMatchObject({ ticker: "HRHO", shares: 15, status: "cancelled" });
+  });
+
+  it("handles the per-stock 'Completed Orders' tab — same rows behind a stats header full of non-total numbers", () => {
+    const text =
+      "12:09 Stocks Total Value (EGP) 44,462 +5,796.31 (14.99%) Positions Orders News Completed Orders " +
+      "ABUK 943.60 Buy Market @67.40 Fulfilled " +
+      "HRHO 1,042.86 Sell Market @26.74 Fulfilled " +
+      "HRHO 1,052.61 Sell Limit @26.99 Cancelled";
+    const { evidences, unreadRowCount } = parser.parseOrdersTimeline(text);
+    expect(unreadRowCount).toBe(0);
+    expect(evidences).toHaveLength(3);
+    expect(evidences[0]).toMatchObject({ ticker: "ABUK", side: "BUY", shares: 14, totalValue: 943.6 });
+    expect(evidences[1]).toMatchObject({ ticker: "HRHO", side: "SELL", shares: 39, price: 26.74, status: "fulfilled" });
+    expect(evidences[2]).toMatchObject({ ticker: "HRHO", side: "SELL", shares: 39, status: "cancelled" });
+  });
+
+  it("accepts the total appearing after the action line instead of before it", () => {
+    const text = "Orders All Pending Completed Cancelled MASR Sell Market @4.84 348.48 Fulfilled";
+    const { evidences } = parser.parseOrdersTimeline(text);
+    expect(evidences).toHaveLength(1);
+    expect(evidences[0]).toMatchObject({ ticker: "MASR", side: "SELL", shares: 72, totalValue: 348.48 });
+  });
+
+  it("drops a row (counting it unread) when no candidate total lands on a whole share count", () => {
+    const text =
+      "Orders All Pending Completed Cancelled " +
+      "SUGR 100.00 Buy Limit @45.00 Fulfilled " + // 100/45 is not a share count
+      "SKPC 445.50 Buy Limit @14.85 Fulfilled";
+    const { evidences, unreadRowCount } = parser.parseOrdersTimeline(text);
+    expect(evidences).toHaveLength(1);
+    expect(evidences[0].ticker).toBe("SKPC");
+    expect(unreadRowCount).toBe(1);
+  });
+
+  it("skips a Pending order silently — it's not evidence of anything", () => {
+    const text = "Orders All Pending Completed Cancelled COMI 1,915.20 Buy Limit @136.80 Pending";
+    const { evidences, unreadRowCount } = parser.parseOrdersTimeline(text);
+    expect(evidences).toHaveLength(0);
+    expect(unreadRowCount).toBe(0);
+  });
+
+  it("marks an unknown 4-letter ticker code low-confidence instead of dropping it", () => {
+    const text = "Orders All Pending Completed Cancelled ZZZZ 315.00 Buy Limit @45.00 Fulfilled";
+    const { evidences } = parser.parseOrdersTimeline(text);
+    expect(evidences).toHaveLength(1);
+    expect(evidences[0]).toMatchObject({ ticker: "ZZZZ", confidence: "low" });
+  });
+});
+
 describe("ThndrParser.parseOrdersScreenText", () => {
   const parser = new ThndrParser("2020-01-01");
   const header = "ORAS\nOrascom Construction PLC\n";
@@ -236,7 +316,7 @@ describe("ThndrParser.parseOrdersScreenText", () => {
       "Sell • 17 shares @ EGP 253.128 20 Aug 24 – 10:07AM Cancelled";
     const result = parser.parseOrdersScreenText(text);
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ ticker: "ORAS", side: "BUY", shares: 3, date: "2026-02-11" });
+    expect(result.candidates[0]).toMatchObject({ ticker: "ORAS", side: "BUY", shares: 3, date: "2026-02-11", source: "orders-screen" });
     expect(result.candidates[0].time).toBe("11:00AM");
   });
 

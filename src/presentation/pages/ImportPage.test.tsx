@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TickerGroupCard } from "./ImportPage";
-import type { CandidateEntry } from "@presentation/lib/importSession";
+import type { CandidateEntry, OrderEvidenceEntry } from "@presentation/lib/importSession";
 
 const PORTFOLIOS = [
   { id: "p-smc", name: "smc test" },
@@ -63,7 +63,7 @@ describe("TickerGroupCard — invoice-sourced Buy needs no separate broker scree
 });
 
 describe("TickerGroupCard — cross-verified (an OCR screenshot corroborated by an independent invoice, the ORHD case)", () => {
-  it("shows 'Verified — invoice matches screenshot' and lets the rows proceed straight to Ready", () => {
+  it("shows 'Verified — two documents agree' and lets the rows proceed straight to Ready", () => {
     render(
       <TickerGroupCard
         ticker="ORHD"
@@ -92,7 +92,7 @@ describe("TickerGroupCard — cross-verified (an OCR screenshot corroborated by 
         mergeSuggestion={undefined}
       />,
     );
-    expect(screen.getByText("Verified — invoice matches screenshot")).toBeInTheDocument();
+    expect(screen.getByText("Verified — two documents agree")).toBeInTheDocument();
     expect(screen.getAllByText("Ready — click Confirm above").length).toBe(2);
     expect(screen.queryByText(/Mismatch/)).not.toBeInTheDocument();
     expect(screen.queryByText("Blocked — needs verification")).not.toBeInTheDocument();
@@ -845,5 +845,114 @@ describe("TickerGroupCard — an added Buy never shows a false self-duplicate ba
     expect(duplicateMatch).toHaveBeenCalledWith(added.candidate, "trade-abc");
     expect(screen.getByText("Added")).toBeInTheDocument();
     expect(screen.queryByText("Duplicate")).not.toBeInTheDocument();
+  });
+});
+
+describe("TickerGroupCard — Orders timeline evidence", () => {
+  function orderEvidenceEntry(key: string, overrides: Partial<OrderEvidenceEntry["evidence"]> = {}): OrderEvidenceEntry {
+    return {
+      key,
+      evidence: {
+        ticker: "SKPC",
+        side: "BUY",
+        orderType: "limit",
+        shares: 30,
+        price: 14.85,
+        totalValue: 445.5,
+        status: "fulfilled",
+        confidence: "high",
+        ...overrides,
+      },
+    };
+  }
+
+  it("shows 'Verified — matches Orders history' plus the evidence rows, with the corroborated Buy badged", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{
+          buys: [buyEntry("skpc-b1")],
+          sells: [],
+          verifications: [],
+          dividends: [],
+          orderEvidences: [orderEvidenceEntry("skpc-o1"), orderEvidenceEntry("skpc-o2", { status: "cancelled" })],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "orders-verified", netShares: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        orderConfirmedKeys={new Set(["skpc-b1"])}
+        onDiscardOrderEvidence={vi.fn()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Verified — matches Orders history")).toBeInTheDocument();
+    expect(screen.getByText("Matches Orders history")).toBeInTheDocument();
+    expect(screen.getByText("Ready — click Confirm above")).toBeInTheDocument();
+    expect(screen.getByText("Fulfilled")).toBeInTheDocument();
+    expect(screen.getByText("Cancelled")).toBeInTheDocument();
+    expect(screen.queryByText("No matching order")).not.toBeInTheDocument();
+  });
+
+  it("on a mismatch, badges the row no fulfilled order matches and lets a misread evidence row be discarded", async () => {
+    const user = userEvent.setup();
+    const onDiscardOrderEvidence = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{
+          buys: [buyEntry("skpc-good"), buyEntry("skpc-extra")],
+          sells: [],
+          verifications: [],
+          dividends: [],
+          orderEvidences: [orderEvidenceEntry("skpc-o1")],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 60, verifiedUnits: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        orderConfirmedKeys={new Set(["skpc-good"])}
+        onDiscardOrderEvidence={onDiscardOrderEvidence}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Matches Orders history")).toBeInTheDocument();
+    expect(screen.getByText("No matching order")).toBeInTheDocument();
+    await user.click(screen.getByTitle(/Remove this order row if it was misread/));
+    expect(onDiscardOrderEvidence).toHaveBeenCalledWith(expect.objectContaining({ key: "skpc-o1" }));
   });
 });

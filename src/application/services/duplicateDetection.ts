@@ -139,17 +139,27 @@ export function suggestDuplicatePendingCandidateKeysToDelete(
 }
 
 /**
- * Finds every still-pending candidate cross-verified by an independent
- * second document: the same real transaction (same ticker+side+date+share
- * count, ignoring price the same way the sibling-duplicate check above
- * does) read once from a standardized Invoice and once from an OCR'd
- * screenshot/statement. Two independently-sourced documents agreeing on a
- * transaction is at least as trustworthy as an invoice alone (already
- * sufficient on its own — see ThndrParser's Invoice format), and resolves
- * exactly the case a broker "My Position" total can't: an OCR-only ticker
- * whose extracted total won't reconcile no matter how the individual rows
- * are read, because the mismatch is hiding inside rows that never got a
- * second, independent document to confirm them.
+ * The dual-source verification rule: the same real transaction (same
+ * ticker+side+date+share count, ignoring price the same way the
+ * sibling-duplicate check above does) read from TWO DIFFERENT document
+ * types — statement + invoice, statement + orders screenshot, invoice +
+ * orders screenshot, CSV export + anything, and so on — is independently
+ * corroborated, and every candidate in such a group is flagged verified.
+ * Which pair of types doesn't matter; that they're two independent
+ * documents does. Two reads from the SAME type never pair (two overlapping
+ * statements, two re-takes of one orders screen — that's a re-upload of
+ * the same information, not independent confirmation), which is also why
+ * this can't be fooled by the duplicate-file case. Resolves exactly what a
+ * broker "My Position" total can't: a ticker whose extracted total won't
+ * reconcile no matter how the individual rows are read, because the
+ * mismatch is hiding inside rows that never got a second, independent
+ * document to confirm them.
+ *
+ * A candidate extracted before ParsedTradeCandidate.source existed
+ * (undefined source, still sitting in an old session) could be from any
+ * screenshot type, so undefined never pairs with another undefined or with
+ * a typed non-invoice source — only the original invoice+anything rule
+ * still applies to it, exactly the behavior it had when it was extracted.
  *
  * This never decides which of the pair to keep for commit — that's still
  * suggestDuplicatePendingCandidateKeysToDelete's job (same signature, same
@@ -168,9 +178,10 @@ export function findCrossSourceVerifiedKeys(entries: { key: string; candidate: P
 
   const verifiedKeys = new Set<string>();
   for (const group of bySignature.values()) {
-    const hasInvoice = group.some((e) => e.candidate.source === "invoice");
-    const hasNonInvoice = group.some((e) => e.candidate.source !== "invoice");
-    if (hasInvoice && hasNonInvoice) {
+    const definedSources = new Set(group.map((e) => e.candidate.source).filter((s): s is NonNullable<typeof s> => s !== undefined));
+    const hasLegacyUntyped = group.some((e) => e.candidate.source === undefined);
+    const dualSourced = definedSources.size >= 2 || (definedSources.has("invoice") && hasLegacyUntyped);
+    if (dualSourced) {
       for (const e of group) verifiedKeys.add(e.key);
     }
   }

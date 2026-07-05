@@ -1,4 +1,4 @@
-import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedOrderEvidence, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { extractPdfText } from "./pdfText";
 import { loadImageToCanvas, cropHeaderBand, preprocessForOcr, segmentOrderRows } from "./imagePreprocess";
@@ -8,7 +8,7 @@ import { flatResultIsDeficient, missingFulfilledCount, shouldPreferRowScan } fro
 import { ThndrParser } from "./parsers/ThndrParser";
 import { CsvStatementParser } from "./parsers/CsvStatementParser";
 
-export type ImportDocType = "statement" | "orders-screen" | "position-verification";
+export type ImportDocType = "statement" | "orders-screen" | "orders-timeline" | "position-verification";
 
 export interface ImportResult {
   status: "parsed" | "failed";
@@ -17,6 +17,8 @@ export interface ImportResult {
   verifications: Omit<PositionVerification, "id" | "portfolioId">[];
   /** Dividend payouts read from a "My Position" screen's dividend-history section, if present. */
   dividends: ParsedDividendCandidate[];
+  /** Per-order corroborating evidence read from an account-wide "Orders" timeline screen — undated, so never trade candidates (see ParsedOrderEvidence). */
+  orderEvidences: ParsedOrderEvidence[];
   rawText: string;
   warnings: string[];
   /** SHA-256 hex digest of the file's bytes — callers persisting an Upload entity use this for its fileHash field / per-file dedup. */
@@ -61,7 +63,9 @@ export class ImportOrchestrator {
       const headerBand = cropHeaderBand(sourceCanvas);
       const body = preprocessForOcr(sourceCanvas);
       const isRecognizedDocument = (text: string) =>
-        this.parsers.some((p) => p.looksLikeOwnDocument(text) || p.looksLikePositionVerification(text));
+        this.parsers.some(
+          (p) => p.looksLikeOwnDocument(text) || p.looksLikePositionVerification(text) || p.looksLikeOrdersTimeline(text),
+        );
       const { text } = await recognizeWithFallback(headerBand, body, isRecognizedDocument);
       rawText = text;
     } else if (isPdf) {
@@ -78,6 +82,7 @@ export class ImportOrchestrator {
         candidates: [],
         verifications: [],
         dividends: [],
+        orderEvidences: [],
         rawText,
         warnings: ["No text could be read from the file — try another file."],
         fileHash,
@@ -106,6 +111,7 @@ export class ImportOrchestrator {
             candidates: [],
             verifications: [],
             dividends: [],
+            orderEvidences: [],
             rawText,
             warnings: ["Recognized a position screen but couldn't read the ticker/units — try a clearer screenshot."],
             fileHash,
@@ -117,6 +123,7 @@ export class ImportOrchestrator {
           candidates: [],
           verifications,
           dividends: parser.parseDividends(rawText),
+          orderEvidences: [],
           rawText,
           warnings: [],
           fileHash,
@@ -124,15 +131,57 @@ export class ImportOrchestrator {
       }
     }
 
-    // 2. Statement rows (dated, per-row "Buy/Sell <company> (qty@price)").
+    // 2. Account-wide "Orders" timeline screens: undated per-order rows
+    // (real ticker code + side/type/price + total + Fulfilled/Cancelled) that
+    // corroborate transactions extracted from dated documents rather than
+    // becoming trade candidates themselves. Routed before the statement/
+    // orders-screen parsers because its rows carry none of the fields those
+    // need (no date, no "N shares"), so they'd otherwise fall through to a
+    // generic "no transactions found" failure.
+    for (const parser of candidateParsers) {
+      if (!parser.looksLikeOrdersTimeline(rawText)) continue;
+      const { evidences, unreadRowCount } = parser.parseOrdersTimeline(rawText);
+      if (evidences.length === 0) {
+        return {
+          status: "failed",
+          docType: "orders-timeline",
+          candidates: [],
+          verifications: [],
+          dividends: [],
+          orderEvidences: [],
+          rawText,
+          warnings: ["Recognized an Orders history screen but couldn't read any order rows — try a clearer or larger screenshot."],
+          fileHash,
+        };
+      }
+      const warnings: string[] = [];
+      if (unreadRowCount > 0) {
+        warnings.push(
+          `${unreadRowCount} order row(s) on the Orders screen couldn't be fully read (missing ticker/total/status) — try re-uploading a clearer or larger screenshot if an order seems to be missing.`,
+        );
+      }
+      return {
+        status: "parsed",
+        docType: "orders-timeline",
+        candidates: [],
+        verifications: [],
+        dividends: [],
+        orderEvidences: evidences,
+        rawText,
+        warnings,
+        fileHash,
+      };
+    }
+
+    // 3. Statement rows (dated, per-row "Buy/Sell <company> (qty@price)").
     for (const parser of candidateParsers) {
       const candidates = parser.parseStatementText(rawText);
       if (candidates.length > 0) {
-        return { status: "parsed", docType: "statement", candidates, verifications: [], dividends: [], rawText, warnings: [], fileHash };
+        return { status: "parsed", docType: "statement", candidates, verifications: [], dividends: [], orderEvidences: [], rawText, warnings: [], fileHash };
       }
     }
 
-    // 3. Orders-screen screenshots: flat parse first, then — whenever the
+    // 4. Orders-screen screenshots: flat parse first, then — whenever the
     // flat parse found nothing OR its own signals say it lost/mispaired a
     // row, and this is an image — the row-isolated re-scan, which eliminates
     // cross-row action/status mispairing by construction (each image slice
@@ -208,6 +257,7 @@ export class ImportOrchestrator {
           candidates,
           verifications: [],
           dividends: [],
+          orderEvidences: [],
           rawText: rawText + rowScanLog,
           warnings,
           fileHash,
@@ -225,6 +275,7 @@ export class ImportOrchestrator {
       candidates: [],
       verifications: [],
       dividends: [],
+      orderEvidences: [],
       rawText,
       warnings: [
         looksLikeAnyKnownDocument

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
-import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, Pencil, Trash2, XCircle, Eraser } from "lucide-react";
+import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
@@ -15,6 +15,11 @@ import {
   findWrongTickerCandidateKeys,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
+import {
+  orderEvidenceContentKey,
+  findOrderConfirmedKeys,
+  findWrongTickerHintsFromOrders,
+} from "@application/services/orderEvidence";
 import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "@application/services/mismatchResolver";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
@@ -28,6 +33,7 @@ import {
   type CandidateEntry,
   type VerificationEntry,
   type DividendEntry,
+  type OrderEvidenceEntry,
 } from "@presentation/lib/importSession";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { Modal } from "@presentation/components/Modal";
@@ -99,7 +105,7 @@ export function ImportPage() {
   const [distributing, setDistributing] = useState(false);
 
   const session = useImportSession();
-  const { pendingCandidates, pendingVerifications, pendingDividends, tickerPortfolio, filesProcessed } = session;
+  const { pendingCandidates, pendingVerifications, pendingDividends, pendingOrderEvidences, tickerPortfolio, filesProcessed } = session;
 
   /**
    * Every extraction path already filters a Buy/Sell candidate dated before
@@ -271,6 +277,7 @@ export function ImportPage() {
           const newCandidates = result.candidates.map((candidate, ci) => ({ key: `${fileSeq}-c${ci}`, candidate }));
           let skippedVerifications = 0;
           let skippedDividends = 0;
+          let skippedOrderEvidences = 0;
           importSession.update((prev) => {
             const seenVerificationKeys = new Set(prev.pendingVerifications.map((e) => verificationContentKey(e.verification)));
             const newVerifications: VerificationEntry[] = [];
@@ -299,11 +306,27 @@ export function ImportPage() {
               newDividends.push({ key: `${fileSeq}-d${di}`, dividend });
             });
 
+            // Deduped only against PREVIOUS files' rows, never within this
+            // file's own batch: consecutive scrolled screenshots of the same
+            // Orders screen overlap by a few rows (same signature in two
+            // files = the overlap), while two identical rows within one
+            // screenshot are genuinely two separate orders.
+            const seenEvidenceKeys = new Set(prev.pendingOrderEvidences.map((e) => orderEvidenceContentKey(e.evidence)));
+            const newOrderEvidences: OrderEvidenceEntry[] = [];
+            result.orderEvidences.forEach((evidence, oi) => {
+              if (seenEvidenceKeys.has(orderEvidenceContentKey(evidence))) {
+                skippedOrderEvidences += 1;
+                return;
+              }
+              newOrderEvidences.push({ key: `${fileSeq}-o${oi}`, evidence });
+            });
+
             return {
               ...prev,
               pendingCandidates: [...prev.pendingCandidates, ...newCandidates],
               pendingVerifications: [...prev.pendingVerifications, ...newVerifications],
               pendingDividends: [...prev.pendingDividends, ...newDividends],
+              pendingOrderEvidences: [...prev.pendingOrderEvidences, ...newOrderEvidences],
             };
           });
 
@@ -314,6 +337,11 @@ export function ImportPage() {
           if (skippedDividends > 0) {
             dedupWarnings.push(
               `${skippedDividends} dividend${skippedDividends === 1 ? "" : "s"} already in the list or already recorded — not added again.`,
+            );
+          }
+          if (skippedOrderEvidences > 0) {
+            dedupWarnings.push(
+              `${skippedOrderEvidences} order row${skippedOrderEvidences === 1 ? "" : "s"} already read from an earlier screenshot (overlapping scroll) — not added again.`,
             );
           }
           if (dedupWarnings.length > 0) {
@@ -528,30 +556,42 @@ export function ImportPage() {
    * already-added/skipped/dismissed row; only rows still genuinely pending
    * are eligible, matching pendingDuplicateCandidateKeys below.
    */
+  /**
+   * Discarded rows move to discardedCandidates instead of vanishing: a
+   * discarded duplicate is still a real read of its document, and the
+   * surviving row's dual-source confirmation must not evaporate the moment
+   * the redundant copy is cleaned up for commit.
+   */
+  function moveToDiscarded(prev: typeof session, keys: Set<string>) {
+    return {
+      ...prev,
+      pendingCandidates: prev.pendingCandidates.filter((e) => !keys.has(e.key)),
+      discardedCandidates: [...prev.discardedCandidates, ...prev.pendingCandidates.filter((e) => keys.has(e.key))],
+    };
+  }
+
   function clearPendingDuplicateCandidates() {
     if (pendingDuplicateCandidateKeys.length === 0) return;
     const keys = new Set(pendingDuplicateCandidateKeys);
+    importSession.update((prev) => moveToDiscarded(prev, keys));
+  }
+
+  /** Discards one order-evidence row read from an Orders screenshot — for a visibly misread row, so it can't wrongly corroborate (or fail to corroborate) anything. */
+  function discardOrderEvidence(key: string) {
     importSession.update((prev) => ({
       ...prev,
-      pendingCandidates: prev.pendingCandidates.filter((e) => !keys.has(e.key)),
+      pendingOrderEvidences: prev.pendingOrderEvidences.filter((e) => e.key !== key),
     }));
   }
 
   /** Discards one specific still-pending candidate — the single-row counterpart to clearPendingDuplicateCandidates. */
   function discardPendingCandidate(key: string) {
-    importSession.update((prev) => ({
-      ...prev,
-      pendingCandidates: prev.pendingCandidates.filter((e) => e.key !== key),
-    }));
+    importSession.update((prev) => moveToDiscarded(prev, new Set([key])));
   }
 
   /** Discards a named set of still-pending candidates in one shot — used by the mismatch auto-reconcile suggestion (see reconcileSuggestions). */
   function discardPendingCandidateKeys(keys: string[]) {
-    const keySet = new Set(keys);
-    importSession.update((prev) => ({
-      ...prev,
-      pendingCandidates: prev.pendingCandidates.filter((e) => !keySet.has(e.key)),
-    }));
+    importSession.update((prev) => moveToDiscarded(prev, new Set(keys)));
   }
 
   /**
@@ -567,10 +607,12 @@ export function ImportPage() {
    * separately at extraction time).
    */
   function discardAllPendingForTicker(ticker: string) {
-    importSession.update((prev) => ({
-      ...prev,
-      pendingCandidates: prev.pendingCandidates.filter((e) => normalizeTicker(e.candidate.ticker) !== ticker),
-    }));
+    importSession.update((prev) =>
+      moveToDiscarded(
+        prev,
+        new Set(prev.pendingCandidates.filter((e) => normalizeTicker(e.candidate.ticker) === ticker).map((e) => e.key)),
+      ),
+    );
   }
 
   async function addDividend(entry: DividendEntry, ticker: string) {
@@ -624,6 +666,12 @@ export function ImportPage() {
         pendingDividends: prev.pendingDividends.map((e) =>
           normalizeTicker(e.dividend.ticker) === oldTicker ? { ...e, dividend: { ...e.dividend, ticker: newTicker } } : e,
         ),
+        pendingOrderEvidences: prev.pendingOrderEvidences.map((e) =>
+          normalizeTicker(e.evidence.ticker) === oldTicker ? { ...e, evidence: { ...e.evidence, ticker: newTicker } } : e,
+        ),
+        discardedCandidates: prev.discardedCandidates.map((e) =>
+          normalizeTicker(e.candidate.ticker) === oldTicker ? { ...e, candidate: { ...e.candidate, ticker: newTicker } } : e,
+        ),
         tickerPortfolio: tickerPortfolioNext,
       };
     });
@@ -653,11 +701,17 @@ export function ImportPage() {
   const tickerGroups = useMemo(() => {
     const map = new Map<
       string,
-      { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[]; dividends: DividendEntry[] }
+      {
+        buys: CandidateEntry[];
+        sells: CandidateEntry[];
+        verifications: VerificationEntry[];
+        dividends: DividendEntry[];
+        orderEvidences: OrderEvidenceEntry[];
+      }
     >();
     const group = (ticker: string) => {
       const t = normalizeTicker(ticker);
-      const g = map.get(t) ?? { buys: [], sells: [], verifications: [], dividends: [] };
+      const g = map.get(t) ?? { buys: [], sells: [], verifications: [], dividends: [], orderEvidences: [] };
       map.set(t, g);
       return g;
     };
@@ -671,8 +725,11 @@ export function ImportPage() {
     for (const entry of pendingDividends) {
       group(entry.dividend.ticker).dividends.push(entry);
     }
+    for (const entry of pendingOrderEvidences) {
+      group(entry.evidence.ticker).orderEvidences.push(entry);
+    }
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [pendingCandidates, pendingVerifications, pendingDividends]);
+  }, [pendingCandidates, pendingVerifications, pendingDividends, pendingOrderEvidences]);
 
   /**
    * Nothing dedupes a pending Buy/Sell candidate against its own siblings in
@@ -718,6 +775,41 @@ export function ImportPage() {
   const pendingDuplicateCandidateKeySet = useMemo(() => new Set(pendingDuplicateCandidateKeys), [pendingDuplicateCandidateKeys]);
 
   /**
+   * The dual-source rule, page-wide: every still-pending row whose exact
+   * transaction (ticker/side/date/share count) was read from two DIFFERENT
+   * document types — statement + invoice, statement + orders screenshot,
+   * etc. (see findCrossSourceVerifiedKeys). Drives the per-row "Two
+   * documents agree" badge and feeds the per-ticker verification gate.
+   */
+  const crossVerifiedKeys = useMemo(() => {
+    const stillPending = pendingCandidates.filter(
+      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    );
+    // Discarded rows still corroborate: cleaning up the redundant copy of a
+    // statement+orders-screenshot pair must not un-verify the row that stays.
+    return findCrossSourceVerifiedKeys([...stillPending, ...session.discardedCandidates]);
+  }, [pendingCandidates, session.discardedCandidates, addedKeys, skippedKeys, dismissedKeys]);
+
+  /**
+   * Pending Buy/Sell rows corroborated by a fulfilled order on the broker's
+   * own account-wide "Orders" timeline screenshot (same ticker/side/share
+   * count, price within tolerance — see findOrderConfirmedKeys). Drives the
+   * per-row "Matches Orders history" badge, and — when EVERY still-pending
+   * row of a ticker is confirmed one way or another — lets the ticker verify
+   * without a "My Position" screenshot (checkTickerMatch's orders-verified).
+   */
+  const orderConfirmedKeys = useMemo(() => {
+    if (pendingOrderEvidences.length === 0) return new Set<string>();
+    const stillPending = pendingCandidates.filter(
+      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    );
+    return findOrderConfirmedKeys(
+      stillPending,
+      pendingOrderEvidences.map((e) => e.evidence),
+    );
+  }, [pendingCandidates, pendingOrderEvidences, addedKeys, skippedKeys, dismissedKeys]);
+
+  /**
    * The verification gate (Step 2 of the two-phase workflow): a ticker's
    * pending buys/sells only get a green light once their net effect on its
    * share count exactly reconciles against a broker "My Position"
@@ -741,10 +833,14 @@ export function ImportPage() {
       const remainingBuysAndSells = [...remainingBuys, ...remainingSells];
       const allPendingFromInvoice =
         remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
-      const crossVerifiedKeys = findCrossSourceVerifiedKeys(remainingBuysAndSells);
       const allPendingSelfVerified =
         remainingBuysAndSells.length > 0 &&
         remainingBuysAndSells.every((e) => e.candidate.source === "invoice" || crossVerifiedKeys.has(e.key));
+      const allPendingOrderConfirmed =
+        remainingBuysAndSells.length > 0 &&
+        remainingBuysAndSells.every(
+          (e) => e.candidate.source === "invoice" || crossVerifiedKeys.has(e.key) || orderConfirmedKeys.has(e.key),
+        );
       const existingRemainingShares = existingTrades
         .filter((t) => normalizeTicker(t.ticker) === ticker)
         .reduce((sum, t) => sum + t.remainingShares, 0);
@@ -767,11 +863,12 @@ export function ImportPage() {
           verifiedUnits: latestVerification?.units,
           allPendingFromInvoice,
           allPendingSelfVerified,
+          allPendingOrderConfirmed,
         }),
       );
     }
     return map;
-  }, [tickerGroups, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications]);
+  }, [tickerGroups, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications, crossVerifiedKeys, orderConfirmedKeys]);
 
   const unmatchedTickerCount = tickerGroups.filter(([ticker]) => !tickerMatchStatuses.get(ticker)?.matched).length;
   const matchedTickerCount = tickerGroups.length - unmatchedTickerCount;
@@ -788,8 +885,22 @@ export function ImportPage() {
     const stillPending = pendingCandidates.filter(
       (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
     );
-    return findWrongTickerCandidateKeys(stillPending, existingTrades, existingAllocations);
-  }, [pendingCandidates, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingAllocations]);
+    const hints = findWrongTickerCandidateKeys(stillPending, existingTrades, existingAllocations);
+    // The Orders timeline prints the REAL ticker code on every row, so it can
+    // catch a misfiled read even when no committed/pending copy exists under
+    // the right ticker. Ledger/pending-based hints take precedence — they
+    // point at an actual duplicate record, not just a matching order.
+    if (pendingOrderEvidences.length > 0) {
+      const orderHints = findWrongTickerHintsFromOrders(
+        stillPending,
+        pendingOrderEvidences.map((e) => e.evidence),
+      );
+      for (const [key, ticker] of orderHints) {
+        if (!hints.has(key)) hints.set(key, ticker);
+      }
+    }
+    return hints;
+  }, [pendingCandidates, pendingOrderEvidences, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingAllocations]);
 
   /**
    * For a mismatch none of the row-level checks can explain, the share
@@ -932,7 +1043,7 @@ export function ImportPage() {
     <div>
       <PageHeader
         title="Import"
-        description="Step 1: extract every transaction from as many screenshots/PDFs/CSVs as you need. Step 2: every ticker's share count must match a broker 'My Position' screenshot before anything can be distributed. Only once every ticker is verified can you confirm and allocate to portfolios."
+        description="Step 1: extract every transaction from as many screenshots/PDFs/CSVs as you need — statements, invoices, position screens, per-stock Orders screens, and the account-wide Orders history. Step 2: every ticker's share count must match a broker 'My Position' screenshot (or every transaction must be confirmed by an invoice or the Orders history) before anything can be distributed."
         actions={
           <button
             onClick={() => {
@@ -1029,8 +1140,12 @@ export function ImportPage() {
         ) : null}
 
         <p className="mt-3 flex items-center gap-2 text-sm text-slate-300">
-          {totalPending > 0 ? <CheckCircle2 size={15} className="text-emerald-400" /> : null}
-          <span className="font-medium">{totalPending}</span> transaction{totalPending === 1 ? "" : "s"} extracted so far
+          {totalPending > 0 || pendingOrderEvidences.length > 0 ? <CheckCircle2 size={15} className="text-emerald-400" /> : null}
+          <span className="font-medium">{totalPending}</span> transaction{totalPending === 1 ? "" : "s"}
+          {pendingOrderEvidences.length > 0
+            ? ` + ${pendingOrderEvidences.length} order-history row${pendingOrderEvidences.length === 1 ? "" : "s"}`
+            : ""}{" "}
+          extracted so far
           {filesProcessed > 0 ? ` from ${filesProcessed} file${filesProcessed === 1 ? "" : "s"}` : ""}. Drop more files anytime,
           or move on to Step 2 once you're done.
         </p>
@@ -1101,6 +1216,9 @@ export function ImportPage() {
                 addedTradeIds={session.addedTradeIds}
                 addedAllocationIds={session.addedAllocationIds}
                 suspectedDuplicateKeys={pendingDuplicateCandidateKeySet}
+                crossVerifiedKeys={crossVerifiedKeys}
+                orderConfirmedKeys={orderConfirmedKeys}
+                onDiscardOrderEvidence={(entry) => discardOrderEvidence(entry.key)}
                 wrongTickerHints={wrongTickerHints}
                 reconcileSuggestion={reconcileSuggestions.get(ticker)}
                 placeholderReplacement={placeholderReplacements.has(ticker)}
@@ -1177,6 +1295,9 @@ export function TickerGroupCard({
   addedTradeIds,
   addedAllocationIds,
   suspectedDuplicateKeys,
+  crossVerifiedKeys,
+  orderConfirmedKeys,
+  onDiscardOrderEvidence,
   wrongTickerHints,
   reconcileSuggestion,
   placeholderReplacement = false,
@@ -1194,7 +1315,13 @@ export function TickerGroupCard({
   knownTickerSuggestion,
 }: {
   ticker: string;
-  group: { buys: CandidateEntry[]; sells: CandidateEntry[]; verifications: VerificationEntry[]; dividends: DividendEntry[] };
+  group: {
+    buys: CandidateEntry[];
+    sells: CandidateEntry[];
+    verifications: VerificationEntry[];
+    dividends: DividendEntry[];
+    orderEvidences?: OrderEvidenceEntry[];
+  };
   portfolios: { id: string; name: string }[];
   portfolioId: string;
   /** False while the ticker's portfolio is still ambiguous (a brand-new ticker with more than one portfolio open) — commit waits on the user picking one below. */
@@ -1220,6 +1347,12 @@ export function TickerGroupCard({
   addedAllocationIds?: Record<string, string[]>;
   /** Keys of pending (not yet added/skipped/dismissed) candidates suggested for discard — either a duplicate of a sibling in this same batch, or of a trade already committed to the ledger. See ImportPage's pendingDuplicateCandidateKeys. */
   suspectedDuplicateKeys: Set<string>;
+  /** Keys of pending rows whose transaction was read from two different document types (see findCrossSourceVerifiedKeys) — drives the "Two documents agree" badge. */
+  crossVerifiedKeys?: Set<string>;
+  /** Keys of pending rows corroborated by a fulfilled order on the broker's Orders timeline screenshot (see findOrderConfirmedKeys) — drives the "Matches Orders history" badge, and its absence the "No matching order" hint on a mismatch. */
+  orderConfirmedKeys?: Set<string>;
+  /** Discards one misread order-evidence row (see ImportPage's discardOrderEvidence). */
+  onDiscardOrderEvidence?: (entry: OrderEvidenceEntry) => void;
   /** Pending key -> the ticker a phantom wrong-ticker read most likely belongs to (see findWrongTickerCandidateKeys) — drives the "likely {other}'s transaction" badge. */
   wrongTickerHints?: Map<string, string>;
   /** The mismatch auto-reconcile solver's suggested removal for this ticker, when one exists (see suggestRemovalsToReconcile) — drives the banner's one-click fix and the per-row highlight. */
@@ -1247,6 +1380,17 @@ export function TickerGroupCard({
   const matched = matchStatus?.matched ?? false;
   const [renaming, setRenaming] = useState(false);
   const [draftTicker, setDraftTicker] = useState(ticker);
+  const orderEvidences = group.orderEvidences ?? [];
+  // An evidence-only group (Orders-history rows and nothing else) is
+  // trivially matched but has nothing to distribute — a Confirm button on it
+  // would be a no-op pretending to be an action.
+  const hasCommittable =
+    group.buys.length + group.sells.length + group.verifications.length + group.dividends.length > 0;
+  // "No matching order" is only a meaningful signal when the broker's order
+  // history for this ticker was actually uploaded AND the count doesn't
+  // reconcile — an absent screenshot proves nothing about any row.
+  const tickerHasFulfilledOrders = orderEvidences.some((e) => e.evidence.status === "fulfilled");
+  const highlightUnmatchedByOrders = tickerHasFulfilledOrders && matchStatus?.reason === "mismatch";
 
   function confirmRename() {
     onRenameTicker(draftTicker);
@@ -1360,7 +1504,7 @@ export function TickerGroupCard({
               ))}
             </select>
           </label>
-          {matched && portfolioResolved ? (
+          {matched && portfolioResolved && hasCommittable ? (
             <button
               onClick={onConfirmTicker}
               disabled={distributing}
@@ -1384,6 +1528,9 @@ export function TickerGroupCard({
         <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
           No broker "My Position" screenshot uploaded for {ticker} yet — upload one in Step 1 so its share count can be
           verified before anything is allocated to a portfolio.
+          {tickerHasFulfilledOrders
+            ? " (This ticker has Orders-history rows, but not every transaction below is matched by one — a position screenshot settles it.)"
+            : " An account-wide Orders history screenshot also works when it confirms every transaction below."}
         </div>
       ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded && placeholderReplacement ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
@@ -1474,6 +1621,9 @@ export function TickerGroupCard({
               suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
               suggestedRemoval={reconcileSuggestion?.keysToRemove.includes(entry.key) ?? false}
               wrongTickerHint={wrongTickerHints?.get(entry.key)}
+              crossSourceVerified={crossVerifiedKeys?.has(entry.key) ?? false}
+              orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
+              noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
               onDelete={() => onDeleteAutoAdded(entry)}
               onDiscardPending={() => onDiscardPending(entry)}
             />
@@ -1503,6 +1653,9 @@ export function TickerGroupCard({
               suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
               suggestedRemoval={reconcileSuggestion?.keysToRemove.includes(entry.key) ?? false}
               wrongTickerHint={wrongTickerHints?.get(entry.key)}
+              crossSourceVerified={crossVerifiedKeys?.has(entry.key) ?? false}
+              orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
+              noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
               onDiscardPending={() => onDiscardPending(entry)}
             />
           );
@@ -1560,6 +1713,31 @@ export function TickerGroupCard({
             {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
           </div>
         ))}
+        {orderEvidences.map((entry) => (
+          <div key={entry.key} className="px-4 py-2 text-sm">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-xs text-slate-400">
+                <History size={13} className={entry.evidence.status === "fulfilled" ? "text-cyan-400" : "text-slate-600"} />
+                Orders history: {entry.evidence.side} {formatShares(entry.evidence.shares)} sh @{" "}
+                {formatMoney(entry.evidence.price)} ({entry.evidence.orderType}) — total {formatMoney(entry.evidence.totalValue)}
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                    entry.evidence.status === "fulfilled" ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-700/40 text-slate-400 line-through"
+                  }`}
+                >
+                  {entry.evidence.status === "fulfilled" ? "Fulfilled" : "Cancelled"}
+                </span>
+              </span>
+              <button
+                onClick={() => onDiscardOrderEvidence?.(entry)}
+                title="Remove this order row if it was misread — it's evidence only, nothing was committed from it."
+                className="rounded p-1 text-slate-600 hover:bg-rose-500/10 hover:text-rose-400"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1598,7 +1776,14 @@ function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
   if (status.reason === "cross-verified") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> Verified — invoice matches screenshot
+        <ShieldCheck size={11} /> Verified — two documents agree
+      </span>
+    );
+  }
+  if (status.reason === "orders-verified") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+        <ShieldCheck size={11} /> Verified — matches Orders history
       </span>
     );
   }
@@ -1632,6 +1817,9 @@ export function AutoCommitRow({
   suspectedDuplicate = false,
   suggestedRemoval = false,
   wrongTickerHint,
+  crossSourceVerified = false,
+  orderConfirmed = false,
+  noMatchingOrder = false,
   onDelete,
   onDiscardPending,
 }: {
@@ -1652,6 +1840,12 @@ export function AutoCommitRow({
   suggestedRemoval?: boolean;
   /** The ticker this row most likely belongs to, when it looks like a phantom wrong-ticker read of another ticker's transaction (see findWrongTickerCandidateKeys). */
   wrongTickerHint?: string;
+  /** True when this exact transaction was read from two different document types (statement + invoice, statement + orders screenshot, …) — the dual-source verification rule (see findCrossSourceVerifiedKeys). */
+  crossSourceVerified?: boolean;
+  /** True when a fulfilled order on the broker's Orders timeline screenshot corroborates this exact row (see findOrderConfirmedKeys). */
+  orderConfirmed?: boolean;
+  /** True on a mismatch when this ticker's Orders history was uploaded and no fulfilled order matches this row — the likely extra/wrong row behind the mismatch. */
+  noMatchingOrder?: boolean;
   onDelete: () => void;
   /**
    * Discards this row from the pending pool outright — available on every
@@ -1727,6 +1921,29 @@ export function AutoCommitRow({
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
               <ShieldAlert size={11} /> Suggested removal
+            </span>
+          ) : null}
+          {crossSourceVerified ? (
+            <span
+              title="This exact transaction (same side, date and share count) was read from two different document types — independently confirmed by two documents."
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
+            >
+              <ShieldCheck size={11} /> Two documents agree
+            </span>
+          ) : null}
+          {orderConfirmed ? (
+            <span
+              title="A fulfilled order with this exact side, share count and a near-identical price appears on the broker's own Orders history screenshot — this transaction is confirmed by the broker."
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
+            >
+              <History size={11} /> Matches Orders history
+            </span>
+          ) : stillPending && noMatchingOrder ? (
+            <span
+              title="This ticker's Orders history was uploaded, but no fulfilled order matches this row's side/shares/price — it's the likely extra, misread, or misfiled row behind the mismatch."
+              className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
+            >
+              <History size={11} /> No matching order
             </span>
           ) : null}
         </div>
@@ -1812,6 +2029,9 @@ export function CandidateRow({
   suspectedDuplicate = false,
   suggestedRemoval = false,
   wrongTickerHint,
+  crossSourceVerified = false,
+  orderConfirmed = false,
+  noMatchingOrder = false,
   onDiscardPending,
 }: {
   entry: CandidateEntry;
@@ -1828,6 +2048,12 @@ export function CandidateRow({
   suggestedRemoval?: boolean;
   /** The ticker this row most likely belongs to, when it looks like a phantom wrong-ticker read (see findWrongTickerCandidateKeys and AutoCommitRow's twin prop). */
   wrongTickerHint?: string;
+  /** True when this exact transaction was read from two different document types (see AutoCommitRow's twin prop). */
+  crossSourceVerified?: boolean;
+  /** True when a fulfilled order on the broker's Orders timeline screenshot corroborates this exact row (see AutoCommitRow's twin prop). */
+  orderConfirmed?: boolean;
+  /** True on a mismatch when this ticker's Orders history was uploaded and no fulfilled order matches this row (see AutoCommitRow's twin prop). */
+  noMatchingOrder?: boolean;
   /** Discards this row from the pending pool outright — available on every still-pending row, not just ones auto-flagged as a suspected duplicate (see AutoCommitRow's onDiscardPending). */
   onDiscardPending?: () => void;
 }) {
@@ -1897,6 +2123,29 @@ export function CandidateRow({
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
               <ShieldAlert size={11} /> Suggested removal
+            </span>
+          ) : null}
+          {crossSourceVerified ? (
+            <span
+              title="This exact transaction (same side, date and share count) was read from two different document types — independently confirmed by two documents."
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
+            >
+              <ShieldCheck size={11} /> Two documents agree
+            </span>
+          ) : null}
+          {orderConfirmed ? (
+            <span
+              title="A fulfilled order with this exact side, share count and a near-identical price appears on the broker's own Orders history screenshot — this transaction is confirmed by the broker."
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
+            >
+              <History size={11} /> Matches Orders history
+            </span>
+          ) : !added && noMatchingOrder ? (
+            <span
+              title="This ticker's Orders history was uploaded, but no fulfilled order matches this row's side/shares/price — it's the likely extra, misread, or misfiled row behind the mismatch."
+              className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
+            >
+              <History size={11} /> No matching order
             </span>
           ) : null}
         </div>
