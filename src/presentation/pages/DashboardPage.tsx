@@ -47,10 +47,9 @@ interface PortfolioSummary {
 
 /**
  * One combined line per portfolio for the comparison chart: realized +
- * dividend return %, already a percentage, so unlike the old equity-curve
- * approach nothing needs indexing/rebasing to compare portfolios of very
- * different sizes on one axis — a deposit or a near-zero starting balance
- * can never distort it, since neither ever enters this calculation (see
+ * dividend return %, already a percentage against cost basis invested, so
+ * unlike the old equity-curve approach nothing needs indexing/rebasing to
+ * compare portfolios of very different sizes on one axis (see
  * performanceCurve.ts).
  */
 export function mergeComparisonCurves(portfolios: { name: string; curve: PerformancePoint[] }[]): Record<string, number | string>[] {
@@ -303,7 +302,7 @@ export function DashboardPage() {
               </LineChart>
             </ResponsiveContainer>
             <p className="mt-2 text-[11px] text-slate-500">
-              Each portfolio&apos;s realized + dividend return, as % of its own net contributed capital — directly
+              Each portfolio&apos;s realized + dividend return, as % of its own cost basis invested — directly
               comparable across portfolios of any size without indexing.
               {dashboard.length > MAX_COMPARED_PORTFOLIOS ? ` Showing the first ${MAX_COMPARED_PORTFOLIOS} portfolios.` : ""}
             </p>
@@ -369,12 +368,12 @@ export function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyState title="No monthly data yet" description="Populates from each portfolio's first trade or deposit onward." />
+            <EmptyState title="No monthly data yet" description="Populates from each portfolio's first trade onward." />
           )}
           <p className="mt-2 text-[11px] text-slate-500">
             Simple average of each portfolio&apos;s own realized + dividend + unrealized return % (not money-weighted
-            across portfolios) — never raw cash flow, so a deposit or withdrawal never shows up as a fake gain or
-            loss; unrealized swings use each month&apos;s own historical closing price, never today&apos;s.
+            across portfolios), each against its own cost basis invested; unrealized swings use each month&apos;s own
+            historical closing price, never today&apos;s.
           </p>
         </div>
 

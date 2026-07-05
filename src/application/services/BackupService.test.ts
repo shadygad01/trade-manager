@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
 import { recordBuy, recordSell } from "@application/services/TradeService";
-import { deposit, recordDividend } from "@application/services/PortfolioService";
+import { recordCashAdjustment, recordDividend } from "@application/services/PortfolioService";
 import { createJournalEntry } from "@domain/entities/JournalEntry";
 import { generateId } from "@domain/value-objects/id";
 import {
@@ -16,7 +16,7 @@ import {
 
 async function seedFullLedger() {
   const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 10_000 })] });
-  await deposit(repos, "p1", 500, "top-up");
+  await recordCashAdjustment(repos, "p1", 500, "top-up");
   const { trade } = await recordBuy(repos, {
     portfolioId: "p1",
     ticker: "COMI",
@@ -47,7 +47,7 @@ describe("exportLedger", () => {
     expect(snapshot.portfolios).toHaveLength(1);
     expect(snapshot.trades).toHaveLength(1);
     expect(snapshot.allocations).toHaveLength(1);
-    expect(snapshot.timelineEvents.length).toBeGreaterThanOrEqual(4); // deposit, buy, sell, dividend
+    expect(snapshot.timelineEvents.length).toBeGreaterThanOrEqual(4); // cash adjustment, buy, sell, dividend
     expect(snapshot.journalEntries).toHaveLength(1);
     expect(snapshot.verifications).toHaveLength(1);
   });
