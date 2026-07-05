@@ -15,6 +15,8 @@ export interface PerformancePeriod {
   period: string;
   realizedReturnPct: number;
   dividendReturnPct: number;
+  /** Change in mark-to-market on still-open positions *during this period*, as % of capital contributed before the period — a delta, not a snapshot, so summing every period's unrealizedReturnPct since a position was opened equals its current total unrealized P/L (no double-counting once it's eventually sold, at which point its gain shifts into realizedReturnPct instead). 0 when no historical price is available for that period, never fabricated. */
+  unrealizedReturnPct: number;
 }
 
 interface DatedDelta {
@@ -104,44 +106,154 @@ export function performanceCurve(
   return points;
 }
 
+/** The first calendar day of a "2026-03"/"2026" period key. */
+function periodCalendarStart(period: string): string {
+  return period.length === 4 ? `${period}-01-01` : `${period}-01`;
+}
+
+/** The next consecutive period key ("2026-12" → "2027-01", "2026" → "2027"). */
+function nextPeriod(period: string): string {
+  if (period.length === 4) return String(Number(period) + 1);
+  const year = Number(period.slice(0, 4));
+  const month = Number(period.slice(5, 7));
+  return month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, "0")}`;
+}
+
+/** The last calendar day of a "2026-03"/"2026" period key, capped at `today` so an in-progress period never looks past the present. */
+function periodCalendarEnd(period: string, today: string): string {
+  let end: string;
+  if (period.length === 4) {
+    end = `${period}-12-31`;
+  } else {
+    const year = Number(period.slice(0, 4));
+    const month = Number(period.slice(5, 7));
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    end = `${period}-${String(lastDay).padStart(2, "0")}`;
+  }
+  return end < today ? end : today;
+}
+
+/** Most recent price on or before `date` for one ticker's history map — never the nearest *future* price, and never fabricated when nothing qualifies. */
+function priceAsOf(history: Record<string, number> | undefined, date: string): number | undefined {
+  if (!history) return undefined;
+  let best: string | undefined;
+  for (const d of Object.keys(history)) {
+    if (d <= date && (best === undefined || d > best)) best = d;
+  }
+  return best !== undefined ? history[best] : undefined;
+}
+
 /**
- * Buckets by a date-string prefix ("2026-03" for months, "2026" for years):
- * each period's OWN realized P/L and dividends (not cumulative), as % of
- * whatever capital was already contributed *before* that period started —
- * the same "don't let new capital masquerade as a gain" rule as the
- * cumulative curve, applied per period instead of since-inception.
+ * Mark-to-market on every position still open as of `date`, reconstructed
+ * from each Trade/TradeAllocation's own dates rather than today's
+ * `remainingShares` snapshot — a share only counts as "open as of `date`" if
+ * its trade executed on or before `date` and it wasn't closed by an
+ * allocation dated on or before `date` either. A ticker with no historical
+ * price recorded for `date` (or earlier) is skipped entirely rather than
+ * guessed at, so missing history under-reports rather than fabricates.
+ */
+function unrealizedPnlAsOf(
+  trades: Trade[],
+  allocations: TradeAllocation[],
+  priceHistory: Record<string, Record<string, number>>,
+  date: string
+): number {
+  let total = 0;
+  for (const trade of trades) {
+    if (trade.executionDate > date) continue;
+    const sharesClosedByDate = allocations
+      .filter((a) => a.tradeId === trade.id && a.executionDate <= date)
+      .reduce((sum, a) => sum + a.sharesClosed, 0);
+    const sharesOpen = trade.shares - sharesClosedByDate;
+    if (sharesOpen <= 0) continue;
+    const price = priceAsOf(priceHistory[trade.ticker], date);
+    if (price === undefined) continue;
+    const costBasisPerShare = trade.entryPrice + (trade.fees + trade.taxes) / trade.shares;
+    total += (price - costBasisPerShare) * sharesOpen;
+  }
+  return total;
+}
+
+/**
+ * Buckets by a date-string prefix ("2026-03" for months, "2026" for years),
+ * covering every period from the first trade/event to `today` — not just
+ * periods that happen to contain a realized sale, dividend, or deposit —
+ * since a position can sit open for months with real unrealized swings and
+ * nothing else happening. Each period reports its OWN realized P/L and
+ * dividends (not cumulative), as % of whatever capital was already
+ * contributed *before* that period started (evaluated at the period's
+ * calendar start, not "before this period's own first event" — the two
+ * agree whenever a period's first-ever event is itself a deposit, but the
+ * calendar-start version stays well-defined for a period with no events in
+ * it at all).
+ *
+ * `unrealizedReturnPct` (optional `priceHistory`, from `PriceRepository.
+ * getPriceHistory`) is the same "don't let new capital masquerade as a gain"
+ * idea applied to still-open positions: rather than blending today's
+ * mark-to-market into whichever period happens to contain "today" (the
+ * original spike bug this whole model replaced), each period gets the
+ * *change* in mark-to-market that occurred during it, computed from that
+ * period's own historical closing prices — so summing every period's value
+ * since a position opened equals its current total unrealized P/L, and once
+ * it's sold, its gain shifts into realizedReturnPct instead (no double
+ * count). Omitting `priceHistory` (or missing a specific ticker/date)
+ * reports 0 for that slice rather than guessing.
  */
 export function bucketPerformance(
   trades: Trade[],
   allocations: TradeAllocation[],
   timelineEvents: TimelineEvent[],
-  periodKeyLength: number
+  periodKeyLength: number,
+  priceHistory: Record<string, Record<string, number>> = {},
+  today: string = new Date().toISOString().slice(0, 10)
 ): PerformancePeriod[] {
   const deltas = datedDeltas(trades, allocations, timelineEvents);
 
-  const buckets = new Map<string, { realizedPnl: number; dividends: number; contributedAtStart: number }>();
-  let contributed = 0;
-  for (const delta of deltas) {
-    const period = delta.date.slice(0, periodKeyLength);
-    if (!buckets.has(period)) {
-      buckets.set(period, { realizedPnl: 0, dividends: 0, contributedAtStart: contributed });
-    }
-    const bucket = buckets.get(period)!;
-    if (delta.realizedPnl !== undefined) bucket.realizedPnl += delta.realizedPnl;
-    if (delta.dividend !== undefined) bucket.dividends += delta.dividend;
-    if (delta.contribution !== undefined) contributed += delta.contribution;
+  const candidateDates = [...deltas.map((d) => d.date.slice(0, 10)), ...trades.map((t) => t.executionDate)];
+  if (candidateDates.length === 0) return [];
+  const startDate = candidateDates.reduce((min, d) => (d < min ? d : min));
+  if (startDate > today) return [];
+
+  const periods: string[] = [];
+  for (let cursor = startDate.slice(0, periodKeyLength); cursor <= today.slice(0, periodKeyLength); cursor = nextPeriod(cursor)) {
+    periods.push(cursor);
   }
 
-  return [...buckets.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([period, b]) => {
-      const basis = Math.abs(b.contributedAtStart);
-      return {
-        period,
-        realizedReturnPct: basis > 0 ? (b.realizedPnl / basis) * 100 : 0,
-        dividendReturnPct: basis > 0 ? (b.dividends / basis) * 100 : 0,
-      };
-    });
+  const contributions = deltas
+    .filter((d) => d.contribution !== undefined)
+    .map((d) => ({ date: d.date.slice(0, 10), amount: d.contribution! }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  function contributedBefore(date: string): number {
+    let sum = 0;
+    for (const c of contributions) {
+      if (c.date >= date) break;
+      sum += c.amount;
+    }
+    return sum;
+  }
+
+  const realizedByPeriod = new Map<string, number>();
+  const dividendByPeriod = new Map<string, number>();
+  for (const delta of deltas) {
+    const period = delta.date.slice(0, periodKeyLength);
+    if (delta.realizedPnl !== undefined) realizedByPeriod.set(period, (realizedByPeriod.get(period) ?? 0) + delta.realizedPnl);
+    if (delta.dividend !== undefined) dividendByPeriod.set(period, (dividendByPeriod.get(period) ?? 0) + delta.dividend);
+  }
+
+  let previousUnrealized = 0;
+  return periods.map((period) => {
+    const basis = Math.abs(contributedBefore(periodCalendarStart(period)));
+    const unrealizedAtEnd = unrealizedPnlAsOf(trades, allocations, priceHistory, periodCalendarEnd(period, today));
+    const unrealizedDelta = unrealizedAtEnd - previousUnrealized;
+    previousUnrealized = unrealizedAtEnd;
+    return {
+      period,
+      realizedReturnPct: basis > 0 ? ((realizedByPeriod.get(period) ?? 0) / basis) * 100 : 0,
+      dividendReturnPct: basis > 0 ? ((dividendByPeriod.get(period) ?? 0) / basis) * 100 : 0,
+      unrealizedReturnPct: basis > 0 ? (unrealizedDelta / basis) * 100 : 0,
+    };
+  });
 }
 
 /**

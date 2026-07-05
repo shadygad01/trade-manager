@@ -83,6 +83,26 @@ describe("computeAnalytics", () => {
     expect(result.unrealizedReturnPct).toBeGreaterThan(0);
   });
 
+  it("feeds monthlyPerformance/annualPerformance's unrealizedReturnPct from priceHistory, using each period's own historical price rather than today's", () => {
+    const openTrade = makeTrade({ id: "open1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-01" });
+
+    const result = computeAnalytics({
+      trades: [openTrade],
+      allocations: [],
+      timelineEvents: [depositEvent("2026-01-01T09:00", 1000)],
+      priceMap: { COMI: 20 }, // today's price — should NOT be what Feb's bucket uses
+      cash: -1000,
+      today: "2026-02-28",
+      priceHistory: { COMI: { "2026-02-28": 15 } }, // Feb's own historical close
+    });
+
+    const feb = result.monthlyPerformance.find((r) => r.period === "2026-02");
+    // (15-10)*100 = 500 unrealized gain as of Feb's own close, over 1000 contributed = 50% — not
+    // (20-10)*100=1000/1000=100% (today's price, which would be the old spike-bug shape).
+    expect(feb?.unrealizedReturnPct).toBe(50);
+    expect(feb?.realizedReturnPct).toBe(0);
+  });
+
   it("exposes every metric name in the calculators registry for introspection", () => {
     expect(Object.keys(calculators).sort()).toEqual(
       [

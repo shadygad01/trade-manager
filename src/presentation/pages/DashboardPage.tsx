@@ -73,13 +73,13 @@ export function mergeComparisonCurves(portfolios: { name: string; curve: Perform
   });
 }
 
-/** Simple (not money-weighted) average of each portfolio's own realized+dividend return % for a period, across every portfolio that has one. */
+/** Simple (not money-weighted) average of each portfolio's own realized+dividend+unrealized return % for a period, across every portfolio that has one. */
 export function mergeMonthlyPerformance(series: PerformancePeriod[][]): { period: string; returnPct: number }[] {
   const byPeriod = new Map<string, number[]>();
   for (const s of series) {
     for (const point of s) {
       const arr = byPeriod.get(point.period) ?? [];
-      arr.push(point.realizedReturnPct + point.dividendReturnPct);
+      arr.push(point.realizedReturnPct + point.dividendReturnPct + point.unrealizedReturnPct);
       byPeriod.set(point.period, arr);
     }
   }
@@ -92,6 +92,11 @@ export function DashboardPage() {
   const dashboard = useLiveQuery(async () => {
     const portfolios = await repos.portfolios.getAll();
     const priceMap = await repos.prices.getAllPrices();
+    const allTrades = await repos.trades.getAll();
+    const tickers = Array.from(new Set(allTrades.map((t) => t.ticker)));
+    const priceHistory = Object.fromEntries(
+      await Promise.all(tickers.map(async (ticker) => [ticker, await repos.prices.getPriceHistory(ticker)] as const)),
+    );
     const summaries: PortfolioSummary[] = await Promise.all(
       portfolios.map(async (portfolio) => {
         const [positions, trades, allocations, timelineEvents] = await Promise.all([
@@ -100,7 +105,7 @@ export function DashboardPage() {
           repos.tradeAllocations.getByPortfolio(portfolio.id),
           repos.timeline.getByPortfolio(portfolio.id),
         ]);
-        const analytics = computeAnalytics({ trades, allocations, timelineEvents, priceMap, cash: portfolio.cash });
+        const analytics = computeAnalytics({ trades, allocations, timelineEvents, priceMap, cash: portfolio.cash, priceHistory });
         const tradeMap = new Map(trades.map((t) => [t.id, t]));
         const realizedPnl = allocations.reduce((sum: number, alloc) => {
           const trade = tradeMap.get(alloc.tradeId);
@@ -364,11 +369,12 @@ export function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyState title="No monthly data yet" description="Monthly returns populate once sells or dividends are recorded." />
+            <EmptyState title="No monthly data yet" description="Populates from each portfolio's first trade or deposit onward." />
           )}
           <p className="mt-2 text-[11px] text-slate-500">
-            Simple average of each portfolio&apos;s own realized + dividend return % (not money-weighted across
-            portfolios) — never raw cash flow, so a deposit or withdrawal never shows up as a fake gain or loss.
+            Simple average of each portfolio&apos;s own realized + dividend + unrealized return % (not money-weighted
+            across portfolios) — never raw cash flow, so a deposit or withdrawal never shows up as a fake gain or
+            loss; unrealized swings use each month&apos;s own historical closing price, never today&apos;s.
           </p>
         </div>
 
