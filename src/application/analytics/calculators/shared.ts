@@ -44,7 +44,16 @@ export interface PeriodReturn {
   returnPct: number;
 }
 
-/** Buckets an equity curve by a date-string prefix ("2026-03" for months, "2026" for years) and reports the % change from each bucket's first to last point. */
+/**
+ * Buckets an equity curve by a date-string prefix ("2026-03" for months,
+ * "2026" for years) and reports the % change from each bucket's first to
+ * last point — excluding any net Deposit/Withdrawal that landed during the
+ * bucket from the gain itself (see EquityPoint.contributed), so depositing
+ * new cash never reads as a fake "return" just because equity jumped. A
+ * point built without `contributed` (an older hand-built fixture) defaults
+ * to 0 flow, leaving its bucket's math identical to the pre-flow-adjustment
+ * behavior.
+ */
 export function bucketReturns(equityCurve: EquityPoint[], periodKeyLength: number): PeriodReturn[] {
   const buckets = new Map<string, EquityPoint[]>();
   for (const point of [...equityCurve].sort((a, b) => a.date.localeCompare(b.date))) {
@@ -61,7 +70,9 @@ export function bucketReturns(equityCurve: EquityPoint[], periodKeyLength: numbe
   for (const [period, points] of buckets) {
     const startEquity = points[0].equity;
     const endEquity = points[points.length - 1].equity;
-    const returnPct = startEquity !== 0 ? ((endEquity - startEquity) / Math.abs(startEquity)) * 100 : 0;
+    const netFlow = (points[points.length - 1].contributed ?? 0) - (points[0].contributed ?? 0);
+    const gain = endEquity - startEquity - netFlow;
+    const returnPct = startEquity !== 0 ? (gain / Math.abs(startEquity)) * 100 : 0;
     results.push({ period, startEquity, endEquity, returnPct });
   }
   return results;

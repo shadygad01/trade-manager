@@ -31,7 +31,7 @@ describe("computeAnalytics", () => {
     expect(result.exposure).toBe(0);
     expect(result.cashRatio).toBe(0);
     expect(result.drawdown).toBe(0);
-    expect(result.equityCurve).toEqual([{ date: "2026-01-01", equity: 0 }]);
+    expect(result.equityCurve).toEqual([{ date: "2026-01-01", equity: 0, contributed: 0 }]);
   });
 
   it("composes open-position and realized-P/L data into one flat result", () => {

@@ -60,12 +60,26 @@ function mergeEquityCurves(curves: EquityPoint[][]): EquityPoint[] {
   });
 }
 
-/** Rebases an equity curve to start at 100 so portfolios of very different sizes can share one axis (never a dual-axis chart) as growth %, not raw EGP. */
-function indexEquityCurve(curve: EquityPoint[]): { date: string; index: number }[] {
-  if (curve.length === 0) return [];
-  const base = curve[0].equity;
-  if (base === 0) return curve.map((p) => ({ date: p.date, index: 100 }));
-  return curve.map((p) => ({ date: p.date, index: (p.equity / base) * 100 }));
+/**
+ * Rebases an equity curve to 100 = "no gain or loss yet" so portfolios of very
+ * different sizes can share one axis (never a dual-axis chart) as cumulative
+ * return %, not raw EGP. Indexing to the first data point's raw equity (the
+ * original approach) breaks badly once a portfolio's very first tracked
+ * balance happens to be near-zero — any later deposit alone would then read
+ * as a many-thousand-percent "return" purely from dividing by a tiny
+ * denominator, not because anything was actually earned. Using
+ * `EquityPoint.contributed` (net Deposit − Withdrawal so far, same
+ * denominator `portfolioReturn` already uses for its own "since inception %")
+ * keeps the index stable regardless of how small the account started: it
+ * only moves when equity diverges from money actually put in, i.e. real
+ * gain/loss, and stays exactly at 100 while contributed capital is still 0.
+ */
+export function indexEquityCurve(curve: EquityPoint[]): { date: string; index: number }[] {
+  return curve.map((p) => {
+    const contributed = p.contributed ?? 0;
+    const returnPct = contributed !== 0 ? ((p.equity - contributed) / Math.abs(contributed)) * 100 : 0;
+    return { date: p.date, index: 100 + returnPct };
+  });
 }
 
 function mergeIndexedCurves(portfolios: { name: string; curve: EquityPoint[] }[]): Record<string, number | string>[] {
