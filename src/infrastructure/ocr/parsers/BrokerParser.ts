@@ -1,4 +1,4 @@
-import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedOrderEvidence, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 
 /** One order row's OCR text plus the status already read from its slice's pixel colors (see imagePreprocess.ts segmentOrderRows). */
@@ -25,6 +25,12 @@ export interface OrdersScreenParseResult {
   outOfRangeCount?: number;
 }
 
+export interface OrdersTimelineParseResult {
+  evidences: ParsedOrderEvidence[];
+  /** Rows whose Buy/Sell anchor was found but whose ticker/total/status couldn't be read consistently — surfaced as a warning, never guessed at. */
+  unreadRowCount: number;
+}
+
 /**
  * Extension point for the OCR subsystem: one implementation per broker.
  * ImportOrchestrator holds a `BrokerParser[]` registry — adding a second
@@ -46,6 +52,12 @@ export interface BrokerParser {
 
   /** Parses a per-stock "Orders" screen screenshot (flat, non-row-isolated) into trade candidates plus row-completeness warning signals. */
   parseOrdersScreenText(text: string): OrdersScreenParseResult;
+
+  /** True when the extracted text looks like an account-wide "Orders" timeline screen (undated rows, ticker per row, "Buy/Sell Limit/Market @price" + total + status) for this broker. */
+  looksLikeOrdersTimeline(text: string): boolean;
+
+  /** Parses an account-wide "Orders" timeline screen into per-order corroborating evidence (never dated trade candidates — these rows carry no execution date). */
+  parseOrdersTimeline(text: string): OrdersTimelineParseResult;
 
   /** Parses a "My position" ground-truth verification screen. Empty array when the ticker/units couldn't be read. */
   parsePositionVerification(text: string): Omit<PositionVerification, "id" | "portfolioId">[];

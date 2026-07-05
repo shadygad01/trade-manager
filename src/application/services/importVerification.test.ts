@@ -181,6 +181,45 @@ describe("checkTickerMatch", () => {
     expect(result.alreadyFullyRecorded).toBeFalsy();
   });
 
+  it("trusts a batch fully confirmed by the broker's Orders history when no broker screenshot exists yet", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 30,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      allPendingOrderConfirmed: true,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBe("orders-verified");
+  });
+
+  it("prefers cross-verified over orders-verified when both apply", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 30,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      allPendingSelfVerified: true,
+      allPendingOrderConfirmed: true,
+    });
+    expect(result.reason).toBe("cross-verified");
+  });
+
+  it("still blocks an orders-confirmed batch if a broker screenshot exists and actually mismatches", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 30,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 25,
+      allPendingOrderConfirmed: true,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("mismatch");
+  });
+
   it("does not invoice-verify a mixed batch (some candidates not from an invoice)", () => {
     const result = checkTickerMatch({
       hasShares: true,

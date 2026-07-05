@@ -32,6 +32,33 @@ export interface ParsedTradeCandidate {
   source?: "invoice";
 }
 
+/**
+ * One order row read from a broker's account-wide "Orders" timeline screen —
+ * the full-account order history (every ticker mixed together), each row
+ * carrying the real ticker code, side, order type, limit/execution price,
+ * the order's total value, and a Fulfilled/Cancelled status, but NO
+ * execution date and no printed share count (shares are derived from
+ * totalValue / price, which lands on a whole number for a real row — the
+ * parser uses that as a self-check). Because rows are undated they are never
+ * imported as trades themselves; they corroborate transactions extracted
+ * from other documents (see application/services/orderEvidence.ts): a
+ * pending candidate matched by a fulfilled order here is confirmed by the
+ * broker's own order history, and a candidate whose shares/price match
+ * another ticker's order is likely misfiled under a wrong ticker guess.
+ */
+export interface ParsedOrderEvidence {
+  ticker: string;
+  companyName?: string;
+  side: "BUY" | "SELL";
+  orderType: "limit" | "market";
+  /** Derived: totalValue / price, rounded to the whole-share count it lands on. */
+  shares: number;
+  price: number;
+  totalValue: number;
+  status: "fulfilled" | "cancelled";
+  confidence?: ParseConfidence;
+}
+
 /** A dividend payout read from a broker's "My Position" / dividends history screen. */
 export interface ParsedDividendCandidate {
   ticker: string;

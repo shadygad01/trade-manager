@@ -4,6 +4,7 @@ export type TickerMatchReason =
   | "closed-position"
   | "invoice-verified"
   | "cross-verified"
+  | "orders-verified"
   | "no-verification"
   | "mismatch";
 
@@ -73,6 +74,18 @@ export interface TickerMatchStatus {
  * "My Position" total can't: an OCR-only ticker whose extracted total
  * won't reconcile no matter how the rows are grouped, because the
  * mismatch is hiding inside a row nothing else ever corroborated.
+ *
+ * A fifth way, same shape again: a ticker whose every still-pending
+ * candidate is corroborated one way or another — invoice-sourced,
+ * cross-verified, or matched against a fulfilled order on the broker's own
+ * account-wide "Orders" timeline screenshot (see
+ * orderEvidence.findOrderConfirmedKeys: same ticker/side/share count, price
+ * within tolerance). The Orders screen is broker-authored ground truth for
+ * WHICH transactions happened (though not for the current position count),
+ * so a batch it fully confirms doesn't additionally need a "My Position"
+ * recount. Exactly like the invoice/cross-verified rules, this only ever
+ * substitutes for a MISSING position screenshot — an actual mismatch against
+ * a real one still blocks.
  */
 export function checkTickerMatch(params: {
   hasShares: boolean;
@@ -82,6 +95,7 @@ export function checkTickerMatch(params: {
   verifiedUnits?: number;
   allPendingFromInvoice?: boolean;
   allPendingSelfVerified?: boolean;
+  allPendingOrderConfirmed?: boolean;
 }): TickerMatchStatus {
   const existingRemainingShares = params.existingRemainingShares;
   const netShares = existingRemainingShares + params.pendingBuyShares - params.pendingSellShares;
@@ -98,6 +112,9 @@ export function checkTickerMatch(params: {
     }
     if (params.allPendingSelfVerified) {
       return { matched: true, reason: "cross-verified", netShares, existingRemainingShares };
+    }
+    if (params.allPendingOrderConfirmed) {
+      return { matched: true, reason: "orders-verified", netShares, existingRemainingShares };
     }
     return { matched: false, reason: "no-verification", netShares, existingRemainingShares };
   }

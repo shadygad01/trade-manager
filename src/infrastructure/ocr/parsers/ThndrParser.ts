@@ -1,8 +1,8 @@
-import type { ParsedDividendCandidate, ParsedTradeCandidate, ParseConfidence } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedOrderEvidence, ParsedTradeCandidate, ParseConfidence } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { COMPANY_NAME_ALIASES, KNOWN_EGX_TICKERS, NON_STOCK_INSTRUMENTS } from "@domain/value-objects/knownTickers";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
-import type { BrokerParser, OrderRowText, OrderRowsParseResult, OrdersScreenParseResult } from "./BrokerParser";
+import type { BrokerParser, OrderRowText, OrderRowsParseResult, OrdersScreenParseResult, OrdersTimelineParseResult } from "./BrokerParser";
 import { defaultTrackedSince, isWithinTrackedRange, partitionByRange } from "./trackedDateRange";
 
 function pad2(n: number): string {
@@ -541,6 +541,133 @@ function parseOrderRowsTextImpl(rows: OrderRowText[], ticker: string): OrderRows
   return { candidates, incompleteRowCount, fulfilledStatusCount, statusCountMismatch: false, resolvedRowCount };
 }
 
+// ─── Format 2c: account-wide "Orders" timeline screen (screenshot) ─────────
+// The broker's full-account order history (title "Orders", tabs
+// All/Pending/Completed/Cancelled — also the per-stock "Completed Orders"
+// tab, which renders identical rows). Every row carries the REAL ticker code
+// (not a company name), "Buy/Sell Limit/Market @<price>", the order's total
+// value, and a Fulfilled/Cancelled status — but no execution date and no
+// printed share count. Undated rows can never become trade candidates
+// (nothing downstream can place them on the timeline); they're parsed as
+// ParsedOrderEvidence instead: broker-authored corroboration for
+// transactions extracted from dated documents, and a way to spot a
+// transaction misfiled under a wrong ticker guess (the row's real code is
+// printed right on it). Shares are derived from totalValue / price — a real
+// row always lands on a whole number of shares, which doubles as the
+// self-check that the total picked out of the OCR text actually belongs to
+// this row and not a neighboring number.
+const timelineAnchorPattern = /\b(Buy|Sell)\s+(Limit|Market)\s*@?\s*([\d,]+(?:\.\d+)?)/gi;
+const timelineStatusPattern = /\b(Fulf\w*|Cancel\w*|Pending|Rejected|Expired)\b/i;
+const timelineTickerPattern = /\b[A-Z]{4}\b/g;
+
+const KNOWN_TICKER_SET = new Set(KNOWN_EGX_TICKERS.map((t) => t.ticker));
+
+// The screen's own header ("Total Value (EGP) 44,462 +5,796.31 (14.99%)")
+// is full of numbers that must never be mistaken for a row's total: signed
+// deltas, percentages, and comma-grouped integers without decimals. A row
+// total is always rendered with exactly 2 decimals and no sign/percent.
+function timelineMoneyTokens(segment: string): number[] {
+  const tokens: number[] = [];
+  for (const m of segment.matchAll(/([+\-]?)([\d,]+\.\d{2})(%?)/g)) {
+    if (m[1] || m[3]) continue;
+    tokens.push(parseFloat(m[2].replace(/,/g, "")));
+  }
+  return tokens;
+}
+
+/** totalValue / price only counts as this row's share count when it lands on a whole number — the self-check against picking a neighboring number as the total. */
+function deriveWholeShares(total: number, price: number): number | null {
+  if (!total || !price) return null;
+  const shares = total / price;
+  const rounded = Math.round(shares);
+  if (rounded < 1 || Math.abs(shares - rounded) > 0.03) return null;
+  return rounded;
+}
+
+function looksLikeOrdersTimelineImpl(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ");
+  const anchors = [...normalized.matchAll(timelineAnchorPattern)];
+  if (anchors.length >= 2) return true;
+  return anchors.length === 1 && /\borders\b/i.test(normalized);
+}
+
+function parseOrdersTimelineTextImpl(text: string): OrdersTimelineParseResult {
+  const evidences: ParsedOrderEvidence[] = [];
+  let unreadRowCount = 0;
+  const normalized = text.replace(/\s+/g, " ");
+  const anchors = [...normalized.matchAll(timelineAnchorPattern)];
+
+  for (let i = 0; i < anchors.length; i++) {
+    const anchor = anchors[i];
+    const anchorStart = anchor.index ?? 0;
+    const anchorEnd = anchorStart + anchor[0].length;
+    const prevEnd = i > 0 ? (anchors[i - 1].index ?? 0) + anchors[i - 1][0].length : 0;
+    const nextStart = i + 1 < anchors.length ? anchors[i + 1].index ?? normalized.length : normalized.length;
+
+    // Everything between the previous row's "@price" and this row's
+    // "Buy/Sell" belongs to the boundary between the two rows: the previous
+    // row's status, then this row's ticker and (usually) its total.
+    const preWindow = normalized.slice(prevEnd, anchorStart);
+    const postWindow = normalized.slice(anchorEnd, nextStart);
+
+    const statusMatch = timelineStatusPattern.exec(postWindow);
+    const statusWord = statusMatch?.[1] ?? null;
+    if (!statusWord) {
+      unreadRowCount += 1;
+      continue;
+    }
+    if (!/^(fulf|cancel)/i.test(statusWord)) continue; // pending/rejected/expired: not evidence of anything
+    const status: ParsedOrderEvidence["status"] = /^fulf/i.test(statusWord) ? "fulfilled" : "cancelled";
+
+    const tickerTokens = (preWindow.match(timelineTickerPattern) ?? []).filter((t) => !NON_TICKER_WORDS.has(t));
+    const ticker = tickerTokens.length > 0 ? tickerTokens[tickerTokens.length - 1] : null;
+    if (!ticker || NON_STOCK_INSTRUMENTS.has(ticker)) {
+      unreadRowCount += 1;
+      continue;
+    }
+
+    const price = parsePrice(anchor[3]);
+    // The total usually precedes the anchor (OCR reads the row's right
+    // column together with its left), but some scans emit it after the
+    // action line instead — accept either, cut off at this row's status so
+    // the next row's total can never be picked up, and let the whole-share
+    // self-check pick which candidate number is genuinely this row's total.
+    const preStatusIdx = preWindow.search(timelineStatusPattern);
+    const totalCandidates = [
+      ...timelineMoneyTokens(preStatusIdx >= 0 ? preWindow.slice(preStatusIdx) : preWindow),
+      ...timelineMoneyTokens(postWindow.slice(0, statusMatch?.index ?? 0)),
+    ];
+    let shares: number | null = null;
+    let totalValue = 0;
+    for (const candidate of totalCandidates) {
+      const derived = deriveWholeShares(candidate, price);
+      if (derived !== null) {
+        shares = derived;
+        totalValue = candidate;
+        break;
+      }
+    }
+    if (shares === null) {
+      unreadRowCount += 1;
+      continue;
+    }
+
+    evidences.push({
+      ticker: normalizeTicker(ticker),
+      companyName: canonicalNameForTicker(normalizeTicker(ticker)),
+      side: /buy/i.test(anchor[1]) ? "BUY" : "SELL",
+      orderType: /limit/i.test(anchor[2]) ? "limit" : "market",
+      shares,
+      price,
+      totalValue,
+      status,
+      confidence: KNOWN_TICKER_SET.has(normalizeTicker(ticker)) ? "high" : "low",
+    });
+  }
+
+  return { evidences, unreadRowCount };
+}
+
 // ─── Format 3: Thndr app "My position" screen (ground-truth verification) ──
 function numbersAfter(section: string, label: RegExp): string[] {
   const m = label.exec(section);
@@ -667,6 +794,16 @@ export class ThndrParser implements BrokerParser {
     const result = parseOrdersScreenTextImpl(text);
     const { inRange, outOfRangeCount } = partitionByRange(result.candidates, (d) => this.isWithinTrackedRange(d));
     return { ...result, candidates: inRange, outOfRangeCount };
+  }
+
+  looksLikeOrdersTimeline(text: string): boolean {
+    return looksLikeOrdersTimelineImpl(text);
+  }
+
+  // No tracked-date-range filter here — timeline rows carry no date at all,
+  // which is exactly why they're evidence rather than trade candidates.
+  parseOrdersTimeline(text: string): OrdersTimelineParseResult {
+    return parseOrdersTimelineTextImpl(text);
   }
 
   parsePositionVerification(text: string): Omit<PositionVerification, "id" | "portfolioId">[] {

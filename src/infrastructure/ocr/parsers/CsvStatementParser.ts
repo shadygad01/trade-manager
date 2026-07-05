@@ -1,7 +1,7 @@
 import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
-import type { BrokerParser, OrderRowText, OrderRowsParseResult, OrdersScreenParseResult } from "./BrokerParser";
+import type { BrokerParser, OrderRowText, OrderRowsParseResult, OrdersScreenParseResult, OrdersTimelineParseResult } from "./BrokerParser";
 import { defaultTrackedSince, isWithinTrackedRange, partitionByRange } from "./trackedDateRange";
 
 /**
@@ -142,6 +142,15 @@ export class CsvStatementParser implements BrokerParser {
 
   parseOrdersScreenText(): OrdersScreenParseResult {
     return EMPTY_ORDERS_RESULT;
+  }
+
+  // An orders timeline is an app-screen screenshot format — never a CSV export.
+  looksLikeOrdersTimeline(): boolean {
+    return false;
+  }
+
+  parseOrdersTimeline(): OrdersTimelineParseResult {
+    return { evidences: [], unreadRowCount: 0 };
   }
 
   parsePositionVerification(): Omit<PositionVerification, "id" | "portfolioId">[] {
