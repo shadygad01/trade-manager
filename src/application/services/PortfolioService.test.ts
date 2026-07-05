@@ -187,20 +187,50 @@ describe("recordSplit / recordRightsIssue", () => {
 });
 
 describe("findPortfoliosMissingFundingRecord", () => {
-  it("flags a portfolio with a real realized gain but zero net contributed capital recorded (the reported all-zero-charts bug)", () => {
-    const portfolio = createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5000 });
+  it("computes the exact missing deposit via ledger reconciliation (the reported all-zero-charts bug)", () => {
+    // Real scenario: a 5,000 EGP deposit that was never recorded, then a buy
+    // (-1,000) and a sell (+1,500) that WERE applied to cash normally,
+    // leaving a real cash balance of 5,500 — exactly what createPortfolioAndSave
+    // produced before this fix (Portfolio.cash set directly, no Deposit event).
+    const portfolio = createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5500 });
     const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
     const allocation = makeAllocation({ tradeId: "t1", portfolioId: "p1", ticker: "COMI", sharesClosed: 100, exitPrice: 15 });
-    // No Deposit/Withdrawal timeline event at all — funded only via
-    // Portfolio.cash at creation, before createPortfolioAndSave's fix.
     const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], []);
-    expect(entries).toEqual([{ portfolioId: "p1", portfolioName: "Long Positions", realizedAndDividendTotal: 500 }]);
+    expect(entries).toEqual([{ portfolioId: "p1", portfolioName: "Long Positions", missingAmount: 5000 }]);
   });
 
-  it("does not flag a portfolio that already has net contributed capital recorded", () => {
-    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 });
+  it("does not flag a portfolio whose current cash is already fully explained by recorded events (a small unrelated top-up included)", () => {
+    // Same trading activity, but this time the ORIGINAL 5,000 was properly
+    // recorded as a Deposit, plus a later, real, small top-up Deposit — an
+    // "any deposit at all ⇒ skip" check would wrongly pass this if the
+    // top-up were the only one considered; reconciliation must use the total.
+    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5600 });
     const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
     const allocation = makeAllocation({ tradeId: "t1", portfolioId: "p1", ticker: "COMI", sharesClosed: 100, exitPrice: 15 });
+    const deposits: TimelineEvent[] = [
+      { id: "d1", portfolioId: "p1", type: "Deposit", timestamp: "2026-01-01T00:00", amount: 5000, attachments: [], createdAt: "2026-01-01T00:00" },
+      { id: "d2", portfolioId: "p1", type: "Deposit", timestamp: "2026-03-01T00:00", amount: 100, attachments: [], createdAt: "2026-03-01T00:00" },
+    ];
+    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], deposits);
+    expect(entries).toEqual([]);
+  });
+
+  it("still flags a portfolio that has SOME recorded deposit, but not enough to cover its real cash balance", () => {
+    // The exact shape that slipped through the earlier "any deposit ⇒ skip"
+    // check: a small top-up was recorded, but the bulk of the funding (set
+    // directly on Portfolio.cash at creation) never was.
+    const portfolio = createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5600 });
+    const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
+    const allocation = makeAllocation({ tradeId: "t1", portfolioId: "p1", ticker: "COMI", sharesClosed: 100, exitPrice: 15 });
+    const topUpOnly: TimelineEvent[] = [
+      { id: "d2", portfolioId: "p1", type: "Deposit", timestamp: "2026-03-01T00:00", amount: 100, attachments: [], createdAt: "2026-03-01T00:00" },
+    ];
+    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], topUpOnly);
+    expect(entries).toEqual([{ portfolioId: "p1", portfolioName: "Long Positions", missingAmount: 5000 }]);
+  });
+
+  it("does not flag a portfolio whose cash is fully explained even with no trades at all", () => {
+    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 });
     const deposit: TimelineEvent = {
       id: "d1",
       portfolioId: "p1",
@@ -210,14 +240,7 @@ describe("findPortfoliosMissingFundingRecord", () => {
       attachments: [],
       createdAt: "2026-01-01T00:00",
     };
-    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], [deposit]);
-    expect(entries).toEqual([]);
-  });
-
-  it("does not flag a portfolio with no realized activity yet — 0% is already correct for those", () => {
-    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 });
-    const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
-    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [], []);
+    const entries = findPortfoliosMissingFundingRecord([portfolio], [], [], [deposit]);
     expect(entries).toEqual([]);
   });
 });
