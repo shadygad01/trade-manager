@@ -8,7 +8,10 @@ interface PriceSnapshot {
 }
 
 const DEFAULT_SNAPSHOT_PATH = () => `${import.meta.env.BASE_URL}price-snapshot.json`;
+const DEFAULT_HISTORY_PATH = () => `${import.meta.env.BASE_URL}price-history.json`;
 const CACHE_TTL_MS = 60_000;
+
+type PriceHistorySnapshot = Record<string, Record<string, number>>;
 
 /**
  * This class is the ONLY place in the app allowed to read market price data
@@ -22,7 +25,14 @@ export class SnapshotPriceRepository implements PriceRepository {
   private cacheFetchedAt = 0;
   private inFlight: Promise<PriceSnapshot | undefined> | undefined;
 
-  constructor(private readonly snapshotPath?: string) {}
+  private historyCache: PriceHistorySnapshot | undefined;
+  private historyCacheFetchedAt = 0;
+  private historyInFlight: Promise<PriceHistorySnapshot | undefined> | undefined;
+
+  constructor(
+    private readonly snapshotPath?: string,
+    private readonly historyPath?: string,
+  ) {}
 
   async getPrice(ticker: string): Promise<number | undefined> {
     const snapshot = await this.load();
@@ -42,6 +52,11 @@ export class SnapshotPriceRepository implements PriceRepository {
       .filter((t): t is string => typeof t === "string");
     const latestQuoteAt = quoteTimes.length ? quoteTimes.reduce((a, b) => (a > b ? a : b)) : undefined;
     return { asOf: snapshot.asOf, latestQuoteAt };
+  }
+
+  async getPriceHistory(ticker: string): Promise<Record<string, number>> {
+    const history = await this.loadHistory();
+    return history?.[ticker] ?? {};
   }
 
   private async load(): Promise<PriceSnapshot | undefined> {
@@ -74,6 +89,44 @@ export class SnapshotPriceRepository implements PriceRepository {
       }
       const data = (await response.json()) as PriceSnapshot;
       if (!data || typeof data.asOf !== "string" || typeof data.prices !== "object") {
+        return undefined;
+      }
+      return data;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async loadHistory(): Promise<PriceHistorySnapshot | undefined> {
+    const isFresh = this.historyCache !== undefined && Date.now() - this.historyCacheFetchedAt < CACHE_TTL_MS;
+    if (isFresh) {
+      return this.historyCache;
+    }
+
+    if (this.historyInFlight) {
+      return this.historyInFlight;
+    }
+
+    this.historyInFlight = this.fetchHistory();
+    try {
+      const history = await this.historyInFlight;
+      this.historyCache = history;
+      this.historyCacheFetchedAt = Date.now();
+      return history;
+    } finally {
+      this.historyInFlight = undefined;
+    }
+  }
+
+  private async fetchHistory(): Promise<PriceHistorySnapshot | undefined> {
+    const path = this.historyPath ?? DEFAULT_HISTORY_PATH();
+    try {
+      const response = await fetch(path, { cache: "no-store" });
+      if (!response.ok) {
+        return undefined;
+      }
+      const data = (await response.json()) as PriceHistorySnapshot;
+      if (!data || typeof data !== "object") {
         return undefined;
       }
       return data;
