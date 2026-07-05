@@ -16,6 +16,7 @@ import {
   renamePortfolio,
 } from "@application/services/PortfolioService";
 import { reconcilePositions, suggestDuplicateTradeIds } from "@application/services/reconciliation";
+import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
@@ -80,8 +81,15 @@ export function PortfolioDetailPage() {
    * against the wrong portfolio (e.g. a ticker whose real trades all live in
    * a different portfolio) — deleting the stray record is the fix, not
    * uploading invoices that don't exist for this portfolio at all.
+   *
+   * Deletes every verification for this ticker in this portfolio, not just
+   * the single latest one `reconcilePositions` surfaces: if more than one
+   * stray reading was ever saved for the same ticker (e.g. a re-uploaded
+   * screenshot misfiled twice), deleting only the currently-shown one would
+   * silently leave the next-latest behind — same ticker, same banner row,
+   * looking exactly like the click did nothing.
    */
-  async function handleDeleteVerification(verificationId: string) {
+  async function handleDeleteVerification(ticker: string, verificationId: string) {
     if (
       !confirm(
         "Discard this broker verification? It never affects cash or trades — this only removes the recorded screenshot reading itself. Use this when the position it describes actually belongs to a different portfolio."
@@ -91,7 +99,9 @@ export function PortfolioDetailPage() {
     }
     setDeleteError(null);
     try {
-      await repos.verifications.delete(verificationId);
+      const allForPortfolio = await repos.verifications.getByPortfolio(id);
+      const matching = allForPortfolio.filter((v) => normalizeTicker(v.ticker) === normalizeTicker(ticker));
+      await Promise.all(matching.map((v) => repos.verifications.delete(v.id)));
       setRefreshKey((k) => k + 1);
     } catch (e) {
       setDeleteError({ tradeId: verificationId, message: e instanceof Error ? e.message : "Failed to discard verification." });
@@ -409,7 +419,7 @@ export function PortfolioDetailPage() {
                     ) : null}
                   </div>
                   <button
-                    onClick={() => void handleDeleteVerification(r.verificationId)}
+                    onClick={() => void handleDeleteVerification(r.ticker, r.verificationId)}
                     title="Discard this verification — it never affects cash or trades"
                     className="shrink-0 rounded p-1 text-amber-300/60 hover:bg-rose-500/10 hover:text-rose-400"
                   >
