@@ -1,9 +1,15 @@
 import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Link } from "wouter";
-import { Plus, Briefcase, ArrowRight, Archive, ArchiveRestore, ChevronDown, ChevronRight, ShieldAlert, FolderSymlink } from "lucide-react";
+import { Plus, Briefcase, ArrowRight, Archive, ArchiveRestore, ChevronDown, ChevronRight, ShieldAlert, FolderSymlink, Wallet } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { createPortfolioAndSave, unarchivePortfolio } from "@application/services/PortfolioService";
+import {
+  createPortfolioAndSave,
+  unarchivePortfolio,
+  findPortfoliosMissingFundingRecord,
+  backfillInitialFunding,
+  type MissingFundingEntry,
+} from "@application/services/PortfolioService";
 import type { Portfolio, PortfolioKind } from "@domain/entities/Portfolio";
 import {
   computePositions,
@@ -58,6 +64,16 @@ export function PortfoliosPage() {
     return findMisnamedTickers(trades);
   }, []);
 
+  const missingFunding = useLiveQuery(async () => {
+    if (!portfolios) return undefined;
+    const [trades, allocations, timelineEvents] = await Promise.all([
+      repos.trades.getAll(),
+      repos.allocations.getAll(),
+      repos.timeline.getAll(),
+    ]);
+    return findPortfoliosMissingFundingRecord(portfolios, trades, allocations, timelineEvents);
+  }, [portfolios]);
+
   return (
     <div>
       <PageHeader
@@ -73,6 +89,10 @@ export function PortfoliosPage() {
         }
       />
       <PriceFreshness />
+
+      {missingFunding && missingFunding.length > 0 ? (
+        <MissingFundingBanner missingFunding={missingFunding} portfolios={portfolios ?? []} />
+      ) : null}
 
       {misnamedTickers && misnamedTickers.length > 0 ? (
         <MisnamedTickersBanner misnamedTickers={misnamedTickers} />
@@ -218,6 +238,95 @@ function SplitTickersBanner({
                 </button>
               </span>
               {error && error.ticker === entry.ticker ? <p className="w-full text-[11px] text-rose-400">{error.message}</p> : null}
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function MissingFundingBanner({
+  missingFunding,
+  portfolios,
+}: {
+  missingFunding: MissingFundingEntry[];
+  portfolios: Portfolio[];
+}) {
+  const [amountByPortfolio, setAmountByPortfolio] = useState<Record<string, string>>({});
+  const [dateByPortfolio, setDateByPortfolio] = useState<Record<string, string>>({});
+  const [recording, setRecording] = useState<string | null>(null);
+  const [error, setError] = useState<{ portfolioId: string; message: string } | null>(null);
+
+  async function handleRecord(entry: MissingFundingEntry) {
+    const portfolio = portfolios.find((p) => p.id === entry.portfolioId);
+    const amount = Number.parseFloat(amountByPortfolio[entry.portfolioId] ?? "");
+    const date = dateByPortfolio[entry.portfolioId] ?? portfolio?.createdAt.slice(0, 10) ?? "";
+    if (!amount || amount <= 0) {
+      setError({ portfolioId: entry.portfolioId, message: "Enter how much cash actually funded this portfolio." });
+      return;
+    }
+    setError(null);
+    setRecording(entry.portfolioId);
+    try {
+      await backfillInitialFunding(repos, entry.portfolioId, amount, date);
+    } catch (e) {
+      setError({ portfolioId: entry.portfolioId, message: e instanceof Error ? e.message : "Failed to record funding." });
+    } finally {
+      setRecording(null);
+    }
+  }
+
+  return (
+    <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+      <p className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-400">
+        <ShieldAlert size={16} /> Portfolios missing an initial funding record
+      </p>
+      <p className="mb-3 text-xs text-amber-300/70">
+        These portfolios have real realized gains or dividends on the ledger, but no Deposit was ever recorded for
+        them — usually because the starting cash was set when the portfolio was created, before that got tracked as
+        a dated event. Every realized/dividend % on the Dashboard and Analytics pages reads as 0% for these until the
+        true starting capital is recorded below. This never touches the cash balance already shown on the portfolio
+        card — it only backfills the missing dated record the % calculators need.
+      </p>
+      <ul className="space-y-2">
+        {missingFunding.map((entry) => {
+          const portfolio = portfolios.find((p) => p.id === entry.portfolioId);
+          return (
+            <li
+              key={entry.portfolioId}
+              className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-900/40 px-3 py-2 text-sm"
+            >
+              <span className="text-slate-200">
+                <span className="font-semibold">{entry.portfolioName}</span>{" "}
+                <span className="text-slate-400">
+                  ({formatMoney(entry.realizedAndDividendTotal)} of realized/dividend gains currently hidden)
+                </span>
+              </span>
+              <input
+                type="number"
+                placeholder="Original funding (EGP)"
+                value={amountByPortfolio[entry.portfolioId] ?? ""}
+                onChange={(e) => setAmountByPortfolio((prev) => ({ ...prev, [entry.portfolioId]: e.target.value }))}
+                className="w-40 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+              />
+              <input
+                type="date"
+                value={dateByPortfolio[entry.portfolioId] ?? portfolio?.createdAt.slice(0, 10) ?? ""}
+                onChange={(e) => setDateByPortfolio((prev) => ({ ...prev, [entry.portfolioId]: e.target.value }))}
+                className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+              />
+              <button
+                onClick={() => void handleRecord(entry)}
+                disabled={recording === entry.portfolioId}
+                className="flex items-center gap-1.5 rounded-md border border-amber-400/40 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+              >
+                <Wallet size={12} />
+                {recording === entry.portfolioId ? "Recording…" : "Record funding"}
+              </button>
+              {error && error.portfolioId === entry.portfolioId ? (
+                <p className="w-full text-[11px] text-rose-400">{error.message}</p>
+              ) : null}
             </li>
           );
         })}
