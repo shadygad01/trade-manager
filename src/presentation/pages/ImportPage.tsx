@@ -519,13 +519,29 @@ export function ImportPage() {
    * one ticker, for confirming just that one without waiting on the rest.
    */
   async function confirmAndDistributeAll() {
+    // initialDataLoaded gates the button's own `disabled` too, so this should
+    // be unreachable in the steady state — but the two are computed from
+    // separate useLiveQuery reads on every render, so a click landing in the
+    // narrow window where they've gone briefly out of sync must still say
+    // something rather than silently doing nothing (see the same historical
+    // "silent Import failure" class of bug this page already guards against
+    // elsewhere).
+    if (!initialDataLoaded) {
+      setStage("error");
+      setErrorMessage("Still loading your portfolios and trades — wait a moment and click Confirm again.");
+      return;
+    }
     const matchedTickers = tickerGroups
       .filter(([ticker]) => tickerMatchStatuses.get(ticker)?.matched)
       .map(([ticker]) => ticker);
-    if (!initialDataLoaded || matchedTickers.length === 0) return;
+    if (matchedTickers.length === 0) return;
     setDistributing(true);
     try {
       await Promise.all(matchedTickers.map((ticker) => commitTickerGroup(ticker)));
+      setStage("idle");
+    } catch (e) {
+      setStage("error");
+      setErrorMessage(e instanceof Error ? e.message : "Confirm failed — please try again.");
     } finally {
       setDistributing(false);
     }
@@ -533,10 +549,19 @@ export function ImportPage() {
 
   /** Confirms and distributes just one ticker, independent of any other still-stuck ticker in the same batch. */
   async function confirmTicker(ticker: string) {
-    if (!initialDataLoaded || !tickerMatchStatuses.get(ticker)?.matched) return;
+    if (!initialDataLoaded) {
+      setStage("error");
+      setErrorMessage("Still loading your portfolios and trades — wait a moment and click Confirm again.");
+      return;
+    }
+    if (!tickerMatchStatuses.get(ticker)?.matched) return;
     setDistributing(true);
     try {
       await commitTickerGroup(ticker);
+      setStage("idle");
+    } catch (e) {
+      setStage("error");
+      setErrorMessage(e instanceof Error ? e.message : "Confirm failed — please try again.");
     } finally {
       setDistributing(false);
     }
