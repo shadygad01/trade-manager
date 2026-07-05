@@ -10,7 +10,7 @@ import { holdingTime } from "./calculators/holdingTime";
 import { exposure } from "./calculators/exposure";
 import { cashRatio } from "./calculators/cashRatio";
 import { drawdown } from "./calculators/drawdown";
-import { equityCurve, type EquityPoint } from "./calculators/equityCurve";
+import { equityCurve, cashFlowCurve, type EquityPoint } from "./calculators/equityCurve";
 import { capitalDeployment } from "./calculators/capitalDeployment";
 import { monthlyReturn } from "./calculators/monthlyReturn";
 import { annualReturn } from "./calculators/annualReturn";
@@ -82,6 +82,7 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
   const { costBasis, marketValue } = summarizeOpenPositions(trades, priceMap);
   const totalEquity = cash + marketValue;
   const curve = equityCurve(timelineEvents, cash, marketValue, today);
+  const flowCurve = cashFlowCurve(timelineEvents, cash, today);
 
   const deposits = timelineEvents
     .filter((e) => e.type === "Deposit")
@@ -100,8 +101,8 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     cashRatio: cashRatio(cash, totalEquity),
     drawdown: drawdown(curve),
     capitalDeployment: capitalDeployment(costBasis, totalEquity),
-    monthlyReturn: monthlyReturn(curve),
-    annualReturn: annualReturn(curve),
+    monthlyReturn: monthlyReturn(flowCurve),
+    annualReturn: annualReturn(flowCurve),
     portfolioReturn: portfolioReturn(totalEquity, deposits, withdrawals),
     equityCurve: curve,
     portfolioHealth: portfolioHealth(trades, allocations, priceMap, cash),

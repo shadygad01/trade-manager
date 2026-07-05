@@ -61,6 +61,25 @@ describe("computeAnalytics", () => {
     expect(result.equityCurve[result.equityCurve.length - 1].date).toBe("2026-03-01");
   });
 
+  it("does not let a large unrealized gain on open positions spike the current month's monthlyReturn (the reported July bug)", () => {
+    const openTrade = makeTrade({ id: "open1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-01" });
+
+    const result = computeAnalytics({
+      trades: [openTrade],
+      allocations: [],
+      // A second July-dated event alongside "today" so the July bucket has
+      // two points to compare, exactly like the reported real shape — a
+      // single-point bucket would trivially show 0% regardless of this fix.
+      timelineEvents: [depositEvent("2026-01-01T09:00", 1000), depositEvent("2026-07-01T09:00", 50)],
+      priceMap: { COMI: 500 }, // a huge unrealized gain purely from a big price snapshot
+      cash: -1000 + 50,
+      today: "2026-07-05",
+    });
+
+    const july = result.monthlyReturn.find((r) => r.period === "2026-07");
+    expect(july?.returnPct ?? 0).toBe(0);
+  });
+
   it("exposes every metric name in the calculators registry for introspection", () => {
     expect(Object.keys(calculators).sort()).toEqual(
       [

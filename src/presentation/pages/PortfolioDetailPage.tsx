@@ -74,6 +74,30 @@ export function PortfolioDetailPage() {
     }
   }
 
+  /**
+   * For a verification stuck permanently at "no recorded trades" not because
+   * the real buy is missing, but because the verification itself was misfiled
+   * against the wrong portfolio (e.g. a ticker whose real trades all live in
+   * a different portfolio) — deleting the stray record is the fix, not
+   * uploading invoices that don't exist for this portfolio at all.
+   */
+  async function handleDeleteVerification(verificationId: string) {
+    if (
+      !confirm(
+        "Discard this broker verification? It never affects cash or trades — this only removes the recorded screenshot reading itself. Use this when the position it describes actually belongs to a different portfolio."
+      )
+    ) {
+      return;
+    }
+    setDeleteError(null);
+    try {
+      await repos.verifications.delete(verificationId);
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setDeleteError({ tradeId: verificationId, message: e instanceof Error ? e.message : "Failed to discard verification." });
+    }
+  }
+
   if (portfolio === undefined || positions === undefined) {
     return <p className="text-sm text-slate-500">Loading…</p>;
   }
@@ -367,17 +391,30 @@ export function PortfolioDetailPage() {
             {(reconciliations ?? [])
               .filter((r) => r.quantityShortfall && r.computedShares === 0)
               .map((r) => (
-                <li key={r.ticker}>
-                  <span>
-                    {r.ticker}: the broker screenshot shows {formatShares(r.verifiedUnits)} units
-                    {r.verifiedAvgCost !== undefined ? ` @ ${formatMoney(r.verifiedAvgCost)} avg` : ""}, but this portfolio
-                    has no open trades for it.
-                  </span>
-                  <p className="text-[11px] text-amber-300/70">
-                    Every real purchase is dated on/after {TRACKING_START_DATE} — upload this ticker's buy
-                    invoices/statement in Import so its lots land with their true dates, or record the buy manually if
-                    you know them.
-                  </p>
+                <li key={r.ticker} className="flex items-start justify-between gap-2">
+                  <div>
+                    <span>
+                      {r.ticker}: the broker screenshot shows {formatShares(r.verifiedUnits)} units
+                      {r.verifiedAvgCost !== undefined ? ` @ ${formatMoney(r.verifiedAvgCost)} avg` : ""}, but this portfolio
+                      has no open trades for it.
+                    </span>
+                    <p className="text-[11px] text-amber-300/70">
+                      Every real purchase is dated on/after {TRACKING_START_DATE} — upload this ticker's buy
+                      invoices/statement in Import so its lots land with their true dates, or record the buy manually if
+                      you know them. If this ticker's real trades actually live in a different portfolio, this
+                      verification was likely misfiled here — discard it instead.
+                    </p>
+                    {deleteError && deleteError.tradeId === r.verificationId ? (
+                      <p className="mt-1 text-[11px] text-rose-400">{deleteError.message}</p>
+                    ) : null}
+                  </div>
+                  <button
+                    onClick={() => void handleDeleteVerification(r.verificationId)}
+                    title="Discard this verification — it never affects cash or trades"
+                    className="shrink-0 rounded p-1 text-amber-300/60 hover:bg-rose-500/10 hover:text-rose-400"
+                  >
+                    <Trash2 size={12} />
+                  </button>
                 </li>
               ))}
           </ul>

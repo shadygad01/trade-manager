@@ -6,6 +6,8 @@ import type { PositionAggregate } from "./TradeService";
 
 export interface PositionReconciliation {
   ticker: string;
+  /** The specific PositionVerification record this reconciliation is based on — lets the UI offer a direct delete for a stray/misfiled verification (see PortfolioDetailPage's "no recorded trades" banner). */
+  verificationId: string;
   computedShares: number;
   verifiedUnits: number;
   verifiedAvgCost?: number;
@@ -67,6 +69,7 @@ export function reconcilePositions(
 
     results.push({
       ticker,
+      verificationId: verification.id,
       computedShares,
       verifiedUnits: verification.units,
       verifiedAvgCost: verification.avgCost,

@@ -47,6 +47,10 @@ vi.mock("@presentation/lib/data", () => ({
     allocations: { getByPortfolio: () => Promise.resolve([]) },
     verifications: {
       getByPortfolio: (portfolioId: string) => Promise.resolve(state.verifications.filter((v) => v.portfolioId === portfolioId)),
+      delete: (id: string) => {
+        state.verifications = state.verifications.filter((v) => v.id !== id);
+        return Promise.resolve();
+      },
     },
     timeline: {
       getByPortfolio: () => Promise.resolve([]),
@@ -160,5 +164,19 @@ describe("PortfolioDetailPage — a verified-but-untracked position points at Im
     expect(await screen.findByText(/upload this ticker's buy\s*invoices\/statement in Import/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /record as opening balance/i })).not.toBeInTheDocument();
     expect(state.trades).toHaveLength(0);
+  });
+
+  it("discards a stray verification misfiled against this portfolio (the ABUK/Long Positions case)", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderPage("p1");
+
+    expect(await screen.findByText(/TMGH: the broker screenshot shows/)).toBeInTheDocument();
+
+    await user.click(screen.getByTitle(/discard this verification/i));
+
+    await waitFor(() => {
+      expect(state.verifications).toHaveLength(0);
+    });
   });
 });
