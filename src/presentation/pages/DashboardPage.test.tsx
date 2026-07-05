@@ -22,10 +22,14 @@ const state = vi.hoisted(() => ({
 vi.mock("@presentation/lib/data", () => ({
   repos: {
     portfolios: { getAll: () => Promise.resolve(state.portfolios) },
-    trades: { getByPortfolio: () => Promise.resolve([]) },
+    trades: { getByPortfolio: () => Promise.resolve([]), getAll: () => Promise.resolve([]) },
     tradeAllocations: { getByPortfolio: () => Promise.resolve([]) },
     timeline: { getByPortfolio: () => Promise.resolve([]) },
-    prices: { getAllPrices: () => Promise.resolve({}), getSnapshotInfo: () => Promise.resolve(undefined) },
+    prices: {
+      getAllPrices: () => Promise.resolve({}),
+      getSnapshotInfo: () => Promise.resolve(undefined),
+      getPriceHistory: () => Promise.resolve({}),
+    },
   },
 }));
 
@@ -81,15 +85,23 @@ describe("mergeComparisonCurves — Portfolio Comparison, without any equity-cur
   });
 });
 
-describe("mergeMonthlyPerformance — averages realized + dividend % across portfolios", () => {
+describe("mergeMonthlyPerformance — averages realized + dividend + unrealized % across portfolios", () => {
   it("never reads a deposit or a near-zero starting balance as a fake return (the reported bug)", () => {
     // Reproduces the reported shape at the merge level: a portfolio whose
     // performance curve never involves cash/equity at all can't spike from
     // a deposit landing mid-period — there's nothing here that touches cash.
     const merged = mergeMonthlyPerformance([
-      [{ period: "2026-07", realizedReturnPct: 0, dividendReturnPct: 0 }],
-      [{ period: "2026-07", realizedReturnPct: 4, dividendReturnPct: 1 }],
+      [{ period: "2026-07", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 }],
+      [{ period: "2026-07", realizedReturnPct: 4, dividendReturnPct: 1, unrealizedReturnPct: 0 }],
     ]);
     expect(merged).toEqual([{ period: "2026-07", returnPct: 2.5 }]);
+  });
+
+  it("includes each portfolio's own unrealized % in the average, not just realized+dividend", () => {
+    const merged = mergeMonthlyPerformance([
+      [{ period: "2026-07", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 10 }],
+      [{ period: "2026-07", realizedReturnPct: 4, dividendReturnPct: 1, unrealizedReturnPct: 0 }],
+    ]);
+    expect(merged).toEqual([{ period: "2026-07", returnPct: 7.5 }]); // (10 + 5) / 2
   });
 });

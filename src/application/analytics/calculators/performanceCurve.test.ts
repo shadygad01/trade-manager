@@ -58,12 +58,12 @@ describe("bucketPerformance", () => {
     const allocation = makeAllocation({ tradeId: "t1", sharesClosed: 10, exitPrice: 15, executionDate: "2026-02-15", executionTime: "10:00" }); // +50
     const events = [depositEvent("2026-01-01T09:00", 1000), dividendEvent("2026-03-10T09:00", 20)];
 
-    const periods = bucketPerformance([trade], [allocation], events, 7);
+    const periods = bucketPerformance([trade], [allocation], events, 7, {}, "2026-03-31");
 
     expect(periods).toEqual([
-      { period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0 },
-      { period: "2026-02", realizedReturnPct: 5, dividendReturnPct: 0 }, // 50/1000
-      { period: "2026-03", realizedReturnPct: 0, dividendReturnPct: 2 }, // 20/1000
+      { period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { period: "2026-02", realizedReturnPct: 5, dividendReturnPct: 0, unrealizedReturnPct: 0 }, // 50/1000
+      { period: "2026-03", realizedReturnPct: 0, dividendReturnPct: 2, unrealizedReturnPct: 0 }, // 20/1000
     ]);
   });
 
@@ -78,8 +78,8 @@ describe("bucketPerformance", () => {
     const allocation = makeAllocation({ tradeId: "t1", sharesClosed: 10, exitPrice: 15, executionDate: "2026-01-05", executionTime: "10:00" }); // +50
     const events = [depositEvent("2026-01-01T09:00", 1000), depositEvent("2026-01-20T09:00", 50000)];
 
-    const periods = bucketPerformance([trade], [allocation], events, 7);
-    expect(periods).toEqual([{ period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0 }]);
+    const periods = bucketPerformance([trade], [allocation], events, 7, {}, "2026-01-31");
+    expect(periods).toEqual([{ period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 }]);
   });
 
   it("does use capital contributed in an earlier period as the basis for a later period's own gain", () => {
@@ -87,11 +87,75 @@ describe("bucketPerformance", () => {
     const allocation = makeAllocation({ tradeId: "t1", sharesClosed: 10, exitPrice: 15, executionDate: "2026-02-05", executionTime: "10:00" }); // +50
     const events = [depositEvent("2026-01-01T09:00", 1000)];
 
-    const periods = bucketPerformance([trade], [allocation], events, 7);
+    const periods = bucketPerformance([trade], [allocation], events, 7, {}, "2026-02-28");
     expect(periods).toEqual([
-      { period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0 },
-      { period: "2026-02", realizedReturnPct: 5, dividendReturnPct: 0 },
+      { period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { period: "2026-02", realizedReturnPct: 5, dividendReturnPct: 0, unrealizedReturnPct: 0 },
     ]);
+  });
+
+  it("covers every calendar month up to today even when nothing happened in it — an open position sitting untouched still gets a bucket for its unrealized swing", () => {
+    const trade = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
+    const events = [depositEvent("2026-01-01T09:00", 1000)];
+
+    // No realized/dividend/deposit activity at all in Feb or March — under
+    // the old event-driven bucketing these months wouldn't exist at all.
+    const periods = bucketPerformance([trade], [], events, 7, {}, "2026-03-15");
+    expect(periods.map((p) => p.period)).toEqual(["2026-01", "2026-02", "2026-03"]);
+  });
+
+  it("computes each period's unrealized % as the CHANGE in mark-to-market during that period, using that period's own historical price — never blending today's price into every period (the original spike bug)", () => {
+    const trade = makeTrade({ id: "t1", ticker: "COMI", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
+    const events = [depositEvent("2026-01-01T09:00", 1000)];
+    // Jan's own basis is 0 (the deposit lands on Jan's own calendar start —
+    // see the "same-period deposit" rule above), so price movement is given
+    // for Feb/Mar instead, where the deposit already counts toward basis.
+    const priceHistory = { COMI: { "2026-02-28": 12, "2026-03-31": 14 } };
+
+    const periods = bucketPerformance([trade], [], events, 7, priceHistory, "2026-03-31");
+
+    // Feb: mark-to-market at Feb 28 = (12-10)*100 = 200, up from 0 → 200/1000 = 20%
+    // Mar: mark-to-market at Mar 31 = (14-10)*100 = 400, up from 200 → 200/1000 = 20%
+    expect(periods).toEqual([
+      { period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { period: "2026-02", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 20 },
+      { period: "2026-03", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 20 },
+    ]);
+  });
+
+  it("shifts a position's unrealized gain into realizedReturnPct once it's sold, without double-counting across periods", () => {
+    const trade = makeTrade({ id: "t1", ticker: "COMI", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
+    const allocation = makeAllocation({ tradeId: "t1", ticker: "COMI", sharesClosed: 100, exitPrice: 12, executionDate: "2026-03-10", executionTime: "10:00" });
+    const events = [depositEvent("2026-01-01T09:00", 1000)];
+    const priceHistory = { COMI: { "2026-02-28": 12 } };
+
+    const periods = bucketPerformance([trade], [allocation], events, 7, priceHistory, "2026-03-31");
+
+    // Feb: still open, mark-to-market at Feb 28 = (12-10)*100 = 200 → +20%
+    // Mar: sold for (12-10)*100 = 200 realized; position now closed so
+    // mark-to-market at Mar-end is 0 → unrealized delta = 0 - 200 = -200 → -20%
+    // Total across all periods: 0 (Jan) + 20 (Feb unrealized) + 20 (Mar realized) - 20 (Mar unrealized reversal) = 20%,
+    // matching the real total gain (200/1000 = 20%) exactly once.
+    expect(periods).toEqual([
+      { period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { period: "2026-02", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 20 },
+      { period: "2026-03", realizedReturnPct: 20, dividendReturnPct: 0, unrealizedReturnPct: -20 },
+    ]);
+  });
+
+  it("reports 0 unrealized % for a period when no historical price is available for that ticker, rather than fabricating one", () => {
+    const trade = makeTrade({ id: "t1", ticker: "COMI", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
+    const events = [depositEvent("2026-01-01T09:00", 1000)];
+
+    const periods = bucketPerformance([trade], [], events, 7, {}, "2026-02-28");
+    expect(periods).toEqual([
+      { period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { period: "2026-02", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+    ]);
+  });
+
+  it("returns an empty array when there's no trade or event history at all", () => {
+    expect(bucketPerformance([], [], [], 7, {}, "2026-03-31")).toEqual([]);
   });
 });
 

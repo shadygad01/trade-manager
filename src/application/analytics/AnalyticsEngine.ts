@@ -58,6 +58,8 @@ export interface AnalyticsInput {
   today?: string;
   /** Feeds strategyAttribution's tag union (Trade.strategyTags ∪ JournalEntry.strategyTags) — optional since not every caller has journal data on hand. */
   journalEntries?: JournalEntry[];
+  /** Per-ticker day-by-day closes (from `PriceRepository.getPriceHistory`), feeding monthly/annual unrealized %. Omitted entirely — not just per-ticker missing — degrades to 0% unrealized per period rather than guessing. */
+  priceHistory?: Record<string, Record<string, number>>;
 }
 
 export interface AnalyticsResult {
@@ -73,6 +75,7 @@ export interface AnalyticsResult {
   capitalDeployment: number;
   /** Cumulative {date, realizedReturnPct, dividendReturnPct} series — the equity-curve replacement. No historical price feed is needed or used. */
   performanceCurve: PerformancePoint[];
+  /** Each period (real calendar month, not just months with activity) also carries unrealizedReturnPct — that period's own change in mark-to-market on still-open positions, from `priceHistory` — see performanceCurve.ts's bucketPerformance doc. */
   monthlyPerformance: PerformancePeriod[];
   annualPerformance: PerformancePeriod[];
   /** Since inception, net of deposits/withdrawals — unchanged, was never equity-curve-based. */
@@ -81,20 +84,21 @@ export interface AnalyticsResult {
   realizedReturnPct: number;
   /** Cumulative dividend return %, as of `today`. */
   dividendReturnPct: number;
-  /** Unrealized P/L on still-open positions as % of their cost basis — a snapshot against today's price only, never a historical series (no historical price feed exists). */
+  /** Unrealized P/L on still-open positions as % of their cost basis, against today's price only — a snapshot, deliberately not the same figure as monthlyPerformance/annualPerformance's per-period unrealizedReturnPct (a different denominator: cost basis here vs. contributed capital there). */
   unrealizedReturnPct: number;
   portfolioHealth: PortfolioHealth;
   strategyAttribution: StrategyAttribution[];
 }
 
 export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
-  const { trades, allocations, timelineEvents, priceMap, cash, today } = input;
+  const { trades, allocations, timelineEvents, priceMap, cash, today, priceHistory } = input;
+  const asOf = today ?? new Date().toISOString().slice(0, 10);
 
   const { costBasis, marketValue } = summarizeOpenPositions(trades, priceMap);
   const totalEquity = cash + marketValue;
   const unrealizedPnl = marketValue - costBasis;
 
-  const curve = performanceCurve(trades, allocations, timelineEvents, today);
+  const curve = performanceCurve(trades, allocations, timelineEvents, asOf);
   const lastPoint = curve[curve.length - 1];
 
   const deposits = timelineEvents
@@ -115,8 +119,8 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     drawdown: performanceDrawdown(curve),
     capitalDeployment: capitalDeployment(costBasis, totalEquity),
     performanceCurve: curve,
-    monthlyPerformance: bucketPerformance(trades, allocations, timelineEvents, 7),
-    annualPerformance: bucketPerformance(trades, allocations, timelineEvents, 4),
+    monthlyPerformance: bucketPerformance(trades, allocations, timelineEvents, 7, priceHistory ?? {}, asOf),
+    annualPerformance: bucketPerformance(trades, allocations, timelineEvents, 4, priceHistory ?? {}, asOf),
     portfolioReturn: portfolioReturn(totalEquity, deposits, withdrawals),
     realizedReturnPct: lastPoint?.realizedReturnPct ?? 0,
     dividendReturnPct: lastPoint?.dividendReturnPct ?? 0,

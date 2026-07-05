@@ -34,7 +34,11 @@ export function AnalyticsPage() {
       repos.journal.getByPortfolio(portfolioId),
     ]);
     if (!portfolio) return undefined;
-    return computeAnalytics({ trades, allocations, timelineEvents, priceMap, cash: portfolio.cash, journalEntries });
+    const tickers = Array.from(new Set(trades.map((t) => t.ticker)));
+    const priceHistory = Object.fromEntries(
+      await Promise.all(tickers.map(async (ticker) => [ticker, await repos.prices.getPriceHistory(ticker)] as const))
+    );
+    return computeAnalytics({ trades, allocations, timelineEvents, priceMap, cash: portfolio.cash, journalEntries, priceHistory });
   }, [portfolioId]);
 
   if (analytics === undefined) {
@@ -139,8 +143,9 @@ export function AnalyticsPage() {
         )}
         <p className="mt-2 text-[11px] text-slate-500">
           Both lines are % of net contributed capital (deposits − withdrawals), never raw cash — a deposit never reads
-          as a gain. Unrealized P/L on still-open positions isn&apos;t part of this curve (no historical price feed
-          exists to plot it over time); see the Unrealized Return stat above for today&apos;s snapshot.
+          as a gain. Unrealized P/L on still-open positions isn&apos;t part of this cumulative curve; see the
+          Unrealized Return stat above for today&apos;s snapshot, or the Monthly Return chart below for its
+          month-by-month history.
         </p>
       </div>
 
@@ -226,13 +231,18 @@ export function AnalyticsPage() {
                 formatter={(v: number) => formatPercent(v)}
               />
               <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
-              <Bar dataKey="realizedReturnPct" name="Realized %" fill={CATEGORICAL[0]} radius={[3, 3, 0, 0]} />
-              <Bar dataKey="dividendReturnPct" name="Dividend %" fill={CATEGORICAL[1]} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="realizedReturnPct" name="Realized %" stackId="month" fill={CATEGORICAL[0]} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="dividendReturnPct" name="Dividend %" stackId="month" fill={CATEGORICAL[1]} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="unrealizedReturnPct" name="Unrealized %" stackId="month" fill={CATEGORICAL[2]} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <EmptyState title="No monthly data yet" description="Monthly returns populate once sells or dividends are recorded." />
+          <EmptyState title="No monthly data yet" description="Populates from the portfolio's first trade or deposit onward." />
         )}
+        <p className="mt-2 text-[11px] text-slate-500">
+          Every calendar month is shown, including months with no closed trade — an open position still moves the
+          Unrealized bar using that month's own historical closing price, never today's price blended in.
+        </p>
       </div>
     </div>
   );
