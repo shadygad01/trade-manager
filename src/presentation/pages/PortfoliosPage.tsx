@@ -5,7 +5,15 @@ import { Plus, Briefcase, ArrowRight, Archive, ArchiveRestore, ChevronDown, Chev
 import { repos } from "@presentation/lib/data";
 import { createPortfolioAndSave, unarchivePortfolio } from "@application/services/PortfolioService";
 import type { Portfolio, PortfolioKind } from "@domain/entities/Portfolio";
-import { computePositions, findTickersSplitAcrossPortfolios, consolidateTicker, type SplitTickerEntry } from "@application/services/TradeService";
+import {
+  computePositions,
+  findTickersSplitAcrossPortfolios,
+  consolidateTicker,
+  findMisnamedTickers,
+  renameTickerEverywhere,
+  type SplitTickerEntry,
+  type MisnamedTickerEntry,
+} from "@application/services/TradeService";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
@@ -45,6 +53,11 @@ export function PortfoliosPage() {
     return findTickersSplitAcrossPortfolios(trades);
   }, []);
 
+  const misnamedTickers = useLiveQuery(async () => {
+    const trades = await repos.trades.getAll();
+    return findMisnamedTickers(trades);
+  }, []);
+
   return (
     <div>
       <PageHeader
@@ -60,6 +73,10 @@ export function PortfoliosPage() {
         }
       />
       <PriceFreshness />
+
+      {misnamedTickers && misnamedTickers.length > 0 ? (
+        <MisnamedTickersBanner misnamedTickers={misnamedTickers} />
+      ) : null}
 
       {splitTickers && splitTickers.length > 0 ? (
         <SplitTickersBanner splitTickers={splitTickers} portfolios={portfolios ?? []} />
@@ -204,6 +221,67 @@ function SplitTickersBanner({
             </li>
           );
         })}
+      </ul>
+    </div>
+  );
+}
+
+function MisnamedTickersBanner({ misnamedTickers }: { misnamedTickers: MisnamedTickerEntry[] }) {
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [error, setError] = useState<{ ticker: string; message: string } | null>(null);
+
+  async function handleRename(entry: MisnamedTickerEntry) {
+    if (
+      !confirm(
+        `Rename every "${entry.wrongTicker}" trade to ${entry.realTicker}? This fixes the ticker identity everywhere (trades, sells, timeline, verifications) — nothing else about these rows changes.`
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    setRenaming(entry.wrongTicker);
+    try {
+      await renameTickerEverywhere(repos, entry.wrongTicker, entry.realTicker);
+    } catch (e) {
+      setError({ ticker: entry.wrongTicker, message: e instanceof Error ? e.message : "Rename failed." });
+    } finally {
+      setRenaming(null);
+    }
+  }
+
+  return (
+    <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+      <p className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-400">
+        <ShieldAlert size={16} /> Tickers filed under the wrong name
+      </p>
+      <p className="mb-3 text-xs text-amber-300/70">
+        These are the same real stock as an already-known EGX ticker, but some trades were recorded under the raw
+        company name instead — usually from an import that predates that company being recognized. Renaming fixes
+        the identity everywhere (trades, sells, timeline, verifications); nothing about shares/prices/dates changes.
+      </p>
+      <ul className="space-y-2">
+        {misnamedTickers.map((entry) => (
+          <li
+            key={entry.wrongTicker}
+            className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-900/40 px-3 py-2 text-sm"
+          >
+            <span className="text-slate-200">
+              <span className="font-semibold">"{entry.wrongTicker}"</span>{" "}
+              <span className="text-slate-400">
+                ({formatShares(entry.shares)} sh remaining) is really <span className="font-semibold text-slate-200">{entry.realTicker}</span>
+              </span>
+            </span>
+            <button
+              onClick={() => void handleRename(entry)}
+              disabled={renaming === entry.wrongTicker}
+              className="flex items-center gap-1.5 rounded-md border border-amber-400/40 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+            >
+              <FolderSymlink size={12} />
+              {renaming === entry.wrongTicker ? "Renaming…" : `Rename to ${entry.realTicker}`}
+            </button>
+            {error && error.ticker === entry.wrongTicker ? <p className="w-full text-[11px] text-rose-400">{error.message}</p> : null}
+          </li>
+        ))}
       </ul>
     </div>
   );

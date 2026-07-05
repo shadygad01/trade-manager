@@ -11,6 +11,7 @@ import {
   correctTradeExecutionDate,
   findTickersSplitAcrossPortfolios,
   consolidateTicker,
+  findMisnamedTickers,
 } from "./TradeService";
 
 function seedPortfolio(cash: number) {
@@ -757,6 +758,44 @@ describe("findTickersSplitAcrossPortfolios", () => {
 
     const trades = await repos.trades.getAll();
     expect(findTickersSplitAcrossPortfolios(trades)).toHaveLength(0);
+  });
+});
+
+describe("findMisnamedTickers", () => {
+  it("flags a ticker string that's really a known company's raw name (the MASR/Medinet Masr Housing case)", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "MEDINET MASR HOUSING",
+      shares: 72,
+      entryPrice: 4.21,
+      executionDate: "2026-01-06",
+      executionTime: "10:00",
+    });
+    await recordBuy(repos, { portfolioId: "p1", ticker: "HRHO", shares: 20, entryPrice: 15, executionDate: "2026-01-05", executionTime: "10:00" });
+
+    const trades = await repos.trades.getAll();
+    const misnamed = findMisnamedTickers(trades);
+
+    expect(misnamed).toHaveLength(1);
+    expect(misnamed[0]).toEqual({ wrongTicker: "MEDINET MASR HOUSING", realTicker: "MASR", shares: 72 });
+  });
+
+  it("does not flag a ticker that's already its real symbol", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    await recordBuy(repos, { portfolioId: "p1", ticker: "MASR", shares: 72, entryPrice: 4.21, executionDate: "2026-01-06", executionTime: "10:00" });
+    await recordBuy(repos, { portfolioId: "p1", ticker: "HRHO", shares: 20, entryPrice: 15, executionDate: "2026-01-05", executionTime: "10:00" });
+
+    const trades = await repos.trades.getAll();
+    expect(findMisnamedTickers(trades)).toHaveLength(0);
+  });
+
+  it("does not flag an unrecognized ticker with no known real symbol to rename to", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    await recordBuy(repos, { portfolioId: "p1", ticker: "SOME UNKNOWN COMPANY", shares: 10, entryPrice: 5, executionDate: "2026-01-05", executionTime: "10:00" });
+
+    const trades = await repos.trades.getAll();
+    expect(findMisnamedTickers(trades)).toHaveLength(0);
   });
 });
 

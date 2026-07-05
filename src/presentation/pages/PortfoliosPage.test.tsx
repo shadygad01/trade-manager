@@ -45,8 +45,8 @@ vi.mock("@presentation/lib/data", () => ({
         return Promise.resolve();
       },
     },
-    allocations: { getByPortfolio: () => Promise.resolve([]) },
-    timeline: { getByPortfolio: () => Promise.resolve([]), save: () => Promise.resolve() },
+    allocations: { getByPortfolio: () => Promise.resolve([]), getAll: () => Promise.resolve([]) },
+    timeline: { getByPortfolio: () => Promise.resolve([]), getAll: () => Promise.resolve([]), save: () => Promise.resolve() },
     verifications: {
       getAll: () => Promise.resolve(state.verifications),
       save: (v: PositionVerification) => {
@@ -151,5 +151,43 @@ describe("PortfoliosPage", () => {
 
     await screen.findByText("Main");
     expect(screen.queryByText("Stocks split across portfolios")).not.toBeInTheDocument();
+  });
+
+  it("flags a ticker filed under its raw company name and renames it on click (the MASR/Medinet Masr Housing case)", async () => {
+    state.portfolios = [createPortfolio({ id: "p1", name: "Old School", kind: "Trading", initialCash: 10_000 })];
+    state.trades = [
+      createTrade({
+        id: "t1",
+        portfolioId: "p1",
+        ticker: "MEDINET MASR HOUSING",
+        shares: 72,
+        entryPrice: 4.21,
+        executionDate: "2026-01-06",
+        executionTime: "10:00",
+      }),
+    ];
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText("Tickers filed under the wrong name")).toBeInTheDocument();
+    expect(screen.getByText(/"MEDINET MASR HOUSING"/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /rename to masr/i }));
+
+    await waitFor(() => {
+      expect(state.trades[0].ticker).toBe("MASR");
+    });
+  });
+
+  it("does not show the misnamed-ticker banner when every ticker is already its real symbol", async () => {
+    state.portfolios = [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 10_000 })];
+    state.trades = [
+      createTrade({ id: "t1", portfolioId: "p1", ticker: "MASR", shares: 72, entryPrice: 4.21, executionDate: "2026-01-06", executionTime: "10:00" }),
+    ];
+    renderPage();
+
+    await screen.findByText("Main");
+    expect(screen.queryByText("Tickers filed under the wrong name")).not.toBeInTheDocument();
   });
 });
