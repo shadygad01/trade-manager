@@ -63,7 +63,7 @@ describe("TickerGroupCard — invoice-sourced Buy needs no separate broker scree
 });
 
 describe("TickerGroupCard — cross-verified (an OCR screenshot corroborated by an independent invoice, the ORHD case)", () => {
-  it("shows 'Verified — invoice matches screenshot' and lets the rows proceed straight to Ready", () => {
+  it("shows 'Verified — two documents agree' and lets the rows proceed straight to Ready", () => {
     render(
       <TickerGroupCard
         ticker="ORHD"
@@ -92,7 +92,7 @@ describe("TickerGroupCard — cross-verified (an OCR screenshot corroborated by 
         mergeSuggestion={undefined}
       />,
     );
-    expect(screen.getByText("Verified — invoice matches screenshot")).toBeInTheDocument();
+    expect(screen.getByText("Verified — two documents agree")).toBeInTheDocument();
     expect(screen.getAllByText("Ready — click Confirm above").length).toBe(2);
     expect(screen.queryByText(/Mismatch/)).not.toBeInTheDocument();
     expect(screen.queryByText("Blocked — needs verification")).not.toBeInTheDocument();

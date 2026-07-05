@@ -64,12 +64,13 @@ export interface TickerMatchStatus {
  * blocks, since a real discrepancy (e.g. a duplicate invoice) shouldn't be
  * silently overridden just because this batch happens to be invoice-sourced.
  *
- * A fourth way, one level broader: a ticker whose every still-pending
- * candidate is *either* invoice-sourced *or* cross-verified by an
- * independent second document describing the same transaction (see
- * `findCrossSourceVerifiedKeys` — an OCR'd screenshot/statement read
- * corroborated by a separate Invoice for the identical ticker/side/date/
- * share count). Two independent sources agreeing is at least as
+ * A fourth way, one level broader — the dual-source rule: a ticker whose
+ * every still-pending candidate is *either* invoice-sourced *or*
+ * cross-verified by a second, DIFFERENT document type describing the same
+ * transaction (see `findCrossSourceVerifiedKeys` — statement + invoice,
+ * statement + orders screenshot, invoice + orders screenshot, CSV +
+ * anything; which pair doesn't matter, that they're two independent
+ * document types does). Two independent sources agreeing is at least as
  * trustworthy as an invoice alone, and resolves exactly the case a broker
  * "My Position" total can't: an OCR-only ticker whose extracted total
  * won't reconcile no matter how the rows are grouped, because the

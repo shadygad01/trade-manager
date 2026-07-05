@@ -237,6 +237,38 @@ describe("findCrossSourceVerifiedKeys", () => {
     ];
     expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
   });
+
+  it("flags any pair of two DIFFERENT document types — statement + orders screenshot, no invoice involved", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+      { key: "os", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "orders-screen" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set(["st", "os"]));
+  });
+
+  it("flags a CSV export paired with a statement read", () => {
+    const entries = [
+      { key: "csv", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "csv" as const }) },
+      { key: "st", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set(["csv", "st"]));
+  });
+
+  it("never pairs two reads of the same document type — two statements are a re-upload, not independent confirmation", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+      { key: "b", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+
+  it("never pairs a legacy untyped candidate (pre-source session) with a typed non-invoice one — its real type is unknowable", () => {
+    const entries = [
+      { key: "old", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
+      { key: "new", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "orders-screen" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
 });
 
 describe("findWrongTickerCandidateKeys", () => {

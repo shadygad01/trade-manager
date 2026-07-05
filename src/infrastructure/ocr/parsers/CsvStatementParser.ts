@@ -90,6 +90,7 @@ function parseRows(text: string): ParsedTradeCandidate[] {
       // A structured column match (not a fuzzy company-name guess) is the
       // most reliable ticker resolution the OCR subsystem can produce.
       confidence: "high",
+      source: "csv",
     });
   }
   return candidates;

@@ -22,14 +22,20 @@ export interface ParsedTradeCandidate {
    */
   confidence?: ParseConfidence;
   /**
-   * "invoice" marks a candidate read from a standardized per-trade Invoice
-   * document (see ThndrParser's Invoice format) rather than an OCR'd
-   * screenshot/statement — trusted as sufficient verification for its own
-   * transaction on its own, without needing a broker "My Position"
-   * screenshot too (see importVerification's checkTickerMatch). Undefined
-   * for every other source.
+   * Which document type this candidate was read from — the basis of the
+   * dual-source verification rule: the same transaction (identical
+   * ticker/side/date/share count) read from TWO DIFFERENT document types is
+   * independently corroborated and needs no broker "My Position" recount
+   * (see duplicateDetection's findCrossSourceVerifiedKeys). Two reads from
+   * the SAME type (two statements, two orders screenshots) are never a pair
+   * — that's a re-upload, not independent confirmation. "invoice" is
+   * additionally trusted as sufficient verification entirely on its own
+   * (standardized, field-labeled document — see checkTickerMatch's
+   * invoice-verified). Undefined only on candidates extracted before this
+   * field existed; those can still pair with an invoice (the original
+   * cross-verification rule) but never with each other.
    */
-  source?: "invoice";
+  source?: "statement" | "invoice" | "orders-screen" | "csv";
 }
 
 /**

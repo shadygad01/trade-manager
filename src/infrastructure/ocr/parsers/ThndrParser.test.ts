@@ -65,7 +65,7 @@ describe("ThndrParser.parseStatementText", () => {
     expect(candidates).toHaveLength(2);
     expect(candidates[0]).toMatchObject({ ticker: "EAST", side: "BUY", shares: 50, date: "2026-02-02" });
     expect(candidates[1]).toMatchObject({ ticker: "HRHO", side: "SELL", shares: 45, date: "2026-02-19" });
-    expect(candidates[0].source).toBeUndefined();
+    expect(candidates[0].source).toBe("statement");
   });
 
   it("derives price from the Value column instead of the printed per-share price (commission adjustment)", () => {
@@ -316,7 +316,7 @@ describe("ThndrParser.parseOrdersScreenText", () => {
       "Sell • 17 shares @ EGP 253.128 20 Aug 24 – 10:07AM Cancelled";
     const result = parser.parseOrdersScreenText(text);
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ ticker: "ORAS", side: "BUY", shares: 3, date: "2026-02-11" });
+    expect(result.candidates[0]).toMatchObject({ ticker: "ORAS", side: "BUY", shares: 3, date: "2026-02-11", source: "orders-screen" });
     expect(result.candidates[0].time).toBe("11:00AM");
   });
 

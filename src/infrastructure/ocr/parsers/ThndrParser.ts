@@ -213,6 +213,7 @@ function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
       shares,
       price,
       date,
+      source: "statement",
     });
   }
 
@@ -446,6 +447,7 @@ function parseOrdersScreenTextImpl(text: string): OrdersScreenParseResult {
       price,
       date,
       time: normalizeTime(dateMatch[2]),
+      source: "orders-screen",
     });
   }
 
@@ -533,6 +535,7 @@ function parseOrderRowsTextImpl(rows: OrderRowText[], ticker: string): OrderRows
       price,
       date,
       time: normalizeTime(dateMatch[2]),
+      source: "orders-screen",
     });
   }
 
