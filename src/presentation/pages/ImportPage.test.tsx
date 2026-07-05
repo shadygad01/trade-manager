@@ -99,6 +99,43 @@ describe("TickerGroupCard — cross-verified (an OCR screenshot corroborated by 
   });
 });
 
+describe("TickerGroupCard — a pending Sell exceeding the ledger's available shares (the SKPC shortfall case)", () => {
+  it("badges 'Missing buy history' and explains the shortfall instead of asking for a My Position screenshot", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [sellEntry("s1")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: -70, existingRemainingShares: 12 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Missing buy history")).toBeInTheDocument();
+    expect(screen.queryByText(/No broker "My Position" screenshot/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Pending Sell\(s\) for SKPC total 82 shares/)).toBeInTheDocument();
+    expect(screen.getByText(/70 short/)).toBeInTheDocument();
+  });
+});
+
 describe("TickerGroupCard — portfolio picker for a brand-new ticker in more than one portfolio", () => {
   it("does not silently pre-select the first portfolio — shows an honest placeholder instead", () => {
     render(
