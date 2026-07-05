@@ -80,4 +80,39 @@ describe("SnapshotPriceRepository", () => {
     await expect(repo.getPrice("COMI")).resolves.toBeUndefined();
     await expect(repo.getAllPrices()).resolves.toEqual({});
   });
+
+  it("fetches day-by-day history for a ticker from the separate history snapshot", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        COMI: { "2026-07-01": 74.2, "2026-07-02": 75.5 },
+        ORHD: { "2026-07-01": 23.1 },
+      }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const repo = new SnapshotPriceRepository("/price-snapshot.json", "/price-history.json");
+
+    expect(await repo.getPriceHistory("COMI")).toEqual({ "2026-07-01": 74.2, "2026-07-02": 75.5 });
+    expect(fetchMock).toHaveBeenCalledWith("/price-history.json", { cache: "no-store" });
+  });
+
+  it("returns an empty history for a ticker not present in the snapshot", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ COMI: { "2026-07-01": 74.2 } }),
+    }) as unknown as typeof fetch;
+
+    const repo = new SnapshotPriceRepository("/price-snapshot.json", "/price-history.json");
+
+    expect(await repo.getPriceHistory("HRHO")).toEqual({});
+  });
+
+  it("returns an empty history instead of throwing when the history fetch fails", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network down")) as unknown as typeof fetch;
+
+    const repo = new SnapshotPriceRepository("/price-snapshot.json", "/price-history.json");
+
+    await expect(repo.getPriceHistory("COMI")).resolves.toEqual({});
+  });
 });

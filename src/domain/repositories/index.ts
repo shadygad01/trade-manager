@@ -75,4 +75,6 @@ export interface PriceRepository {
   getPrice(ticker: string): Promise<number | undefined>;
   getAllPrices(): Promise<Record<string, number>>;
   getSnapshotInfo(): Promise<PriceSnapshotInfo | null>;
+  /** Day-by-day closing prices for one ticker, keyed by "YYYY-MM-DD". Empty object if no history is available yet. Backed by a separate accumulating snapshot (public/price-history.json) — a ticker only gains entries once fetch-prices has run on that trading day. */
+  getPriceHistory(ticker: string): Promise<Record<string, number>>;
 }
