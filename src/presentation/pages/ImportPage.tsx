@@ -1391,6 +1391,15 @@ export function TickerGroupCard({
   // reconcile — an absent screenshot proves nothing about any row.
   const tickerHasFulfilledOrders = orderEvidences.some((e) => e.evidence.status === "fulfilled");
   const highlightUnmatchedByOrders = tickerHasFulfilledOrders && matchStatus?.reason === "mismatch";
+  // Only meaningful for the "no-verification" shortfall banner below — a
+  // pending Sell total that exceeds existing-ledger + pending-Buy shares
+  // means the ledger is missing Buy history, not missing a screenshot.
+  const pendingSellShares = group.sells
+    .filter((e) => !addedKeys.has(e.key))
+    .reduce((sum, e) => sum + e.candidate.shares, 0);
+  const pendingBuyShares = group.buys
+    .filter((e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key))
+    .reduce((sum, e) => sum + e.candidate.shares, 0);
 
   function confirmRename() {
     onRenameTicker(draftTicker);
@@ -1523,6 +1532,16 @@ export function TickerGroupCard({
           {formatShares(matchStatus.netShares - matchStatus.existingRemainingShares!)} in this batch ={" "}
           {formatShares(matchStatus.verifiedUnits ?? matchStatus.netShares)} — the rows below only show this batch's
           part.
+        </div>
+      ) : matchStatus?.reason === "no-verification" && matchStatus.netShares < -1e-6 ? (
+        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
+          Pending Sell(s) for {ticker} total {formatShares(pendingSellShares)} shares, but only{" "}
+          {formatShares(matchStatus.existingRemainingShares ?? 0)} already on the ledger + {formatShares(pendingBuyShares)}{" "}
+          in this batch = {formatShares((matchStatus.existingRemainingShares ?? 0) + pendingBuyShares)} are available —{" "}
+          {formatShares(-matchStatus.netShares)} short. A broker "My Position" screenshot can't help here since the
+          position is already sold out; the ledger is most likely missing earlier Buy transactions for the missing
+          shares. Upload a Statement/Orders screenshot covering the full purchase history for {ticker}, or record the
+          missing buy(s) manually if the invoices aren't available.
         </div>
       ) : matchStatus?.reason === "no-verification" ? (
         <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
@@ -1746,6 +1765,18 @@ export function TickerGroupCard({
 /** The verification-gate badge on a ticker card's header — the visual anchor for the whole two-phase workflow. */
 function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
   if (!status || status.reason === "no-verification") {
+    // netShares < 0 means this batch's Sell(s) already exceed what's on the
+    // ledger (existing remaining shares + this batch's pending buys) — no
+    // broker "My Position" screenshot can ever resolve that, since the
+    // position is already sold out. The real fix is finding the missing Buy
+    // history, not waiting on a screenshot that will never exist.
+    if (status && status.netShares < -1e-6) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-400">
+          <ShieldAlert size={11} /> Missing buy history
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
         <ShieldAlert size={11} /> Needs broker screenshot
