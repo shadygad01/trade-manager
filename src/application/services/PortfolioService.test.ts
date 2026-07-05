@@ -17,6 +17,7 @@ import {
   renamePortfolio,
   findPortfoliosMissingFundingRecord,
   backfillInitialFunding,
+  getInitialFundingRecord,
 } from "./PortfolioService";
 
 describe("createPortfolioAndSave", () => {
@@ -264,5 +265,42 @@ describe("backfillInitialFunding", () => {
   it("rejects a date before the tracking start", async () => {
     const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
     await expect(backfillInitialFunding(repos, "p1", 5000, "2025-12-31")).rejects.toThrow(/2026-01-01/);
+  });
+
+  it("edits the existing starting-balance record in place instead of stacking a duplicate", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
+    await backfillInitialFunding(repos, "p1", 5000, "2026-01-01");
+    await backfillInitialFunding(repos, "p1", 7500, "2026-01-15");
+
+    const events = await repos.timeline.getByPortfolio("p1");
+    expect(events).toHaveLength(1);
+    expect(events[0].amount).toBe(7500);
+    expect(events[0].timestamp).toBe("2026-01-15T00:00");
+  });
+});
+
+describe("getInitialFundingRecord", () => {
+  it("returns undefined when no starting-balance record has ever been set", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
+    expect(getInitialFundingRecord(await repos.timeline.getByPortfolio("p1"), "p1")).toBeUndefined();
+  });
+
+  it("returns the current amount/date after backfillInitialFunding sets it, for an edit UI to pre-fill", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
+    await backfillInitialFunding(repos, "p1", 5000, "2026-01-01");
+    const record = getInitialFundingRecord(await repos.timeline.getByPortfolio("p1"), "p1");
+    expect(record).toEqual({ amount: 5000, date: "2026-01-01" });
+  });
+
+  it("createPortfolioAndSave's own initial-funding event is also found and editable through the same lookup", async () => {
+    const repos = createFakeRepositories();
+    const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading", initialCash: 5000 });
+    const before = getInitialFundingRecord(await repos.timeline.getByPortfolio(portfolio.id), portfolio.id);
+    expect(before?.amount).toBe(5000);
+
+    await backfillInitialFunding(repos, portfolio.id, 6000, "2026-02-01");
+    const events = await repos.timeline.getByPortfolio(portfolio.id);
+    expect(events).toHaveLength(1); // edited in place, not a second record
+    expect(getInitialFundingRecord(events, portfolio.id)).toEqual({ amount: 6000, date: "2026-02-01" });
   });
 });

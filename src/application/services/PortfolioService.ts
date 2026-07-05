@@ -33,12 +33,12 @@ export async function createPortfolioAndSave(repos: AppRepositories, input: Crea
   if (input.initialCash && input.initialCash > 0) {
     await repos.timeline.save(
       createTimelineEvent({
-        id: generateId(),
+        id: initialFundingEventId(portfolio.id),
         portfolioId: portfolio.id,
         type: "Deposit",
         timestamp: portfolio.createdAt,
         amount: input.initialCash,
-        notes: "Initial funding recorded at portfolio creation.",
+        notes: INITIAL_FUNDING_NOTE,
       })
     );
   }
@@ -329,12 +329,25 @@ export function findPortfoliosMissingFundingRecord(
   return entries;
 }
 
+/** Fixed marker distinguishing the one backfilled "starting balance" record from ordinary Deposit/Withdrawal events. */
+const INITIAL_FUNDING_NOTE = "Starting balance (edited directly, not a real deposit/withdrawal — see Portfolios page).";
+
+/** Deterministic (not random) so re-calling `backfillInitialFunding` for the same portfolio edits this one record in place instead of creating a duplicate. */
+function initialFundingEventId(portfolioId: string): string {
+  return `initial-funding:${portfolioId}`;
+}
+
 /**
- * Backfills the missing dated Deposit event for capital that funded a
- * portfolio before anyone recorded it as a dated event (typically initial
- * cash set at creation, pre-dating this fix). Deliberately does NOT touch
- * `Portfolio.cash` — that balance already reflects this funding; this only
- * gives the return-% calculators the capital basis they need.
+ * Sets (or edits) the one dated record for capital that funded a portfolio
+ * before anyone recorded it as a dated event — typically initial cash set at
+ * creation, but also usable any time the user wants to correct their
+ * starting balance directly, since this is explicitly NOT a deposit or a
+ * withdrawal (no new/removed money — it's a correction to the number the
+ * portfolio started at). Deliberately does NOT touch `Portfolio.cash` — that
+ * balance already reflects this funding; this only gives the return-%
+ * calculators the capital basis they need. Calling it again with a
+ * different amount/date replaces the previous value rather than stacking a
+ * second record, so it doubles as an "edit starting balance" action.
  */
 export async function backfillInitialFunding(
   repos: AppRepositories,
@@ -351,12 +364,24 @@ export async function backfillInitialFunding(
   await requirePortfolio(repos, portfolioId);
   await repos.timeline.save(
     createTimelineEvent({
-      id: generateId(),
+      id: initialFundingEventId(portfolioId),
       portfolioId,
       type: "Deposit",
       timestamp: `${date}T00:00`,
       amount,
-      notes: "Backfilled: initial funding recorded retroactively so return % has a real capital basis.",
+      notes: INITIAL_FUNDING_NOTE,
     })
   );
+}
+
+export interface InitialFundingRecord {
+  amount: number;
+  date: string;
+}
+
+/** Looks up the one backfilled starting-balance record for a portfolio, if it has ever been set, so an "edit" UI can pre-fill the current value instead of starting blank. */
+export function getInitialFundingRecord(timelineEvents: TimelineEvent[], portfolioId: string): InitialFundingRecord | undefined {
+  const event = timelineEvents.find((e) => e.id === initialFundingEventId(portfolioId));
+  if (!event) return undefined;
+  return { amount: event.amount ?? 0, date: event.timestamp.slice(0, 10) };
 }

@@ -633,6 +633,18 @@ The fix above shipped, but the user's own real portfolios still showed no banner
 - 4 new/changed tests: the exact-reconciliation math on a realistic buy+sell scenario, a portfolio with a small real top-up deposit that still gets correctly flagged (the shape that slipped through before), a portfolio whose cash is already fully explained even with a top-up present, and a no-trades portfolio that's still correctly left alone.
 - Verified end-to-end against a real running build: reproduced the "Old School" shape from the user's real screenshots (E£201,463.82 cash, no open positions, one small real top-up Deposit already recorded) — confirmed the banner now appears where it previously didn't, with the amount input pre-filled to the exact reconciled gap (E£150,463.82).
 
+### Post-sprint-8 fix — the funding banner's own default date rejected itself, plus a direct "edit starting balance" action
+
+After the reconciliation fix, the user still reported empty/wrong charts and asked why they can't just directly edit a portfolio's starting balance (not a deposit/withdrawal) via a simple button. Two real gaps, both traced directly:
+
+- **Root cause**: `backfillInitialFunding` correctly rejects any date before `TRACKING_START_DATE` (2026-01-01) — but the banner's date input defaulted straight to `portfolio.createdAt`, and any portfolio actually created before the tracking window opened (very plausible for a long-running real user) would have its own pre-filled default date rejected the moment "Record funding" was clicked, with only a small, easy-to-miss inline error. Reproduced directly: a portfolio created 2025-11-15 showed the banner, but clicking Record with the un-clamped default date failed validation.
+- **`defaultFundingDate`** (new, `PortfoliosPage.tsx`): clamps the pre-filled date to `max(portfolio.createdAt, TRACKING_START_DATE)`, used by both the banner and the new edit action below.
+- **`backfillInitialFunding`** now edits its one starting-balance record in place (a deterministic `initial-funding:{portfolioId}` id) instead of creating a new timeline event every time it's called — the same underlying action now doubles as an "edit" rather than only a one-time backfill.
+- **`getInitialFundingRecord`** (new): looks up the current starting-balance record for a portfolio, if one has been set, so an edit UI can pre-fill the real current value instead of a fresh suggestion.
+- **`PortfoliosPage`** gains an always-available "Edit starting balance" button on every portfolio card (not gated on the missing-funding banner), opening a small modal pre-filled with the existing record if set, or the reconciled gap as a starting suggestion if not — explicitly framed as "starting balance," never deposit/withdrawal language, matching how the user actually thinks about it.
+- 9 new/changed tests: the date-clamp fix, the always-available edit action (both the "nothing recorded yet" and "already set, edit in place" cases), and the underlying idempotent-upsert behavior of `backfillInitialFunding`/`getInitialFundingRecord`.
+- Verified end-to-end against a real running build: reproduced a portfolio created 2025-11-15 (before the tracking window) with a real +E£500 realized gain — confirmed the banner's date input now correctly shows 2026-01-01 instead of the rejected 2025-11-15, "Record funding" succeeds with no validation error, and the new "Edit starting balance" button opens correctly pre-filled on the same portfolio afterward.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
