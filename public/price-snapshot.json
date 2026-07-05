@@ -1,65 +1,65 @@
 {
-  "asOf": "2026-07-05T09:41:42.071Z",
+  "asOf": "2026-07-05T11:30:05.229Z",
   "prices": {
-    "COMI": 129.3,
-    "HRHO": 26.83,
-    "TMGH": 96.3,
-    "SWDY": 87.85,
-    "EAST": 37.35,
-    "ETEL": 92.95,
-    "ABUK": 69.28,
+    "COMI": 129.95,
+    "HRHO": 26.75,
+    "TMGH": 95.7,
+    "SWDY": 87.5,
+    "EAST": 37.27,
+    "ETEL": 92.92,
+    "ABUK": 69.7,
     "AMOC": 7.84,
-    "ORWE": 22.54,
-    "EFIH": 21.2,
+    "ORWE": 22.65,
+    "EFIH": 21.48,
     "CIEB": 24.4,
-    "ADIB": 46.78,
-    "SKPC": 16.16,
+    "ADIB": 46.62,
+    "SKPC": 16.1,
     "EKHO": 0.78,
-    "MFPC": 36.32,
-    "ISPH": 11.6,
-    "PHAR": 88.48,
-    "CSAG": 32.75,
-    "JUFO": 29.95,
-    "EMFD": 11.67,
-    "ORAS": 723.98,
-    "ARCC": 55.86,
-    "ORHD": 38.3,
-    "SUGR": 47.31,
-    "MASR": 7.59
+    "MFPC": 36.36,
+    "ISPH": 11.64,
+    "PHAR": 88.89,
+    "CSAG": 32.5,
+    "JUFO": 29.98,
+    "EMFD": 11.79,
+    "ORAS": 719,
+    "ARCC": 56.18,
+    "ORHD": 38.24,
+    "SUGR": 47.61,
+    "MASR": 7.56
   },
   "quotes": {
     "COMI": {
-      "price": 129.3,
+      "price": 129.95,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "HRHO": {
-      "price": 26.83,
+      "price": 26.75,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "TMGH": {
-      "price": 96.3,
+      "price": 95.7,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "SWDY": {
-      "price": 87.85,
+      "price": 87.5,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "EAST": {
-      "price": 37.35,
+      "price": 37.27,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "ETEL": {
-      "price": 92.95,
+      "price": 92.92,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "ABUK": {
-      "price": 69.28,
+      "price": 69.7,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -69,12 +69,12 @@
       "source": "tradingview"
     },
     "ORWE": {
-      "price": 22.54,
+      "price": 22.65,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "EFIH": {
-      "price": 21.2,
+      "price": 21.48,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -84,12 +84,12 @@
       "source": "tradingview"
     },
     "ADIB": {
-      "price": 46.78,
+      "price": 46.62,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "SKPC": {
-      "price": 16.16,
+      "price": 16.1,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -99,57 +99,57 @@
       "source": "yahoo"
     },
     "MFPC": {
-      "price": 36.32,
+      "price": 36.36,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "ISPH": {
-      "price": 11.6,
+      "price": 11.64,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "PHAR": {
-      "price": 88.48,
+      "price": 88.89,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "CSAG": {
-      "price": 32.75,
+      "price": 32.5,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "JUFO": {
-      "price": 29.95,
+      "price": 29.98,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "EMFD": {
-      "price": 11.67,
+      "price": 11.79,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "ORAS": {
-      "price": 723.98,
+      "price": 719,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "ARCC": {
-      "price": 55.86,
+      "price": 56.18,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "ORHD": {
-      "price": 38.3,
+      "price": 38.24,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "SUGR": {
-      "price": 47.31,
+      "price": 47.61,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     },
     "MASR": {
-      "price": 7.59,
+      "price": 7.56,
       "quotedAt": "2026-07-05T07:00:00.000Z",
       "source": "tradingview"
     }
