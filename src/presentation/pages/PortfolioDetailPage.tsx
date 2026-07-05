@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser } from "lucide-react";
+import { Banknote, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { computePositions, deleteTrade } from "@application/services/TradeService";
 import {
-  deposit,
-  withdraw,
+  setCash,
   recordDividend,
   recordCashAdjustment,
   recordSplit,
@@ -27,7 +26,7 @@ import { StatTile } from "@presentation/components/StatTile";
 import { CapitalDeploymentFlow } from "@presentation/components/CapitalDeploymentFlow";
 import { formatDate, formatMoney, formatPercent, formatShares, signClass } from "@presentation/lib/format";
 
-type CashModalKind = "deposit" | "withdraw" | "dividend" | "adjustment" | null;
+type CashModalKind = "editCash" | "dividend" | "adjustment" | null;
 type CorporateActionKind = "split" | "rightsIssue" | null;
 
 export function PortfolioDetailPage() {
@@ -178,16 +177,10 @@ export function PortfolioDetailPage() {
               <Pencil size={16} /> Rename
             </button>
             <button
-              onClick={() => setCashModal("deposit")}
+              onClick={() => setCashModal("editCash")}
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
-              <ArrowDownCircle size={16} /> Deposit
-            </button>
-            <button
-              onClick={() => setCashModal("withdraw")}
-              className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
-            >
-              <ArrowUpCircle size={16} /> Withdraw
+              <Banknote size={16} /> Edit Cash
             </button>
             <button
               onClick={() => setCashModal("dividend")}
@@ -431,7 +424,7 @@ export function PortfolioDetailPage() {
         </div>
       ) : null}
 
-      <CashModal kind={cashModal} portfolioId={portfolio.id} onClose={() => setCashModal(null)} />
+      <CashModal kind={cashModal} portfolioId={portfolio.id} currentCash={portfolio.cash} onClose={() => setCashModal(null)} />
       <CorporateActionModal open={corporateActionOpen} portfolioId={portfolio.id} onClose={() => setCorporateActionOpen(false)} />
       <RenamePortfolioModal
         open={renameOpen}
@@ -523,10 +516,12 @@ function RenamePortfolioModal({
 function CashModal({
   kind,
   portfolioId,
+  currentCash,
   onClose,
 }: {
   kind: CashModalKind;
   portfolioId: string;
+  currentCash: number;
   onClose: () => void;
 }) {
   const [amount, setAmount] = useState("");
@@ -539,15 +534,19 @@ function CashModal({
   if (!kind) return null;
 
   const titles: Record<Exclude<CashModalKind, null>, string> = {
-    deposit: "Deposit Cash",
-    withdraw: "Withdraw Cash",
+    editCash: "Edit Cash",
     dividend: "Record Dividend",
     adjustment: "Adjust Cash",
   };
 
   async function handleSubmit() {
-    const n = Number.parseFloat(amount);
-    if (kind === "adjustment") {
+    const n = kind === "editCash" && amount === "" ? currentCash : Number.parseFloat(amount);
+    if (kind === "editCash") {
+      if (!Number.isFinite(n)) {
+        setError("Enter the correct cash balance.");
+        return;
+      }
+    } else if (kind === "adjustment") {
       if (!Number.isFinite(n) || n === 0) {
         setError("Enter a non-zero amount (negative to decrease cash).");
         return;
@@ -564,8 +563,7 @@ function CashModal({
     setError(null);
     try {
       const trimmedNotes = notes.trim() || undefined;
-      if (kind === "deposit") await deposit(repos, portfolioId, n, trimmedNotes);
-      else if (kind === "withdraw") await withdraw(repos, portfolioId, n, trimmedNotes);
+      if (kind === "editCash") await setCash(repos, portfolioId, n);
       else if (kind === "adjustment") await recordCashAdjustment(repos, portfolioId, n, notes.trim());
       else await recordDividend(repos, portfolioId, { ticker: ticker.trim() || undefined, amount: n, date: date || undefined, notes: trimmedNotes });
       setAmount("");
@@ -583,11 +581,17 @@ function CashModal({
   return (
     <Modal title={titles[kind]} open={Boolean(kind)} onClose={onClose}>
       <div className="space-y-3">
+        {kind === "editCash" ? (
+          <p className="text-xs text-slate-400">
+            The cash balance shown on this portfolio — purely informational, never used in any return calculation.
+            Correcting it here does not create a deposit, withdrawal, or any other history entry.
+          </p>
+        ) : null}
         <label className="block text-xs text-slate-400 space-y-1">
-          {kind === "adjustment" ? "Amount (EGP) — negative to decrease" : "Amount (EGP)"}
+          {kind === "adjustment" ? "Amount (EGP) — negative to decrease" : kind === "editCash" ? "Cash balance (EGP)" : "Amount (EGP)"}
           <input
             type="number"
-            value={amount}
+            value={kind === "editCash" && amount === "" ? String(currentCash) : amount}
             onChange={(e) => setAmount(e.target.value)}
             className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
           />
@@ -614,15 +618,17 @@ function CashModal({
             </label>
           </>
         ) : null}
-        <label className="block text-xs text-slate-400 space-y-1">
-          Notes{kind === "adjustment" ? " (required)" : ""}
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={2}
-            className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-          />
-        </label>
+        {kind !== "editCash" ? (
+          <label className="block text-xs text-slate-400 space-y-1">
+            Notes{kind === "adjustment" ? " (required)" : ""}
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+            />
+          </label>
+        ) : null}
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">

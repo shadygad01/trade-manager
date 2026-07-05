@@ -17,7 +17,6 @@ import {
   type PerformancePeriod,
 } from "./calculators/performanceCurve";
 import { capitalDeployment } from "./calculators/capitalDeployment";
-import { portfolioReturn } from "./calculators/portfolioReturn";
 import { portfolioHealth, type PortfolioHealth } from "./calculators/portfolioHealth";
 import { strategyAttribution, type StrategyAttribution } from "./calculators/strategyAttribution";
 import { summarizeOpenPositions } from "./calculators/shared";
@@ -44,7 +43,6 @@ export const calculators = {
   performanceCurve,
   capitalDeployment,
   bucketPerformance,
-  portfolioReturn,
   portfolioHealth,
   strategyAttribution,
 };
@@ -73,18 +71,18 @@ export interface AnalyticsResult {
   /** Max peak-to-trough decline (percentage points) of cumulative realized + dividend return — never a raw cash-flow ratio (see performanceDrawdown). */
   drawdown: number;
   capitalDeployment: number;
-  /** Cumulative {date, realizedReturnPct, dividendReturnPct} series — the equity-curve replacement. No historical price feed is needed or used. */
+  /** Cumulative {date, realizedReturnPct, dividendReturnPct} series — both against cumulative cost basis invested so far (see performanceCurve.ts). No historical price feed is needed for this curve. */
   performanceCurve: PerformancePoint[];
   /** Each period (real calendar month, not just months with activity) also carries unrealizedReturnPct — that period's own change in mark-to-market on still-open positions, from `priceHistory` — see performanceCurve.ts's bucketPerformance doc. */
   monthlyPerformance: PerformancePeriod[];
   annualPerformance: PerformancePeriod[];
-  /** Since inception, net of deposits/withdrawals — unchanged, was never equity-curve-based. */
+  /** Since inception: cumulative realizedReturnPct + dividendReturnPct (the performance curve's last point) — a quick combined figure, e.g. for ranking portfolios. Deliberately excludes unrealizedReturnPct below, which uses a different denominator (cost basis of currently-open positions only, not all invested cost basis). */
   portfolioReturn: number;
-  /** Cumulative realized return %, as of `today` (the performance curve's last point). */
+  /** Cumulative realized return %, as of `today` (the performance curve's last point), against cost basis invested so far. */
   realizedReturnPct: number;
-  /** Cumulative dividend return %, as of `today`. */
+  /** Cumulative dividend return %, as of `today`, against cost basis invested so far. */
   dividendReturnPct: number;
-  /** Unrealized P/L on still-open positions as % of their cost basis, against today's price only — a snapshot, deliberately not the same figure as monthlyPerformance/annualPerformance's per-period unrealizedReturnPct (a different denominator: cost basis here vs. contributed capital there). */
+  /** Unrealized P/L on still-open positions as % of their cost basis, against today's price only — a snapshot, deliberately not the same figure as monthlyPerformance/annualPerformance's per-period unrealizedReturnPct (a different denominator: cost basis of open positions only here, vs. total cost basis ever invested there). */
   unrealizedReturnPct: number;
   portfolioHealth: PortfolioHealth;
   strategyAttribution: StrategyAttribution[];
@@ -101,13 +99,6 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
   const curve = performanceCurve(trades, allocations, timelineEvents, asOf);
   const lastPoint = curve[curve.length - 1];
 
-  const deposits = timelineEvents
-    .filter((e) => e.type === "Deposit")
-    .reduce((sum, e) => sum + (e.amount ?? 0), 0);
-  const withdrawals = timelineEvents
-    .filter((e) => e.type === "Withdrawal")
-    .reduce((sum, e) => sum + Math.abs(e.amount ?? 0), 0);
-
   return {
     winRate: winRate(allocations, trades),
     profitFactor: profitFactor(allocations, trades),
@@ -121,7 +112,7 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     performanceCurve: curve,
     monthlyPerformance: bucketPerformance(trades, allocations, timelineEvents, 7, priceHistory ?? {}, asOf),
     annualPerformance: bucketPerformance(trades, allocations, timelineEvents, 4, priceHistory ?? {}, asOf),
-    portfolioReturn: portfolioReturn(totalEquity, deposits, withdrawals),
+    portfolioReturn: (lastPoint?.realizedReturnPct ?? 0) + (lastPoint?.dividendReturnPct ?? 0),
     realizedReturnPct: lastPoint?.realizedReturnPct ?? 0,
     dividendReturnPct: lastPoint?.dividendReturnPct ?? 0,
     unrealizedReturnPct: costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0,

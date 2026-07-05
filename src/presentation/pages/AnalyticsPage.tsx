@@ -81,7 +81,7 @@ export function AnalyticsPage() {
           label="Realized Return"
           value={formatPercent(analytics.realizedReturnPct)}
           valueClassName={signClass(analytics.realizedReturnPct)}
-          sublabel="Cumulative, % of contributed capital"
+          sublabel="Cumulative, % of cost basis invested"
         />
         <StatTile
           label="Unrealized Return"
@@ -93,7 +93,7 @@ export function AnalyticsPage() {
           label="Dividend Return"
           value={formatPercent(analytics.dividendReturnPct)}
           valueClassName={signClass(analytics.dividendReturnPct)}
-          sublabel="Cumulative, % of contributed capital"
+          sublabel="Cumulative, % of cost basis invested"
         />
         <StatTile
           label="Monthly Return (latest)"
@@ -111,7 +111,7 @@ export function AnalyticsPage() {
           label="Portfolio Return"
           value={formatPercent(analytics.portfolioReturn)}
           valueClassName={signClass(analytics.portfolioReturn)}
-          sublabel="Since inception, net of deposits/withdrawals"
+          sublabel="Since inception: realized + dividend, % of cost basis invested"
         />
       </div>
 
@@ -142,8 +142,8 @@ export function AnalyticsPage() {
           <EmptyState title="Not enough history yet" description="This fills in as sells close and dividends are recorded." />
         )}
         <p className="mt-2 text-[11px] text-slate-500">
-          Both lines are % of net contributed capital (deposits − withdrawals), never raw cash — a deposit never reads
-          as a gain. Unrealized P/L on still-open positions isn&apos;t part of this cumulative curve; see the
+          Both lines are % of cost basis invested (money actually spent buying, never a deposit or withdrawal) — never
+          raw cash. Unrealized P/L on still-open positions isn&apos;t part of this cumulative curve; see the
           Unrealized Return stat above for today&apos;s snapshot, or the Monthly Return chart below for its
           month-by-month history.
         </p>
@@ -237,7 +237,7 @@ export function AnalyticsPage() {
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <EmptyState title="No monthly data yet" description="Populates from the portfolio's first trade or deposit onward." />
+          <EmptyState title="No monthly data yet" description="Populates from the portfolio's first trade onward." />
         )}
         <p className="mt-2 text-[11px] text-slate-500">
           Every calendar month is shown, including months with no closed trade — an open position still moves the

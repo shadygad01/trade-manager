@@ -1,12 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
-import type { TimelineEvent } from "@domain/entities/TimelineEvent";
-import { makeTrade, makeAllocation } from "@application/analytics/calculators/testFixtures";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
 import {
   createPortfolioAndSave,
-  deposit,
-  withdraw,
+  setCash,
   recordDividend,
   deleteDividend,
   recordCashAdjustment,
@@ -15,32 +12,14 @@ import {
   archivePortfolio,
   unarchivePortfolio,
   renamePortfolio,
-  findPortfoliosMissingFundingRecord,
-  backfillInitialFunding,
-  getInitialFundingRecord,
 } from "./PortfolioService";
 
 describe("createPortfolioAndSave", () => {
-  it("persists a new portfolio with initial cash", async () => {
+  it("persists a new portfolio with initial cash and no timeline event at all", async () => {
     const repos = createFakeRepositories();
     const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading", initialCash: 5000 });
     expect(portfolio.cash).toBe(5000);
     expect(await repos.portfolios.getById(portfolio.id)).toEqual(portfolio);
-  });
-
-  it("also records the initial cash as a dated Deposit event, so return-% calculators have a real capital basis", async () => {
-    const repos = createFakeRepositories();
-    const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading", initialCash: 5000 });
-    const events = await repos.timeline.getByPortfolio(portfolio.id);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe("Deposit");
-    expect(events[0].amount).toBe(5000);
-    expect(events[0].timestamp).toBe(portfolio.createdAt);
-  });
-
-  it("records no Deposit event when initialCash is zero or omitted", async () => {
-    const repos = createFakeRepositories();
-    const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading" });
     expect(await repos.timeline.getByPortfolio(portfolio.id)).toHaveLength(0);
   });
 });
@@ -80,35 +59,19 @@ describe("renamePortfolio", () => {
   });
 });
 
-describe("deposit / withdraw", () => {
-  it("deposit increases cash and appends a Deposit event", async () => {
+describe("setCash", () => {
+  it("directly sets the cash balance to any value, with no timeline event at all", async () => {
     const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
-    const updated = await deposit(repos, "p1", 500, "top-up");
-    expect(updated.cash).toBe(1500);
-    const events = await repos.timeline.getByPortfolio("p1");
-    expect(events[0].type).toBe("Deposit");
-    expect(events[0].amount).toBe(500);
+    const updated = await setCash(repos, "p1", 7500);
+    expect(updated.cash).toBe(7500);
+    expect((await repos.portfolios.getById("p1"))?.cash).toBe(7500);
+    expect(await repos.timeline.getByPortfolio("p1")).toHaveLength(0);
   });
 
-  it("withdraw decreases cash and appends a Withdrawal event", async () => {
+  it("allows setting cash to a negative value", async () => {
     const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
-    const updated = await withdraw(repos, "p1", 400);
-    expect(updated.cash).toBe(600);
-    const events = await repos.timeline.getByPortfolio("p1");
-    expect(events[0].type).toBe("Withdrawal");
-    expect(events[0].amount).toBe(-400);
-  });
-
-  it("withdraw allows an amount larger than available cash, letting cash go negative", async () => {
-    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 100 })] });
-    const updated = await withdraw(repos, "p1", 200);
-    expect(updated.cash).toBe(-100);
-  });
-
-  it("rejects non-positive amounts", async () => {
-    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 100 })] });
-    await expect(deposit(repos, "p1", 0)).rejects.toThrow();
-    await expect(withdraw(repos, "p1", -10)).rejects.toThrow();
+    const updated = await setCash(repos, "p1", -200);
+    expect(updated.cash).toBe(-200);
   });
 });
 
@@ -151,7 +114,7 @@ describe("deleteDividend", () => {
 
   it("rejects a non-Dividend event", async () => {
     const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 1000 })] });
-    await deposit(repos, "p1", 500);
+    await recordCashAdjustment(repos, "p1", 500, "top-up");
     const [event] = await repos.timeline.getByPortfolio("p1");
 
     await expect(deleteDividend(repos, event)).rejects.toThrow(/non-Dividend/i);
@@ -184,123 +147,5 @@ describe("recordSplit / recordRightsIssue", () => {
     await recordRightsIssue(repos, "p1", { ticker: "COMI", notes: "1-for-4 at 10 EGP" });
     const events = await repos.timeline.getByPortfolio("p1");
     expect(events[0].type).toBe("RightsIssue");
-  });
-});
-
-describe("findPortfoliosMissingFundingRecord", () => {
-  it("computes the exact missing deposit via ledger reconciliation (the reported all-zero-charts bug)", () => {
-    // Real scenario: a 5,000 EGP deposit that was never recorded, then a buy
-    // (-1,000) and a sell (+1,500) that WERE applied to cash normally,
-    // leaving a real cash balance of 5,500 — exactly what createPortfolioAndSave
-    // produced before this fix (Portfolio.cash set directly, no Deposit event).
-    const portfolio = createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5500 });
-    const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
-    const allocation = makeAllocation({ tradeId: "t1", portfolioId: "p1", ticker: "COMI", sharesClosed: 100, exitPrice: 15 });
-    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], []);
-    expect(entries).toEqual([{ portfolioId: "p1", portfolioName: "Long Positions", missingAmount: 5000 }]);
-  });
-
-  it("does not flag a portfolio whose current cash is already fully explained by recorded events (a small unrelated top-up included)", () => {
-    // Same trading activity, but this time the ORIGINAL 5,000 was properly
-    // recorded as a Deposit, plus a later, real, small top-up Deposit — an
-    // "any deposit at all ⇒ skip" check would wrongly pass this if the
-    // top-up were the only one considered; reconciliation must use the total.
-    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5600 });
-    const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
-    const allocation = makeAllocation({ tradeId: "t1", portfolioId: "p1", ticker: "COMI", sharesClosed: 100, exitPrice: 15 });
-    const deposits: TimelineEvent[] = [
-      { id: "d1", portfolioId: "p1", type: "Deposit", timestamp: "2026-01-01T00:00", amount: 5000, attachments: [], createdAt: "2026-01-01T00:00" },
-      { id: "d2", portfolioId: "p1", type: "Deposit", timestamp: "2026-03-01T00:00", amount: 100, attachments: [], createdAt: "2026-03-01T00:00" },
-    ];
-    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], deposits);
-    expect(entries).toEqual([]);
-  });
-
-  it("still flags a portfolio that has SOME recorded deposit, but not enough to cover its real cash balance", () => {
-    // The exact shape that slipped through the earlier "any deposit ⇒ skip"
-    // check: a small top-up was recorded, but the bulk of the funding (set
-    // directly on Portfolio.cash at creation) never was.
-    const portfolio = createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5600 });
-    const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
-    const allocation = makeAllocation({ tradeId: "t1", portfolioId: "p1", ticker: "COMI", sharesClosed: 100, exitPrice: 15 });
-    const topUpOnly: TimelineEvent[] = [
-      { id: "d2", portfolioId: "p1", type: "Deposit", timestamp: "2026-03-01T00:00", amount: 100, attachments: [], createdAt: "2026-03-01T00:00" },
-    ];
-    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], topUpOnly);
-    expect(entries).toEqual([{ portfolioId: "p1", portfolioName: "Long Positions", missingAmount: 5000 }]);
-  });
-
-  it("does not flag a portfolio whose cash is fully explained even with no trades at all", () => {
-    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 });
-    const deposit: TimelineEvent = {
-      id: "d1",
-      portfolioId: "p1",
-      type: "Deposit",
-      timestamp: "2026-01-01T00:00",
-      amount: 5000,
-      attachments: [],
-      createdAt: "2026-01-01T00:00",
-    };
-    const entries = findPortfoliosMissingFundingRecord([portfolio], [], [], [deposit]);
-    expect(entries).toEqual([]);
-  });
-});
-
-describe("backfillInitialFunding", () => {
-  it("records a dated Deposit event without touching Portfolio.cash", async () => {
-    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
-    await backfillInitialFunding(repos, "p1", 5000, "2026-01-01");
-    const events = await repos.timeline.getByPortfolio("p1");
-    expect(events[0].type).toBe("Deposit");
-    expect(events[0].amount).toBe(5000);
-    expect(events[0].timestamp).toBe("2026-01-01T00:00");
-    expect((await repos.portfolios.getById("p1"))?.cash).toBe(5000);
-  });
-
-  it("rejects a non-positive amount", async () => {
-    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
-    await expect(backfillInitialFunding(repos, "p1", 0, "2026-01-01")).rejects.toThrow();
-  });
-
-  it("rejects a date before the tracking start", async () => {
-    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
-    await expect(backfillInitialFunding(repos, "p1", 5000, "2025-12-31")).rejects.toThrow(/2026-01-01/);
-  });
-
-  it("edits the existing starting-balance record in place instead of stacking a duplicate", async () => {
-    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
-    await backfillInitialFunding(repos, "p1", 5000, "2026-01-01");
-    await backfillInitialFunding(repos, "p1", 7500, "2026-01-15");
-
-    const events = await repos.timeline.getByPortfolio("p1");
-    expect(events).toHaveLength(1);
-    expect(events[0].amount).toBe(7500);
-    expect(events[0].timestamp).toBe("2026-01-15T00:00");
-  });
-});
-
-describe("getInitialFundingRecord", () => {
-  it("returns undefined when no starting-balance record has ever been set", async () => {
-    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
-    expect(getInitialFundingRecord(await repos.timeline.getByPortfolio("p1"), "p1")).toBeUndefined();
-  });
-
-  it("returns the current amount/date after backfillInitialFunding sets it, for an edit UI to pre-fill", async () => {
-    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
-    await backfillInitialFunding(repos, "p1", 5000, "2026-01-01");
-    const record = getInitialFundingRecord(await repos.timeline.getByPortfolio("p1"), "p1");
-    expect(record).toEqual({ amount: 5000, date: "2026-01-01" });
-  });
-
-  it("createPortfolioAndSave's own initial-funding event is also found and editable through the same lookup", async () => {
-    const repos = createFakeRepositories();
-    const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading", initialCash: 5000 });
-    const before = getInitialFundingRecord(await repos.timeline.getByPortfolio(portfolio.id), portfolio.id);
-    expect(before?.amount).toBe(5000);
-
-    await backfillInitialFunding(repos, portfolio.id, 6000, "2026-02-01");
-    const events = await repos.timeline.getByPortfolio(portfolio.id);
-    expect(events).toHaveLength(1); // edited in place, not a second record
-    expect(getInitialFundingRecord(events, portfolio.id)).toEqual({ amount: 6000, date: "2026-02-01" });
   });
 });

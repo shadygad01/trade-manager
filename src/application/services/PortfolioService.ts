@@ -1,7 +1,5 @@
 import { createPortfolio, type Portfolio, type PortfolioKind } from "@domain/entities/Portfolio";
 import { createTimelineEvent, type TimelineEvent } from "@domain/entities/TimelineEvent";
-import type { Trade } from "@domain/entities/Trade";
-import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -16,32 +14,9 @@ export interface CreatePortfolioInput {
   notes?: string;
 }
 
-/**
- * `initialCash` also gets a dated Deposit event, not just the raw
- * `Portfolio.cash` field — every return-% calculator (performanceCurve,
- * bucketPerformance, portfolioReturn) measures gains against net contributed
- * capital drawn *only* from Deposit/Withdrawal timeline events, so a
- * portfolio funded solely via this field (with no matching event) reads as
- * having contributed zero capital: every realized/dividend % permanently
- * computes as 0%, no matter how much was actually gained (see
- * findPortfoliosMissingFundingRecord for the backfill path on portfolios
- * that already exist without this event).
- */
 export async function createPortfolioAndSave(repos: AppRepositories, input: CreatePortfolioInput): Promise<Portfolio> {
   const portfolio = createPortfolio({ id: generateId(), ...input });
   await repos.portfolios.save(portfolio);
-  if (input.initialCash && input.initialCash > 0) {
-    await repos.timeline.save(
-      createTimelineEvent({
-        id: initialFundingEventId(portfolio.id),
-        portfolioId: portfolio.id,
-        type: "Deposit",
-        timestamp: portfolio.createdAt,
-        amount: input.initialCash,
-        notes: INITIAL_FUNDING_NOTE,
-      })
-    );
-  }
   return portfolio;
 }
 
@@ -86,61 +61,18 @@ export async function renamePortfolio(repos: AppRepositories, portfolioId: strin
 }
 
 /**
- * Cash is a supplementary figure, not a gate: it can go negative rather than
- * blocking a withdrawal, deposit, buy, or portfolio move. It exists to show
- * the balance an investor intends to work with, not to verify that a trade
- * actually happened — the broker screenshot/invoice is the source of truth
- * for that.
+ * Directly sets the cash balance to a new value — no history, no deposit or
+ * withdrawal event, just a correction to the number itself. Cash is a
+ * supplementary figure the user maintains for their own reference (how much
+ * is left to spend in this book), not a verified ledger — the broker
+ * screenshot/invoice is the source of truth for whether a trade happened,
+ * and portfolio performance is measured against cost basis (see
+ * performanceCurve.ts), never against this number.
  */
-export async function deposit(
-  repos: AppRepositories,
-  portfolioId: string,
-  amount: number,
-  notes?: string
-): Promise<Portfolio> {
-  if (amount <= 0) {
-    throw new Error("deposit amount must be positive");
-  }
+export async function setCash(repos: AppRepositories, portfolioId: string, newCash: number): Promise<Portfolio> {
   const portfolio = await requirePortfolio(repos, portfolioId);
-  const updated = { ...portfolio, cash: Money.from(portfolio.cash).add(Money.from(amount)).toNumber() };
+  const updated = { ...portfolio, cash: Money.from(newCash).toNumber() };
   await repos.portfolios.save(updated);
-  await repos.timeline.save(
-    createTimelineEvent({
-      id: generateId(),
-      portfolioId,
-      type: "Deposit",
-      timestamp: new Date().toISOString(),
-      amount,
-      notes,
-    })
-  );
-  return updated;
-}
-
-export async function withdraw(
-  repos: AppRepositories,
-  portfolioId: string,
-  amount: number,
-  notes?: string
-): Promise<Portfolio> {
-  if (amount <= 0) {
-    throw new Error("withdraw amount must be positive");
-  }
-  const portfolio = await requirePortfolio(repos, portfolioId);
-  const currentCash = Money.from(portfolio.cash);
-  const withdrawAmount = Money.from(amount);
-  const updated = { ...portfolio, cash: currentCash.subtract(withdrawAmount).toNumber() };
-  await repos.portfolios.save(updated);
-  await repos.timeline.save(
-    createTimelineEvent({
-      id: generateId(),
-      portfolioId,
-      type: "Withdrawal",
-      timestamp: new Date().toISOString(),
-      amount: -amount,
-      notes,
-    })
-  );
   return updated;
 }
 
@@ -259,129 +191,4 @@ export async function recordRightsIssue(
       notes: input.notes,
     })
   );
-}
-
-export interface MissingFundingEntry {
-  portfolioId: string;
-  portfolioName: string;
-  /**
-   * The exact amount of cash this portfolio currently holds that no
-   * Deposit/Withdrawal/CashAdjustment/Dividend/trade event can account for —
-   * i.e. `Portfolio.cash` minus what the rest of the ledger implies it
-   * should be. This is the true missing initial-funding amount, not a guess.
-   */
-  missingAmount: number;
-}
-
-/**
- * Flags a portfolio whose current cash balance doesn't reconcile against
- * everything its ledger actually explains — every Deposit/Withdrawal/
- * CashAdjustment/Dividend event, plus every trade's buy cost and every
- * allocation's sell proceeds (recordBuy/recordSell's own cash math,
- * mirrored here). Any leftover difference is cash that came from nowhere the
- * ledger can name — in practice, `Portfolio.cash` set directly at creation
- * before `createPortfolioAndSave` recorded a matching dated Deposit event.
- *
- * This intentionally checks the balance itself rather than "is any Deposit
- * recorded at all": a portfolio that has since logged a small, unrelated
- * top-up deposit still reconciles to a large missing amount here, whereas an
- * "any deposit ⇒ skip" check would have missed it entirely. Every
- * realized/dividend % calculator divides by whatever *is* recorded as
- * contributed capital, so this exact shortfall is exactly what's silently
- * missing from every return-% chart until it's backfilled.
- *
- * Only portfolios with at least one trade or dividend are considered — a
- * portfolio that's never traded has nothing for a return-% calculator to get
- * wrong yet, so there's no point nagging about a funding gap that isn't
- * visibly affecting anything.
- */
-export function findPortfoliosMissingFundingRecord(
-  portfolios: Portfolio[],
-  trades: Trade[],
-  allocations: TradeAllocation[],
-  timelineEvents: TimelineEvent[]
-): MissingFundingEntry[] {
-  const entries: MissingFundingEntry[] = [];
-
-  for (const portfolio of portfolios) {
-    const ownTrades = trades.filter((t) => t.portfolioId === portfolio.id);
-    const ownEvents = timelineEvents.filter((e) => e.portfolioId === portfolio.id);
-    const hasDividend = ownEvents.some((e) => e.type === "Dividend");
-    if (ownTrades.length === 0 && !hasDividend) continue;
-
-    const cashEvents = ownEvents
-      .filter((e) => e.type === "Deposit" || e.type === "Withdrawal" || e.type === "CashAdjustment" || e.type === "Dividend")
-      .reduce((sum, e) => sum + (e.amount ?? 0), 0);
-
-    const buyCost = ownTrades.reduce((sum, t) => sum + t.shares * t.entryPrice + t.fees + t.taxes, 0);
-    const sellProceeds = allocations
-      .filter((a) => a.portfolioId === portfolio.id)
-      .reduce((sum, a) => sum + a.sharesClosed * a.exitPrice - a.fees - a.taxes, 0);
-
-    const expectedCash = cashEvents - buyCost + sellProceeds;
-    const missingAmount = Math.round((portfolio.cash - expectedCash) * 100) / 100;
-
-    if (missingAmount > 0.01) {
-      entries.push({ portfolioId: portfolio.id, portfolioName: portfolio.name, missingAmount });
-    }
-  }
-
-  return entries;
-}
-
-/** Fixed marker distinguishing the one backfilled "starting balance" record from ordinary Deposit/Withdrawal events. */
-const INITIAL_FUNDING_NOTE = "Starting balance (edited directly, not a real deposit/withdrawal — see Portfolios page).";
-
-/** Deterministic (not random) so re-calling `backfillInitialFunding` for the same portfolio edits this one record in place instead of creating a duplicate. */
-function initialFundingEventId(portfolioId: string): string {
-  return `initial-funding:${portfolioId}`;
-}
-
-/**
- * Sets (or edits) the one dated record for capital that funded a portfolio
- * before anyone recorded it as a dated event — typically initial cash set at
- * creation, but also usable any time the user wants to correct their
- * starting balance directly, since this is explicitly NOT a deposit or a
- * withdrawal (no new/removed money — it's a correction to the number the
- * portfolio started at). Deliberately does NOT touch `Portfolio.cash` — that
- * balance already reflects this funding; this only gives the return-%
- * calculators the capital basis they need. Calling it again with a
- * different amount/date replaces the previous value rather than stacking a
- * second record, so it doubles as an "edit starting balance" action.
- */
-export async function backfillInitialFunding(
-  repos: AppRepositories,
-  portfolioId: string,
-  amount: number,
-  date: string
-): Promise<void> {
-  if (amount <= 0) {
-    throw new Error("backfill amount must be positive");
-  }
-  if (isBeforeTrackingStart(date)) {
-    throw new Error(`Transactions before ${TRACKING_START_DATE} are not tracked: got ${date}`);
-  }
-  await requirePortfolio(repos, portfolioId);
-  await repos.timeline.save(
-    createTimelineEvent({
-      id: initialFundingEventId(portfolioId),
-      portfolioId,
-      type: "Deposit",
-      timestamp: `${date}T00:00`,
-      amount,
-      notes: INITIAL_FUNDING_NOTE,
-    })
-  );
-}
-
-export interface InitialFundingRecord {
-  amount: number;
-  date: string;
-}
-
-/** Looks up the one backfilled starting-balance record for a portfolio, if it has ever been set, so an "edit" UI can pre-fill the current value instead of starting blank. */
-export function getInitialFundingRecord(timelineEvents: TimelineEvent[], portfolioId: string): InitialFundingRecord | undefined {
-  const event = timelineEvents.find((e) => e.id === initialFundingEventId(portfolioId));
-  if (!event) return undefined;
-  return { amount: event.amount ?? 0, date: event.timestamp.slice(0, 10) };
 }
