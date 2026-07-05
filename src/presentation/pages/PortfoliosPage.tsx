@@ -260,7 +260,7 @@ function MissingFundingBanner({
 
   async function handleRecord(entry: MissingFundingEntry) {
     const portfolio = portfolios.find((p) => p.id === entry.portfolioId);
-    const amount = Number.parseFloat(amountByPortfolio[entry.portfolioId] ?? "");
+    const amount = Number.parseFloat(amountByPortfolio[entry.portfolioId] ?? String(entry.missingAmount));
     const date = dateByPortfolio[entry.portfolioId] ?? portfolio?.createdAt.slice(0, 10) ?? "";
     if (!amount || amount <= 0) {
       setError({ portfolioId: entry.portfolioId, message: "Enter how much cash actually funded this portfolio." });
@@ -283,11 +283,12 @@ function MissingFundingBanner({
         <ShieldAlert size={16} /> Portfolios missing an initial funding record
       </p>
       <p className="mb-3 text-xs text-amber-300/70">
-        These portfolios have real realized gains or dividends on the ledger, but no Deposit was ever recorded for
-        them — usually because the starting cash was set when the portfolio was created, before that got tracked as
-        a dated event. Every realized/dividend % on the Dashboard and Analytics pages reads as 0% for these until the
-        true starting capital is recorded below. This never touches the cash balance already shown on the portfolio
-        card — it only backfills the missing dated record the % calculators need.
+        These portfolios hold cash that nothing on their ledger explains — usually because the starting cash was set
+        when the portfolio was created, before that got tracked as a dated event. Every realized/dividend % on the
+        Dashboard and Analytics pages reads as 0% (or wrong) for these until the true starting capital is recorded
+        below. The amount is pre-filled from the exact gap between the cash balance and everything the ledger
+        accounts for — review it, adjust if needed, and confirm. This never touches the cash balance already shown
+        on the portfolio card — it only backfills the missing dated record the % calculators need.
       </p>
       <ul className="space-y-2">
         {missingFunding.map((entry) => {
@@ -298,15 +299,12 @@ function MissingFundingBanner({
               className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-900/40 px-3 py-2 text-sm"
             >
               <span className="text-slate-200">
-                <span className="font-semibold">{entry.portfolioName}</span>{" "}
-                <span className="text-slate-400">
-                  ({formatMoney(entry.realizedAndDividendTotal)} of realized/dividend gains currently hidden)
-                </span>
+                <span className="font-semibold">{entry.portfolioName}</span>
               </span>
               <input
                 type="number"
                 placeholder="Original funding (EGP)"
-                value={amountByPortfolio[entry.portfolioId] ?? ""}
+                value={amountByPortfolio[entry.portfolioId] ?? String(entry.missingAmount)}
                 onChange={(e) => setAmountByPortfolio((prev) => ({ ...prev, [entry.portfolioId]: e.target.value }))}
                 className="w-40 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
               />

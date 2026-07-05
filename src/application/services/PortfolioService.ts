@@ -1,7 +1,7 @@
 import { createPortfolio, type Portfolio, type PortfolioKind } from "@domain/entities/Portfolio";
 import { createTimelineEvent, type TimelineEvent } from "@domain/entities/TimelineEvent";
 import type { Trade } from "@domain/entities/Trade";
-import { realizedPnlMicros, type TradeAllocation } from "@domain/entities/TradeAllocation";
+import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -264,20 +264,36 @@ export async function recordRightsIssue(
 export interface MissingFundingEntry {
   portfolioId: string;
   portfolioName: string;
-  /** Realized P/L (closed lots) + dividends already earned but currently unrepresentable as a %, since net contributed capital reads as zero. */
-  realizedAndDividendTotal: number;
+  /**
+   * The exact amount of cash this portfolio currently holds that no
+   * Deposit/Withdrawal/CashAdjustment/Dividend/trade event can account for —
+   * i.e. `Portfolio.cash` minus what the rest of the ledger implies it
+   * should be. This is the true missing initial-funding amount, not a guess.
+   */
+  missingAmount: number;
 }
 
 /**
- * Flags a portfolio whose ledger shows real realized gains/losses or
- * dividends, but zero net contributed capital (Deposits − Withdrawals) ever
- * recorded on its timeline — the shape left behind by a portfolio funded
- * only through `Portfolio.cash` at creation before this was tracked as a
- * dated event (see createPortfolioAndSave's doc comment). In that shape,
- * every realized/dividend % calculator divides by zero and silently reports
- * 0%, hiding real performance data that already exists on the ledger.
- * Portfolios with no realized activity yet are never flagged — 0% is
- * already correct for those regardless of this bug.
+ * Flags a portfolio whose current cash balance doesn't reconcile against
+ * everything its ledger actually explains — every Deposit/Withdrawal/
+ * CashAdjustment/Dividend event, plus every trade's buy cost and every
+ * allocation's sell proceeds (recordBuy/recordSell's own cash math,
+ * mirrored here). Any leftover difference is cash that came from nowhere the
+ * ledger can name — in practice, `Portfolio.cash` set directly at creation
+ * before `createPortfolioAndSave` recorded a matching dated Deposit event.
+ *
+ * This intentionally checks the balance itself rather than "is any Deposit
+ * recorded at all": a portfolio that has since logged a small, unrelated
+ * top-up deposit still reconciles to a large missing amount here, whereas an
+ * "any deposit ⇒ skip" check would have missed it entirely. Every
+ * realized/dividend % calculator divides by whatever *is* recorded as
+ * contributed capital, so this exact shortfall is exactly what's silently
+ * missing from every return-% chart until it's backfilled.
+ *
+ * Only portfolios with at least one trade or dividend are considered — a
+ * portfolio that's never traded has nothing for a return-% calculator to get
+ * wrong yet, so there's no point nagging about a funding gap that isn't
+ * visibly affecting anything.
  */
 export function findPortfoliosMissingFundingRecord(
   portfolios: Portfolio[],
@@ -285,27 +301,28 @@ export function findPortfoliosMissingFundingRecord(
   allocations: TradeAllocation[],
   timelineEvents: TimelineEvent[]
 ): MissingFundingEntry[] {
-  const tradesById = new Map(trades.map((t) => [t.id, t]));
   const entries: MissingFundingEntry[] = [];
 
   for (const portfolio of portfolios) {
-    const contributed = timelineEvents
-      .filter((e) => e.portfolioId === portfolio.id && (e.type === "Deposit" || e.type === "Withdrawal"))
-      .reduce((sum, e) => sum + (e.amount ?? 0), 0);
-    if (contributed > 0) continue;
+    const ownTrades = trades.filter((t) => t.portfolioId === portfolio.id);
+    const ownEvents = timelineEvents.filter((e) => e.portfolioId === portfolio.id);
+    const hasDividend = ownEvents.some((e) => e.type === "Dividend");
+    if (ownTrades.length === 0 && !hasDividend) continue;
 
-    const realizedTotal = allocations
+    const cashEvents = ownEvents
+      .filter((e) => e.type === "Deposit" || e.type === "Withdrawal" || e.type === "CashAdjustment" || e.type === "Dividend")
+      .reduce((sum, e) => sum + (e.amount ?? 0), 0);
+
+    const buyCost = ownTrades.reduce((sum, t) => sum + t.shares * t.entryPrice + t.fees + t.taxes, 0);
+    const sellProceeds = allocations
       .filter((a) => a.portfolioId === portfolio.id)
-      .reduce((sum, a) => {
-        const trade = tradesById.get(a.tradeId);
-        return trade ? sum + realizedPnlMicros(a, trade) / 1_000_000 : sum;
-      }, 0);
-    const dividendTotal = timelineEvents
-      .filter((e) => e.portfolioId === portfolio.id && e.type === "Dividend")
-      .reduce((sum, e) => sum + (e.amount ?? 0), 0);
+      .reduce((sum, a) => sum + a.sharesClosed * a.exitPrice - a.fees - a.taxes, 0);
 
-    if (realizedTotal !== 0 || dividendTotal !== 0) {
-      entries.push({ portfolioId: portfolio.id, portfolioName: portfolio.name, realizedAndDividendTotal: realizedTotal + dividendTotal });
+    const expectedCash = cashEvents - buyCost + sellProceeds;
+    const missingAmount = Math.round((portfolio.cash - expectedCash) * 100) / 100;
+
+    if (missingAmount > 0.01) {
+      entries.push({ portfolioId: portfolio.id, portfolioName: portfolio.name, missingAmount });
     }
   }
 

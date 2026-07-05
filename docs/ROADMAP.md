@@ -624,7 +624,16 @@ User asked for a screenshot proof of the just-shipped realized/unrealized/divide
 - 12 new/changed tests (434 total): `createPortfolioAndSave` now asserts the Deposit event; `findPortfoliosMissingFundingRecord`/`backfillInitialFunding` cover the flag/no-flag/backfill cases; `PortfoliosPage` covers the banner appearing, backfilling, and disappearing once funding is recorded.
 - Verified end-to-end against a real running build: reproduced the exact reported shape (a portfolio funded only via `initialCash`, a real +E£500 realized gain, no Deposit event) — confirmed Realized Return read +0.00% and Monthly Return was empty before the fix; after using the new banner's "Record funding" action, Realized Return correctly showed +10.00%, Monthly Return rendered a real bar, and the portfolio's cash balance was unchanged (5,500 before and after).
 
-### Post-sprint-8 — day-by-day historical price accumulation (infrastructure only, no consuming feature yet)
+### Post-sprint-8 fix — the funding-gap detector missed portfolios that already had *some* (insufficient) recorded deposit
+
+The fix above shipped, but the user's own real portfolios still showed no banner at all and still-empty charts — the detector's "flag only if zero net contributed capital was *ever* recorded" check was too narrow: a portfolio that has since logged one small, real, unrelated top-up Deposit has `contributed > 0` and was skipped outright, even though that top-up covers only a sliver of the portfolio's real cash balance.
+
+- **`findPortfoliosMissingFundingRecord`**: rewritten from "is any Deposit recorded at all" to an exact ledger reconciliation — `Portfolio.cash` minus (every Deposit/Withdrawal/CashAdjustment/Dividend event, minus every trade's buy cost, plus every allocation's sell proceeds, mirroring `recordBuy`/`recordSell`'s own cash math). Any positive leftover is cash the ledger can't explain, and is exactly the missing funding amount — not just a yes/no flag. Only portfolios with at least one trade or dividend are considered (nothing to get wrong yet otherwise).
+- **`MissingFundingEntry`** now carries `missingAmount` (the exact reconciled gap) instead of a realized/dividend total; the **banner's amount input pre-fills with this exact number** instead of asking the user to guess or recall it from memory — they can still review/adjust before confirming.
+- 4 new/changed tests: the exact-reconciliation math on a realistic buy+sell scenario, a portfolio with a small real top-up deposit that still gets correctly flagged (the shape that slipped through before), a portfolio whose cash is already fully explained even with a top-up present, and a no-trades portfolio that's still correctly left alone.
+- Verified end-to-end against a real running build: reproduced the "Old School" shape from the user's real screenshots (E£201,463.82 cash, no open positions, one small real top-up Deposit already recorded) — confirmed the banner now appears where it previously didn't, with the amount input pre-filled to the exact reconciled gap (E£150,463.82).
+
+## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
 2. ~~**Sector Allocation**~~ — done (see above): `Trade.sector` added, auto-assigned from a known-ticker map, feeding a real Dashboard pie chart.

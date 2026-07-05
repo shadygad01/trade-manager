@@ -204,8 +204,12 @@ describe("PortfoliosPage", () => {
     expect(screen.queryByText("Tickers filed under the wrong name")).not.toBeInTheDocument();
   });
 
-  it("flags a portfolio with a real realized gain but no recorded funding, and backfills a Deposit event on submit (the reported all-zero-charts bug)", async () => {
-    state.portfolios = [createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5000 })];
+  it("flags a portfolio whose cash isn't explained by its ledger, pre-fills the exact gap, and backfills a Deposit event on submit (the reported all-zero-charts bug)", async () => {
+    // Real scenario: a 5,000 EGP deposit that was never recorded, then a buy
+    // (-1,000) and a sell (+1,500) applied normally to cash, leaving a real
+    // balance of 5,500 — exactly what createPortfolioAndSave produced before
+    // this fix (Portfolio.cash set directly, no Deposit event).
+    state.portfolios = [createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5500 })];
     state.trades = [
       createTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-05", executionTime: "10:00" }),
     ];
@@ -228,15 +232,14 @@ describe("PortfoliosPage", () => {
     renderPage();
 
     expect(await screen.findByText("Portfolios missing an initial funding record")).toBeInTheDocument();
-    expect(screen.getByText(/of realized\/dividend gains currently hidden/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Original funding (EGP)")).toHaveValue(5000); // pre-filled with the exact reconciled gap
 
-    await user.type(screen.getByPlaceholderText("Original funding (EGP)"), "5000");
     await user.click(screen.getByRole("button", { name: /record funding/i }));
 
     await waitFor(() => {
       expect(state.timeline.some((e) => e.portfolioId === "p1" && e.type === "Deposit" && e.amount === 5000)).toBe(true);
     });
-    expect(state.portfolios[0].cash).toBe(5000); // backfilling never touches the cash balance
+    expect(state.portfolios[0].cash).toBe(5500); // backfilling never touches the cash balance
   });
 
   it("does not show the missing-funding banner once a Deposit is already recorded", async () => {
