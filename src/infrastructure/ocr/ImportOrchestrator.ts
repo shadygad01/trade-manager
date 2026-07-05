@@ -4,6 +4,7 @@ import { extractPdfText } from "./pdfText";
 import { loadImageToCanvas, cropHeaderBand, preprocessForOcr, segmentOrderRows } from "./imagePreprocess";
 import { recognizeWithFallback, recognizeBatch } from "./tesseractClient";
 import type { BrokerParser, OrderRowText } from "./parsers/BrokerParser";
+import { flatResultIsDeficient, missingFulfilledCount, shouldPreferRowScan } from "./ordersScanSelection";
 import { ThndrParser } from "./parsers/ThndrParser";
 import { CsvStatementParser } from "./parsers/CsvStatementParser";
 
@@ -131,21 +132,21 @@ export class ImportOrchestrator {
       }
     }
 
-    // 3. Orders-screen screenshots: flat parse first, then — only when the
-    // flat parse found nothing and this is an image — the row-isolated
-    // re-scan fallback, which eliminates cross-row action/status mispairing
-    // by construction (each image slice can only ever contain one row).
+    // 3. Orders-screen screenshots: flat parse first, then — whenever the
+    // flat parse found nothing OR its own signals say it lost/mispaired a
+    // row, and this is an image — the row-isolated re-scan, which eliminates
+    // cross-row action/status mispairing by construction (each image slice
+    // can only ever contain one row). Re-scanning on a merely *partial* flat
+    // result matters just as much as on an empty one: a clear screenshot
+    // that flat-parsed 4-of-5 used to ship with a "may be missing" warning
+    // without ever trying the more reliable path.
     for (const parser of candidateParsers) {
       const flatResult = parser.parseOrdersScreenText(rawText);
-      let candidates = flatResult.candidates;
-      let incompleteRowCount = flatResult.incompleteRowCount;
-      let fulfilledStatusCount = flatResult.fulfilledStatusCount;
-      let statusCountMismatch = flatResult.statusCountMismatch;
-      let outOfRangeCount = flatResult.outOfRangeCount ?? 0;
+      let chosen: typeof flatResult = flatResult;
       let usedRowScan = false;
       let rowScanLog = "";
 
-      if (candidates.length === 0 && isImage && sourceCanvas) {
+      if (flatResultIsDeficient(flatResult) && isImage && sourceCanvas) {
         const headerTicker = parser.resolveHeaderTicker(rawText);
         if (headerTicker) {
           const slices = segmentOrderRows(sourceCanvas);
@@ -156,17 +157,12 @@ export class ImportOrchestrator {
             );
             const rows: OrderRowText[] = slices.map((s, i) => ({ text: rowTexts[i], colorStatus: s.colorStatus }));
             const rowResult = parser.parseOrderRowsText(rows, headerTicker);
-            // Trust the row scan whenever it understood at least one row
-            // (resolved a definite fulfilled/cancelled/etc. status) —
+            // Adoption is guarded so switching can never lose a trade the
+            // flat parse already extracted (see ordersScanSelection.ts) —
             // including the legitimate all-cancelled case where zero
-            // candidates is the correct answer. Only when it resolved
-            // nothing (unexpected layout) does the flat result stand.
-            if (rowResult.resolvedRowCount > 0) {
-              candidates = rowResult.candidates;
-              incompleteRowCount = rowResult.incompleteRowCount;
-              fulfilledStatusCount = rowResult.fulfilledStatusCount;
-              statusCountMismatch = rowResult.statusCountMismatch;
-              outOfRangeCount = rowResult.outOfRangeCount ?? 0;
+            // candidates from a resolved row scan is the correct answer.
+            if (shouldPreferRowScan(flatResult, rowResult)) {
+              chosen = rowResult;
               usedRowScan = true;
             }
             // Kept so a wrong outcome can be diagnosed from what each
@@ -180,15 +176,18 @@ export class ImportOrchestrator {
         }
       }
 
+      const { candidates, incompleteRowCount, fulfilledStatusCount, statusCountMismatch } = chosen;
+      const outOfRangeCount = chosen.outOfRangeCount ?? 0;
+
       if (candidates.length > 0 || usedRowScan) {
         const warnings: string[] = [];
         // Broader cross-check than incompleteRowCount alone: compares what
         // the screenshot visually shows as fulfilled against what actually
         // made it into the result, regardless of the specific cause.
-        const missingFulfilledCount = Math.max(0, fulfilledStatusCount - candidates.length);
-        if (missingFulfilledCount > 0) {
+        const missingCount = missingFulfilledCount(chosen);
+        if (missingCount > 0) {
           warnings.push(
-            `Screenshot shows ${fulfilledStatusCount} "Fulfilled" order(s) but only ${candidates.length} were extracted — ${missingFulfilledCount} may be missing. Try re-uploading a clearer or larger screenshot.`,
+            `Screenshot shows ${fulfilledStatusCount} "Fulfilled" order(s) but only ${candidates.length} were extracted — ${missingCount} may be missing. Try re-uploading a clearer or larger screenshot.`,
           );
         } else if (incompleteRowCount > 0) {
           warnings.push(
