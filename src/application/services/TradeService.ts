@@ -5,7 +5,7 @@ import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
-import { KNOWN_EGX_TICKERS } from "@domain/value-objects/knownTickers";
+import { KNOWN_EGX_TICKERS, tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
 import { TRACKING_START_DATE, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
 
@@ -521,6 +521,44 @@ export function findTickersSplitAcrossPortfolios(trades: Trade[]): SplitTickerEn
     }
   }
   return result.sort((a, b) => a.ticker.localeCompare(b.ticker));
+}
+
+export interface MisnamedTickerEntry {
+  /** The raw company-name string a ticker group ended up filed under, e.g. "MEDINET MASR HOUSING". */
+  wrongTicker: string;
+  /** The real EGX symbol it should be, e.g. "MASR". */
+  realTicker: string;
+  shares: number;
+}
+
+/**
+ * A ticker string that's actually a company name (see
+ * tickerForCompanyNameFallback) means some trades were committed back when
+ * that company wasn't yet in KNOWN_EGX_TICKERS, so OCR ticker resolution fell
+ * back to filing the whole group under the raw name instead of the real
+ * symbol — the same split Import's own one-click rename fixes for a still-
+ * pending batch (see knownTickers.ts's own doc comment), except these rows
+ * are already fully committed and long since cleared from any Import
+ * session, so that pending-pool-only fix can never reach them again. This
+ * surfaces every such already-recorded ticker globally (not scoped to one
+ * portfolio — the real symbol may already have its own trades elsewhere)
+ * so it can be pointed at renameTickerEverywhere.
+ */
+export function findMisnamedTickers(trades: Trade[]): MisnamedTickerEntry[] {
+  const sharesByTicker = new Map<string, number>();
+  for (const t of trades) {
+    const ticker = normalizeTicker(t.ticker);
+    sharesByTicker.set(ticker, (sharesByTicker.get(ticker) ?? 0) + t.remainingShares);
+  }
+
+  const result: MisnamedTickerEntry[] = [];
+  for (const [wrongTicker, shares] of sharesByTicker) {
+    const realTicker = tickerForCompanyNameFallback(wrongTicker);
+    if (realTicker && normalizeTicker(realTicker) !== wrongTicker) {
+      result.push({ wrongTicker, realTicker: normalizeTicker(realTicker), shares });
+    }
+  }
+  return result.sort((a, b) => a.wrongTicker.localeCompare(b.wrongTicker));
 }
 
 export interface ConsolidateTickerResult {
