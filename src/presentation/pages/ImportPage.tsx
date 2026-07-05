@@ -835,6 +835,50 @@ export function ImportPage() {
   }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications]);
 
   /**
+   * The one case where alreadyFullyRecorded's "discard all pending" is the
+   * WRONG direction: the ticker's recorded shares are opening-balance
+   * placeholder lots (no real dates — see the retired Record-as-opening-
+   * balance flow) and this batch carries the ticker's REAL dated
+   * transactions adding up to the same broker-verified total. Discarding
+   * the pending rows would keep the dateless placeholder and throw away the
+   * real data — the right move is the exact opposite: delete the
+   * placeholder lots and let the real rows verify and confirm. Only offered
+   * for the clean swap (every existing share is a deletable placeholder AND
+   * the pending rows alone reconcile with the broker), so the replacement
+   * can never half-apply.
+   */
+  const placeholderReplacements = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const [ticker] of tickerGroups) {
+      const status = tickerMatchStatuses.get(ticker);
+      if (!status || status.reason !== "mismatch" || !status.alreadyFullyRecorded || status.verifiedUnits === undefined) continue;
+      const pendingNet = status.netShares - (status.existingRemainingShares ?? 0);
+      if (Math.abs(pendingNet - status.verifiedUnits) >= 1e-6) continue;
+      const existingOpen = existingTrades.filter((t) => normalizeTicker(t.ticker) === ticker && t.remainingShares > 0);
+      if (existingOpen.length === 0) continue;
+      const allDeletablePlaceholders = existingOpen.every(
+        (t) => t.notes?.startsWith("Opening balance") && t.remainingShares === t.shares,
+      );
+      if (allDeletablePlaceholders) map.set(ticker, existingOpen.map((t) => t.id));
+    }
+    return map;
+  }, [tickerGroups, tickerMatchStatuses, existingTrades]);
+
+  const [replacingPlaceholderFor, setReplacingPlaceholderFor] = useState<string | null>(null);
+  async function replacePlaceholderLots(ticker: string, tradeIds: string[]) {
+    setReplacingPlaceholderFor(ticker);
+    try {
+      for (const id of tradeIds) {
+        await deleteTrade(repos, id);
+      }
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : "Failed to delete the placeholder lot.");
+    } finally {
+      setReplacingPlaceholderFor(null);
+    }
+  }
+
+  /**
    * A ticker resolved from an unmapped company name (see ThndrParser's
    * header fallback) can still land on the wrong 4-letter guess, or the same
    * real stock can OCR to a different guess on a different upload — the
@@ -1059,6 +1103,9 @@ export function ImportPage() {
                 suspectedDuplicateKeys={pendingDuplicateCandidateKeySet}
                 wrongTickerHints={wrongTickerHints}
                 reconcileSuggestion={reconcileSuggestions.get(ticker)}
+                placeholderReplacement={placeholderReplacements.has(ticker)}
+                replacingPlaceholder={replacingPlaceholderFor === ticker}
+                onReplacePlaceholder={() => void replacePlaceholderLots(ticker, placeholderReplacements.get(ticker) ?? [])}
                 onDeleteAutoAdded={(entry) => void deleteAutoAddedTrade(entry)}
                 onDiscardPending={(entry) => discardPendingCandidate(entry.key)}
                 onDiscardPendingKeys={discardPendingCandidateKeys}
@@ -1132,6 +1179,9 @@ export function TickerGroupCard({
   suspectedDuplicateKeys,
   wrongTickerHints,
   reconcileSuggestion,
+  placeholderReplacement = false,
+  replacingPlaceholder = false,
+  onReplacePlaceholder,
   onDeleteAutoAdded,
   onDiscardPending,
   onDiscardPendingKeys,
@@ -1174,6 +1224,11 @@ export function TickerGroupCard({
   wrongTickerHints?: Map<string, string>;
   /** The mismatch auto-reconcile solver's suggested removal for this ticker, when one exists (see suggestRemovalsToReconcile) — drives the banner's one-click fix and the per-row highlight. */
   reconcileSuggestion?: ReconcileSuggestion;
+  /** True when this ticker's recorded shares are all deletable opening-balance placeholders and this batch's rows alone reconcile with the broker — flips the alreadyFullyRecorded banner from "discard pending" to "replace the placeholder" (see ImportPage's placeholderReplacements). */
+  placeholderReplacement?: boolean;
+  /** True while the placeholder lots are being deleted. */
+  replacingPlaceholder?: boolean;
+  onReplacePlaceholder?: () => void;
   onDeleteAutoAdded: (entry: CandidateEntry) => void;
   onDiscardPending: (entry: CandidateEntry) => void;
   /** Discards a named set of still-pending rows in one shot — the reconcile suggestion's "Remove suggested rows" action. */
@@ -1329,6 +1384,22 @@ export function TickerGroupCard({
         <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
           No broker "My Position" screenshot uploaded for {ticker} yet — upload one in Step 1 so its share count can be
           verified before anything is allocated to a portfolio.
+        </div>
+      ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded && placeholderReplacement ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
+          <span>
+            {ticker}'s recorded position is an opening-balance placeholder with no real dates — and this batch carries
+            its real dated transactions, adding up to the same {formatShares(matchStatus.verifiedUnits!)} the broker
+            shows. Replace the placeholder with them? Its cost refunds to cash, then the rows below verify and confirm
+            as usual.
+          </span>
+          <button
+            onClick={onReplacePlaceholder}
+            disabled={replacingPlaceholder}
+            className="shrink-0 rounded-md border border-cyan-400/40 px-2.5 py-1 font-medium text-cyan-300 hover:bg-cyan-500/10 disabled:opacity-50"
+          >
+            {replacingPlaceholder ? "Replacing…" : "Replace placeholder with real rows"}
+          </button>
         </div>
       ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
