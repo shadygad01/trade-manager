@@ -1,15 +1,17 @@
 import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Link } from "wouter";
-import { Plus, Briefcase, ArrowRight, Archive, ArchiveRestore, ChevronDown, ChevronRight, ShieldAlert, FolderSymlink, Wallet } from "lucide-react";
+import { Plus, Briefcase, ArrowRight, Archive, ArchiveRestore, ChevronDown, ChevronRight, ShieldAlert, FolderSymlink, Wallet, Pencil } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import {
   createPortfolioAndSave,
   unarchivePortfolio,
   findPortfoliosMissingFundingRecord,
   backfillInitialFunding,
+  getInitialFundingRecord,
   type MissingFundingEntry,
 } from "@application/services/PortfolioService";
+import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 import type { Portfolio, PortfolioKind } from "@domain/entities/Portfolio";
 import {
   computePositions,
@@ -28,10 +30,17 @@ import { formatMoney, formatShares } from "@presentation/lib/format";
 
 const KINDS: PortfolioKind[] = ["Investment", "Trading", "Swing", "Experiments", "Retirement", "Education", "Custom"];
 
+/** A portfolio can have been created before the tracking window opened (see TRACKING_START_DATE) — defaulting straight to its createdAt would make backfillInitialFunding reject the very date this page pre-fills. */
+function defaultFundingDate(createdAt: string): string {
+  const createdDate = createdAt.slice(0, 10);
+  return createdDate < TRACKING_START_DATE ? TRACKING_START_DATE : createdDate;
+}
+
 export function PortfoliosPage() {
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []);
   const [modalOpen, setModalOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [editingFundingId, setEditingFundingId] = useState<string | null>(null);
 
   const { active, archived } = useMemo(() => {
     const active: Portfolio[] = [];
@@ -130,7 +139,12 @@ export function PortfoliosPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {active.map((p) => (
-            <PortfolioCard key={p.id} portfolio={p} marketValue={summaries?.get(p.id) ?? 0} />
+            <PortfolioCard
+              key={p.id}
+              portfolio={p}
+              marketValue={summaries?.get(p.id) ?? 0}
+              onEditFunding={() => setEditingFundingId(p.id)}
+            />
           ))}
         </div>
       )}
@@ -147,7 +161,13 @@ export function PortfoliosPage() {
           {showArchived ? (
             <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {archived.map((p) => (
-                <PortfolioCard key={p.id} portfolio={p} marketValue={summaries?.get(p.id) ?? 0} archived />
+                <PortfolioCard
+                  key={p.id}
+                  portfolio={p}
+                  marketValue={summaries?.get(p.id) ?? 0}
+                  archived
+                  onEditFunding={() => setEditingFundingId(p.id)}
+                />
               ))}
             </div>
           ) : null}
@@ -155,6 +175,15 @@ export function PortfoliosPage() {
       ) : null}
 
       <CreatePortfolioModal open={modalOpen} onClose={() => setModalOpen(false)} />
+
+      {editingFundingId
+        ? (() => {
+            const editingPortfolio = (portfolios ?? []).find((p) => p.id === editingFundingId);
+            return editingPortfolio ? (
+              <EditStartingBalanceModal portfolio={editingPortfolio} onClose={() => setEditingFundingId(null)} />
+            ) : null;
+          })()
+        : null}
     </div>
   );
 }
@@ -261,7 +290,7 @@ function MissingFundingBanner({
   async function handleRecord(entry: MissingFundingEntry) {
     const portfolio = portfolios.find((p) => p.id === entry.portfolioId);
     const amount = Number.parseFloat(amountByPortfolio[entry.portfolioId] ?? String(entry.missingAmount));
-    const date = dateByPortfolio[entry.portfolioId] ?? portfolio?.createdAt.slice(0, 10) ?? "";
+    const date = dateByPortfolio[entry.portfolioId] ?? (portfolio ? defaultFundingDate(portfolio.createdAt) : "");
     if (!amount || amount <= 0) {
       setError({ portfolioId: entry.portfolioId, message: "Enter how much cash actually funded this portfolio." });
       return;
@@ -310,7 +339,7 @@ function MissingFundingBanner({
               />
               <input
                 type="date"
-                value={dateByPortfolio[entry.portfolioId] ?? portfolio?.createdAt.slice(0, 10) ?? ""}
+                value={dateByPortfolio[entry.portfolioId] ?? (portfolio ? defaultFundingDate(portfolio.createdAt) : "")}
                 onChange={(e) => setDateByPortfolio((prev) => ({ ...prev, [entry.portfolioId]: e.target.value }))}
                 className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
               />
@@ -398,10 +427,12 @@ function PortfolioCard({
   portfolio: p,
   marketValue,
   archived,
+  onEditFunding,
 }: {
   portfolio: Portfolio;
   marketValue: number;
   archived?: boolean;
+  onEditFunding: () => void;
 }) {
   return (
     <div className={`group relative rounded-xl border border-slate-800 bg-slate-900/60 p-4 transition-colors hover:border-cyan-500/40 hover:bg-slate-900 ${archived ? "opacity-60" : ""}`}>
@@ -427,18 +458,121 @@ function PortfolioCard({
         </div>
         {p.notes ? <p className="mt-3 line-clamp-2 text-xs text-slate-500">{p.notes}</p> : null}
       </Link>
-      {archived ? (
+      <div className="mt-3 flex items-center gap-2">
         <button
           onClick={(e) => {
             e.preventDefault();
-            void unarchivePortfolio(repos, p.id);
+            onEditFunding();
           }}
-          className="mt-3 flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
+          className="flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
         >
-          <ArchiveRestore size={12} /> Unarchive
+          <Pencil size={12} /> Edit starting balance
         </button>
-      ) : null}
+        {archived ? (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              void unarchivePortfolio(repos, p.id);
+            }}
+            className="flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
+          >
+            <ArchiveRestore size={12} /> Unarchive
+          </button>
+        ) : null}
+      </div>
     </div>
+  );
+}
+
+/**
+ * Always available per portfolio — not gated on the missing-funding banner —
+ * since a user may want to correct the starting balance later even after
+ * it's been recorded once (e.g. they mis-typed it, or want to adjust the
+ * date). Explicitly framed as "starting balance," not deposit/withdrawal:
+ * under the hood it's the same one dated record `backfillInitialFunding`
+ * edits in place, but nothing here implies new or removed money.
+ */
+function EditStartingBalanceModal({ portfolio, onClose }: { portfolio: Portfolio; onClose: () => void }) {
+  const defaultDate = defaultFundingDate(portfolio.createdAt);
+
+  const suggestion = useLiveQuery(async () => {
+    const [timelineEvents, trades, allocations] = await Promise.all([
+      repos.timeline.getByPortfolio(portfolio.id),
+      repos.trades.getByPortfolio(portfolio.id),
+      repos.allocations.getByPortfolio(portfolio.id),
+    ]);
+    const existing = getInitialFundingRecord(timelineEvents, portfolio.id);
+    if (existing) return existing;
+    const [entry] = findPortfoliosMissingFundingRecord([portfolio], trades, allocations, timelineEvents);
+    return { amount: entry ? entry.missingAmount : 0, date: defaultDate };
+  }, [portfolio.id]);
+
+  const [amount, setAmount] = useState<string | null>(null);
+  const [date, setDate] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const amountValue = amount ?? (suggestion ? String(suggestion.amount) : "");
+  const dateValue = date ?? suggestion?.date ?? defaultDate;
+
+  async function handleSubmit() {
+    const parsed = Number.parseFloat(amountValue);
+    if (!parsed || parsed <= 0) {
+      setError("Enter the portfolio's real starting balance.");
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      await backfillInitialFunding(repos, portfolio.id, parsed, dateValue);
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal title={`Edit starting balance — ${portfolio.name}`} open onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-xs text-slate-400">
+          The amount this portfolio actually started with — not a deposit or a withdrawal, just the baseline every
+          realized/dividend % is measured against. This never touches the cash balance shown on the portfolio card.
+        </p>
+        <label className="block text-xs text-slate-400 space-y-1">
+          Starting balance (EGP)
+          <input
+            type="number"
+            value={amountValue}
+            onChange={(e) => setAmount(e.target.value)}
+            className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+          />
+        </label>
+        <label className="block text-xs text-slate-400 space-y-1">
+          Date
+          <input
+            type="date"
+            value={dateValue}
+            onChange={(e) => setDate(e.target.value)}
+            className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
+          />
+        </label>
+        {error ? <p className="text-sm text-rose-400">{error}</p> : null}
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
+            Cancel
+          </button>
+          <button
+            onClick={() => void handleSubmit()}
+            disabled={submitting}
+            className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
+          >
+            {submitting ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

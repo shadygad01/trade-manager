@@ -49,12 +49,17 @@ vi.mock("@presentation/lib/data", () => ({
         return Promise.resolve();
       },
     },
-    allocations: { getByPortfolio: () => Promise.resolve([]), getAll: () => Promise.resolve(state.allocations) },
+    allocations: {
+      getByPortfolio: (portfolioId: string) => Promise.resolve(state.allocations.filter((a) => a.portfolioId === portfolioId)),
+      getAll: () => Promise.resolve(state.allocations),
+    },
     timeline: {
       getByPortfolio: (portfolioId: string) => Promise.resolve(state.timeline.filter((e) => e.portfolioId === portfolioId)),
       getAll: () => Promise.resolve(state.timeline),
       save: (e: TimelineEvent) => {
-        state.timeline.push(e);
+        const i = state.timeline.findIndex((existing) => existing.id === e.id);
+        if (i >= 0) state.timeline[i] = e;
+        else state.timeline.push(e);
         return Promise.resolve();
       },
     },
@@ -267,5 +272,97 @@ describe("PortfoliosPage", () => {
 
     await screen.findByText("Main");
     expect(screen.queryByText("Portfolios missing an initial funding record")).not.toBeInTheDocument();
+  });
+
+  it("pre-fills the funding banner's date with the tracking-window start, not a portfolio created before it (would otherwise always reject)", async () => {
+    state.portfolios = [
+      { ...createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5500 }), createdAt: "2025-06-01T00:00:00.000Z" },
+    ];
+    state.trades = [
+      createTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-05", executionTime: "10:00" }),
+    ];
+    state.allocations = [
+      createTradeAllocation({
+        id: "a1",
+        sellGroupId: "sg1",
+        portfolioId: "p1",
+        tradeId: "t1",
+        ticker: "COMI",
+        sharesClosed: 100,
+        exitPrice: 15,
+        executionDate: "2026-02-10",
+        executionTime: "10:00",
+      }),
+    ];
+    renderPage();
+
+    await screen.findByText("Portfolios missing an initial funding record");
+    const dateInput = document.querySelector('input[type="date"]') as HTMLInputElement;
+    expect(dateInput.value).toBe("2026-01-01");
+  });
+
+  it("lets the user edit a portfolio's starting balance any time via the always-available action, suggesting the reconciled gap when none is recorded yet", async () => {
+    state.portfolios = [createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5500 })];
+    state.trades = [
+      createTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-05", executionTime: "10:00" }),
+    ];
+    state.allocations = [
+      createTradeAllocation({
+        id: "a1",
+        sellGroupId: "sg1",
+        portfolioId: "p1",
+        tradeId: "t1",
+        ticker: "COMI",
+        sharesClosed: 100,
+        exitPrice: 15,
+        executionDate: "2026-02-10",
+        executionTime: "10:00",
+      }),
+    ];
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /edit starting balance/i }));
+
+    expect(await screen.findByText("Edit starting balance — Long Positions")).toBeInTheDocument();
+    expect(screen.getByLabelText(/starting balance/i)).toHaveValue(5000); // same reconciled-gap suggestion
+
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(state.timeline.filter((e) => e.type === "Deposit")).toHaveLength(1);
+    });
+    expect(state.timeline[0].amount).toBe(5000);
+    expect(state.portfolios[0].cash).toBe(5500); // never touches cash
+  });
+
+  it("pre-fills the CURRENT starting balance when editing one already set, and edits it in place rather than duplicating", async () => {
+    state.portfolios = [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })];
+    state.timeline = [
+      {
+        id: "initial-funding:p1",
+        portfolioId: "p1",
+        type: "Deposit",
+        timestamp: "2026-01-01T00:00",
+        amount: 5000,
+        attachments: [],
+        createdAt: "2026-01-01T00:00",
+      },
+    ];
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /edit starting balance/i }));
+    const amountInput = await screen.findByLabelText(/starting balance/i);
+    expect(amountInput).toHaveValue(5000);
+
+    await user.clear(amountInput);
+    await user.type(amountInput, "6000");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(state.timeline).toHaveLength(1); // edited in place, no duplicate
+    });
+    expect(state.timeline[0].amount).toBe(6000);
   });
 });
