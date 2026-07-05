@@ -493,6 +493,16 @@ Direct user report (screenshot): "the EXECUTED date shown in Trades is all wrong
 - 3 new tests in `TradeService.test.ts` (trade + timeline move together; floor/future rejection; sell-ordering guard with a valid correction accepted) — 355 total.
 - Verified end-to-end against a real production build: recorded an opening-balance-shaped EAST lot and a wrongly-dated ORHD lot — the pill rendered on EAST only; correcting ORHD 01 Jan → 14 Jan updated the table instantly and the Timeline's Buy event moved to 14 JAN 2026 with it.
 
+### Post-sprint-8 — opening balances retired: the user rejected the concept, confirmed via direct discussion
+
+Direct user correction of the previous fix's framing ("انا مش موافق … تجاهل اى تاريخ قبل ١/١/٢٠٢٦"), clarified via an explicit question-and-answer: **their portfolio starts fresh from 2026-01-01 — no held position has any real pre-2026 purchase.** Every real buy is dated on/after the tracking floor and exists in their 2026 broker documents; the opening-balance lots (booked from position screenshots with the floor as a placeholder date) were therefore *wrong data*, not a representation of old holdings — the confirmed business rule is "ignore anything before 1/1/2026 as if it doesn't exist," and a placeholder standing in for an imagined pre-2026 purchase violates it.
+
+- **"Record as opening balance" removed** from the portfolio page's verified-but-untracked banner (handler, state, and button; the earlier "books a Trade at the tracking floor" behavior retired). The banner now points at the one honest path: upload the ticker's real buy invoices/statement in Import so its lots land with their true dates — which always exist, per the confirmed rule.
+- **Trades page gained a per-lot delete** (trash icon, only on lots with no shares closed against them — the existing `deleteTrade` guard) so the user can remove the six placeholder lots themselves; cost refunds to cash and the Buy timeline event is removed, exactly like the Import-side delete.
+- The previous fix's "Opening balance" pill re-worded to **"Placeholder — replace with real buys"** (amber), with a tooltip walking through delete-then-import.
+- Tests: the two opening-balance tests replaced by one asserting the banner shows import guidance and no record button; the pill/delete flows covered by the existing deleteTrade suite — 354 total.
+- Verified end-to-end against a real production build: recorded a placeholder-shaped EAST lot — the amber pill rendered; the trash button removed it from the table entirely.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

@@ -3,7 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
 import { ArrowDownCircle, ArrowUpCircle, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { computePositions, deleteTrade, recordBuy } from "@application/services/TradeService";
+import { computePositions, deleteTrade } from "@application/services/TradeService";
 import {
   deposit,
   withdraw,
@@ -37,8 +37,6 @@ export function PortfolioDetailPage() {
   const [deleteError, setDeleteError] = useState<{ tradeId: string; message: string } | null>(null);
   const [clearAllError, setClearAllError] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
-  const [openingBalanceError, setOpeningBalanceError] = useState<{ ticker: string; message: string } | null>(null);
-  const [recordingOpeningBalanceFor, setRecordingOpeningBalanceFor] = useState<string | null>(null);
   // Deleting a trade doesn't reliably retrigger dexie-react-hooks' liveQuery
   // for this page's positions/reconciliation (a pre-existing gap, not
   // specific to this action) — bumping this forces both queries to
@@ -84,7 +82,6 @@ export function PortfolioDetailPage() {
     return <EmptyState title="Portfolio not found" description="It may have been deleted." />;
   }
 
-  const portfolioId = portfolio.id;
   const marketValue = positions.reduce((sum, p) => sum + (p.marketValue ?? p.costBasis), 0);
   const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
   const unrealizedPnl = positions.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
@@ -130,44 +127,6 @@ export function PortfolioDetailPage() {
     setRefreshKey((k) => k + 1);
     if (failures.length > 0) {
       setClearAllError(`${failures.length} of ${suspectedDuplicateIds.length} deletions failed: ${failures.join("; ")}`);
-    }
-  }
-
-  /**
-   * A ticker the broker verifies as currently held but with zero trades on
-   * the ledger usually means the real buy predates 2026-01-01 (the tracking
-   * floor) or its invoice is simply unavailable — there's no real dated buy
-   * to import. Rather than leaving this position permanently unrepresented,
-   * this books one opening-balance Trade at the tracking floor using the
-   * broker's own reported units/avg cost, clearly labeled as an
-   * approximation so it's never mistaken for a real dated purchase.
-   */
-  async function handleRecordOpeningBalance(r: PositionReconciliation) {
-    if (r.verifiedAvgCost === undefined) return;
-    if (
-      !confirm(
-        `Record ${formatShares(r.verifiedUnits)} shares of ${r.ticker} at ${formatMoney(r.verifiedAvgCost)} avg cost as an opening balance dated ${TRACKING_START_DATE}? This approximates the real (unknown/out-of-range) purchase — you can delete it later if you find the actual buy invoice.`
-      )
-    ) {
-      return;
-    }
-    setOpeningBalanceError(null);
-    setRecordingOpeningBalanceFor(r.ticker);
-    try {
-      await recordBuy(repos, {
-        portfolioId,
-        ticker: r.ticker,
-        shares: r.verifiedUnits,
-        entryPrice: r.verifiedAvgCost,
-        executionDate: TRACKING_START_DATE,
-        executionTime: "00:00",
-        notes: `Opening balance from broker position verification captured ${formatDate(r.verificationCapturedAt.slice(0, 10))} — real acquisition date/price predates tracking or is unavailable.`,
-      });
-      setRefreshKey((k) => k + 1);
-    } catch (e) {
-      setOpeningBalanceError({ ticker: r.ticker, message: e instanceof Error ? e.message : "Failed to record opening balance." });
-    } finally {
-      setRecordingOpeningBalanceFor(null);
     }
   }
 
@@ -409,30 +368,16 @@ export function PortfolioDetailPage() {
               .filter((r) => r.quantityShortfall && r.computedShares === 0)
               .map((r) => (
                 <li key={r.ticker}>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span>
-                      {r.ticker}: the broker screenshot shows {formatShares(r.verifiedUnits)} units
-                      {r.verifiedAvgCost !== undefined ? ` @ ${formatMoney(r.verifiedAvgCost)} avg` : ""}, but this portfolio
-                      has no open trades for it — import the missing buy(s) if you have them.
-                    </span>
-                    {r.verifiedAvgCost !== undefined ? (
-                      <button
-                        onClick={() => void handleRecordOpeningBalance(r)}
-                        disabled={recordingOpeningBalanceFor === r.ticker}
-                        className="shrink-0 rounded-md border border-amber-400/40 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
-                      >
-                        {recordingOpeningBalanceFor === r.ticker ? "Recording…" : "Record as opening balance"}
-                      </button>
-                    ) : null}
-                  </div>
-                  {r.verifiedAvgCost === undefined ? (
-                    <p className="text-[11px] text-amber-300/70">
-                      No average cost on the broker screenshot — record the buy manually with a known price.
-                    </p>
-                  ) : null}
-                  {openingBalanceError && openingBalanceError.ticker === r.ticker ? (
-                    <p className="text-[11px] text-rose-400">{openingBalanceError.message}</p>
-                  ) : null}
+                  <span>
+                    {r.ticker}: the broker screenshot shows {formatShares(r.verifiedUnits)} units
+                    {r.verifiedAvgCost !== undefined ? ` @ ${formatMoney(r.verifiedAvgCost)} avg` : ""}, but this portfolio
+                    has no open trades for it.
+                  </span>
+                  <p className="text-[11px] text-amber-300/70">
+                    Every real purchase is dated on/after {TRACKING_START_DATE} — upload this ticker's buy
+                    invoices/statement in Import so its lots land with their true dates, or record the buy manually if
+                    you know them.
+                  </p>
                 </li>
               ))}
           </ul>
