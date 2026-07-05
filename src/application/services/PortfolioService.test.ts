@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
+import type { TimelineEvent } from "@domain/entities/TimelineEvent";
+import { makeTrade, makeAllocation } from "@application/analytics/calculators/testFixtures";
 import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
 import {
   createPortfolioAndSave,
@@ -13,6 +15,8 @@ import {
   archivePortfolio,
   unarchivePortfolio,
   renamePortfolio,
+  findPortfoliosMissingFundingRecord,
+  backfillInitialFunding,
 } from "./PortfolioService";
 
 describe("createPortfolioAndSave", () => {
@@ -21,6 +25,22 @@ describe("createPortfolioAndSave", () => {
     const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading", initialCash: 5000 });
     expect(portfolio.cash).toBe(5000);
     expect(await repos.portfolios.getById(portfolio.id)).toEqual(portfolio);
+  });
+
+  it("also records the initial cash as a dated Deposit event, so return-% calculators have a real capital basis", async () => {
+    const repos = createFakeRepositories();
+    const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading", initialCash: 5000 });
+    const events = await repos.timeline.getByPortfolio(portfolio.id);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe("Deposit");
+    expect(events[0].amount).toBe(5000);
+    expect(events[0].timestamp).toBe(portfolio.createdAt);
+  });
+
+  it("records no Deposit event when initialCash is zero or omitted", async () => {
+    const repos = createFakeRepositories();
+    const portfolio = await createPortfolioAndSave(repos, { name: "Main", kind: "Trading" });
+    expect(await repos.timeline.getByPortfolio(portfolio.id)).toHaveLength(0);
   });
 });
 
@@ -163,5 +183,63 @@ describe("recordSplit / recordRightsIssue", () => {
     await recordRightsIssue(repos, "p1", { ticker: "COMI", notes: "1-for-4 at 10 EGP" });
     const events = await repos.timeline.getByPortfolio("p1");
     expect(events[0].type).toBe("RightsIssue");
+  });
+});
+
+describe("findPortfoliosMissingFundingRecord", () => {
+  it("flags a portfolio with a real realized gain but zero net contributed capital recorded (the reported all-zero-charts bug)", () => {
+    const portfolio = createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5000 });
+    const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
+    const allocation = makeAllocation({ tradeId: "t1", portfolioId: "p1", ticker: "COMI", sharesClosed: 100, exitPrice: 15 });
+    // No Deposit/Withdrawal timeline event at all — funded only via
+    // Portfolio.cash at creation, before createPortfolioAndSave's fix.
+    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], []);
+    expect(entries).toEqual([{ portfolioId: "p1", portfolioName: "Long Positions", realizedAndDividendTotal: 500 }]);
+  });
+
+  it("does not flag a portfolio that already has net contributed capital recorded", () => {
+    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 });
+    const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
+    const allocation = makeAllocation({ tradeId: "t1", portfolioId: "p1", ticker: "COMI", sharesClosed: 100, exitPrice: 15 });
+    const deposit: TimelineEvent = {
+      id: "d1",
+      portfolioId: "p1",
+      type: "Deposit",
+      timestamp: "2026-01-01T00:00",
+      amount: 5000,
+      attachments: [],
+      createdAt: "2026-01-01T00:00",
+    };
+    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [allocation], [deposit]);
+    expect(entries).toEqual([]);
+  });
+
+  it("does not flag a portfolio with no realized activity yet — 0% is already correct for those", () => {
+    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 });
+    const trade = makeTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10 });
+    const entries = findPortfoliosMissingFundingRecord([portfolio], [trade], [], []);
+    expect(entries).toEqual([]);
+  });
+});
+
+describe("backfillInitialFunding", () => {
+  it("records a dated Deposit event without touching Portfolio.cash", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
+    await backfillInitialFunding(repos, "p1", 5000, "2026-01-01");
+    const events = await repos.timeline.getByPortfolio("p1");
+    expect(events[0].type).toBe("Deposit");
+    expect(events[0].amount).toBe(5000);
+    expect(events[0].timestamp).toBe("2026-01-01T00:00");
+    expect((await repos.portfolios.getById("p1"))?.cash).toBe(5000);
+  });
+
+  it("rejects a non-positive amount", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
+    await expect(backfillInitialFunding(repos, "p1", 0, "2026-01-01")).rejects.toThrow();
+  });
+
+  it("rejects a date before the tracking start", async () => {
+    const repos = createFakeRepositories({ portfolios: [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })] });
+    await expect(backfillInitialFunding(repos, "p1", 5000, "2025-12-31")).rejects.toThrow(/2026-01-01/);
   });
 });

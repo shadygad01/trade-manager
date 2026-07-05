@@ -612,7 +612,19 @@ User asked what's needed to fetch prices "day by day," explicitly requesting the
 - **`update-prices.yml`**: now commits `public/price-history.json` alongside the existing snapshot.
 - Deliberately no consuming UI feature yet — the user's own explicit, very recent decision (previous entry above) removed every cash/equity-based time-series chart from the app, so this sprint only lays the data-access groundwork (repository method + accumulating file) an eventual feature (e.g. a real historical mark-to-market chart, or a reference line) can build on later, without presuming which one is wanted.
 
-## Next recommended sprint
+### Post-sprint-8 fix — the new realized/dividend % model read as 0% on every real portfolio (funding recorded outside the timeline)
+
+User asked for a screenshot proof of the just-shipped realized/unrealized/dividend redesign against their *real* data (not seeded test data) — three real screenshots showed "Monthly Performance"/"Monthly Return" completely empty (no bars at all) on every portfolio, and "Portfolio Comparison" flat at ~0% for months before a tiny, suspicious jump right at today's date, despite the Analytics page's own "Largest Winner" stat proving real realized gains existed (E£81.06).
+
+- **Root cause**: `createPortfolioAndSave` (`PortfolioService.ts`) has always set `Portfolio.cash = initialCash` directly but never recorded a matching "Deposit" timeline event for it — only the explicit `deposit()` action (used for later top-ups) ever created one. `performanceCurve`/`bucketPerformance` (and `AnalyticsEngine`'s `portfolioReturn` inputs) compute "% of net contributed capital" *exclusively* from Deposit/Withdrawal timeline events, so a portfolio funded only via the create-portfolio field has always looked like it received zero capital — every realized/dividend % permanently divides by zero and reports 0%, no matter how large the real gain. Reproduced directly: a trade with a real +E£500 realized gain and no Deposit event showed `realizedReturnPct: 0` in every bucket.
+- **`createPortfolioAndSave`** now also records a dated Deposit event for `initialCash` (prospective fix — new portfolios are correct going forward; it does not touch `Portfolio.cash` a second time).
+- **`findPortfoliosMissingFundingRecord`** (new): flags an *existing* portfolio with real realized P/L or dividends but zero net contributed capital ever recorded — the exact shape above. Portfolios with no realized activity yet are never flagged (0% is already correct there).
+- **`backfillInitialFunding`** (new): records the missing dated Deposit event for an existing portfolio without ever touching its current cash balance (which already reflects that funding).
+- **`PortfoliosPage`** gains a "Portfolios missing an initial funding record" banner (same pattern as the split/misnamed-ticker banners) with an inline amount + date input per flagged portfolio, calling `backfillInitialFunding`.
+- 12 new/changed tests (434 total): `createPortfolioAndSave` now asserts the Deposit event; `findPortfoliosMissingFundingRecord`/`backfillInitialFunding` cover the flag/no-flag/backfill cases; `PortfoliosPage` covers the banner appearing, backfilling, and disappearing once funding is recorded.
+- Verified end-to-end against a real running build: reproduced the exact reported shape (a portfolio funded only via `initialCash`, a real +E£500 realized gain, no Deposit event) — confirmed Realized Return read +0.00% and Monthly Return was empty before the fix; after using the new banner's "Record funding" action, Realized Return correctly showed +10.00%, Monthly Return rendered a real bar, and the portfolio's cash balance was unchanged (5,500 before and after).
+
+### Post-sprint-8 — day-by-day historical price accumulation (infrastructure only, no consuming feature yet)
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
 2. ~~**Sector Allocation**~~ — done (see above): `Trade.sector` added, auto-assigned from a known-ticker map, feeding a real Dashboard pie chart.

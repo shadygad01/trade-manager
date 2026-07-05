@@ -1,5 +1,7 @@
 import { createPortfolio, type Portfolio, type PortfolioKind } from "@domain/entities/Portfolio";
 import { createTimelineEvent, type TimelineEvent } from "@domain/entities/TimelineEvent";
+import type { Trade } from "@domain/entities/Trade";
+import { realizedPnlMicros, type TradeAllocation } from "@domain/entities/TradeAllocation";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -14,9 +16,32 @@ export interface CreatePortfolioInput {
   notes?: string;
 }
 
+/**
+ * `initialCash` also gets a dated Deposit event, not just the raw
+ * `Portfolio.cash` field — every return-% calculator (performanceCurve,
+ * bucketPerformance, portfolioReturn) measures gains against net contributed
+ * capital drawn *only* from Deposit/Withdrawal timeline events, so a
+ * portfolio funded solely via this field (with no matching event) reads as
+ * having contributed zero capital: every realized/dividend % permanently
+ * computes as 0%, no matter how much was actually gained (see
+ * findPortfoliosMissingFundingRecord for the backfill path on portfolios
+ * that already exist without this event).
+ */
 export async function createPortfolioAndSave(repos: AppRepositories, input: CreatePortfolioInput): Promise<Portfolio> {
   const portfolio = createPortfolio({ id: generateId(), ...input });
   await repos.portfolios.save(portfolio);
+  if (input.initialCash && input.initialCash > 0) {
+    await repos.timeline.save(
+      createTimelineEvent({
+        id: generateId(),
+        portfolioId: portfolio.id,
+        type: "Deposit",
+        timestamp: portfolio.createdAt,
+        amount: input.initialCash,
+        notes: "Initial funding recorded at portfolio creation.",
+      })
+    );
+  }
   return portfolio;
 }
 
@@ -232,6 +257,89 @@ export async function recordRightsIssue(
       timestamp: new Date().toISOString(),
       ticker: normalizeTicker(input.ticker),
       notes: input.notes,
+    })
+  );
+}
+
+export interface MissingFundingEntry {
+  portfolioId: string;
+  portfolioName: string;
+  /** Realized P/L (closed lots) + dividends already earned but currently unrepresentable as a %, since net contributed capital reads as zero. */
+  realizedAndDividendTotal: number;
+}
+
+/**
+ * Flags a portfolio whose ledger shows real realized gains/losses or
+ * dividends, but zero net contributed capital (Deposits − Withdrawals) ever
+ * recorded on its timeline — the shape left behind by a portfolio funded
+ * only through `Portfolio.cash` at creation before this was tracked as a
+ * dated event (see createPortfolioAndSave's doc comment). In that shape,
+ * every realized/dividend % calculator divides by zero and silently reports
+ * 0%, hiding real performance data that already exists on the ledger.
+ * Portfolios with no realized activity yet are never flagged — 0% is
+ * already correct for those regardless of this bug.
+ */
+export function findPortfoliosMissingFundingRecord(
+  portfolios: Portfolio[],
+  trades: Trade[],
+  allocations: TradeAllocation[],
+  timelineEvents: TimelineEvent[]
+): MissingFundingEntry[] {
+  const tradesById = new Map(trades.map((t) => [t.id, t]));
+  const entries: MissingFundingEntry[] = [];
+
+  for (const portfolio of portfolios) {
+    const contributed = timelineEvents
+      .filter((e) => e.portfolioId === portfolio.id && (e.type === "Deposit" || e.type === "Withdrawal"))
+      .reduce((sum, e) => sum + (e.amount ?? 0), 0);
+    if (contributed > 0) continue;
+
+    const realizedTotal = allocations
+      .filter((a) => a.portfolioId === portfolio.id)
+      .reduce((sum, a) => {
+        const trade = tradesById.get(a.tradeId);
+        return trade ? sum + realizedPnlMicros(a, trade) / 1_000_000 : sum;
+      }, 0);
+    const dividendTotal = timelineEvents
+      .filter((e) => e.portfolioId === portfolio.id && e.type === "Dividend")
+      .reduce((sum, e) => sum + (e.amount ?? 0), 0);
+
+    if (realizedTotal !== 0 || dividendTotal !== 0) {
+      entries.push({ portfolioId: portfolio.id, portfolioName: portfolio.name, realizedAndDividendTotal: realizedTotal + dividendTotal });
+    }
+  }
+
+  return entries;
+}
+
+/**
+ * Backfills the missing dated Deposit event for capital that funded a
+ * portfolio before anyone recorded it as a dated event (typically initial
+ * cash set at creation, pre-dating this fix). Deliberately does NOT touch
+ * `Portfolio.cash` — that balance already reflects this funding; this only
+ * gives the return-% calculators the capital basis they need.
+ */
+export async function backfillInitialFunding(
+  repos: AppRepositories,
+  portfolioId: string,
+  amount: number,
+  date: string
+): Promise<void> {
+  if (amount <= 0) {
+    throw new Error("backfill amount must be positive");
+  }
+  if (isBeforeTrackingStart(date)) {
+    throw new Error(`Transactions before ${TRACKING_START_DATE} are not tracked: got ${date}`);
+  }
+  await requirePortfolio(repos, portfolioId);
+  await repos.timeline.save(
+    createTimelineEvent({
+      id: generateId(),
+      portfolioId,
+      type: "Deposit",
+      timestamp: `${date}T00:00`,
+      amount,
+      notes: "Backfilled: initial funding recorded retroactively so return % has a real capital basis.",
     })
   );
 }

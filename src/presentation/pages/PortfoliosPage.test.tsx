@@ -5,6 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { Router } from "wouter";
 import { createPortfolio, type Portfolio } from "@domain/entities/Portfolio";
 import { createTrade, type Trade } from "@domain/entities/Trade";
+import { createTradeAllocation, type TradeAllocation } from "@domain/entities/TradeAllocation";
+import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 
 /**
@@ -19,6 +21,8 @@ import type { PositionVerification } from "@domain/entities/PositionVerification
 const state = vi.hoisted(() => ({
   portfolios: [] as Portfolio[],
   trades: [] as Trade[],
+  allocations: [] as TradeAllocation[],
+  timeline: [] as TimelineEvent[],
   verifications: [] as PositionVerification[],
 }));
 
@@ -45,8 +49,15 @@ vi.mock("@presentation/lib/data", () => ({
         return Promise.resolve();
       },
     },
-    allocations: { getByPortfolio: () => Promise.resolve([]), getAll: () => Promise.resolve([]) },
-    timeline: { getByPortfolio: () => Promise.resolve([]), getAll: () => Promise.resolve([]), save: () => Promise.resolve() },
+    allocations: { getByPortfolio: () => Promise.resolve([]), getAll: () => Promise.resolve(state.allocations) },
+    timeline: {
+      getByPortfolio: (portfolioId: string) => Promise.resolve(state.timeline.filter((e) => e.portfolioId === portfolioId)),
+      getAll: () => Promise.resolve(state.timeline),
+      save: (e: TimelineEvent) => {
+        state.timeline.push(e);
+        return Promise.resolve();
+      },
+    },
     verifications: {
       getAll: () => Promise.resolve(state.verifications),
       save: (v: PositionVerification) => {
@@ -74,6 +85,8 @@ describe("PortfoliosPage", () => {
   beforeEach(() => {
     state.portfolios = [];
     state.trades = [];
+    state.allocations = [];
+    state.timeline = [];
     state.verifications = [];
   });
 
@@ -189,5 +202,67 @@ describe("PortfoliosPage", () => {
 
     await screen.findByText("Main");
     expect(screen.queryByText("Tickers filed under the wrong name")).not.toBeInTheDocument();
+  });
+
+  it("flags a portfolio with a real realized gain but no recorded funding, and backfills a Deposit event on submit (the reported all-zero-charts bug)", async () => {
+    state.portfolios = [createPortfolio({ id: "p1", name: "Long Positions", kind: "Trading", initialCash: 5000 })];
+    state.trades = [
+      createTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-05", executionTime: "10:00" }),
+    ];
+    state.allocations = [
+      createTradeAllocation({
+        id: "a1",
+        sellGroupId: "sg1",
+        portfolioId: "p1",
+        tradeId: "t1",
+        ticker: "COMI",
+        sharesClosed: 100,
+        exitPrice: 15,
+        executionDate: "2026-02-10",
+        executionTime: "10:00",
+      }),
+    ];
+    // No Deposit/Withdrawal timeline event at all — funded only via
+    // Portfolio.cash at creation.
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByText("Portfolios missing an initial funding record")).toBeInTheDocument();
+    expect(screen.getByText(/of realized\/dividend gains currently hidden/)).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText("Original funding (EGP)"), "5000");
+    await user.click(screen.getByRole("button", { name: /record funding/i }));
+
+    await waitFor(() => {
+      expect(state.timeline.some((e) => e.portfolioId === "p1" && e.type === "Deposit" && e.amount === 5000)).toBe(true);
+    });
+    expect(state.portfolios[0].cash).toBe(5000); // backfilling never touches the cash balance
+  });
+
+  it("does not show the missing-funding banner once a Deposit is already recorded", async () => {
+    state.portfolios = [createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: 5000 })];
+    state.trades = [
+      createTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-05", executionTime: "10:00" }),
+    ];
+    state.allocations = [
+      createTradeAllocation({
+        id: "a1",
+        sellGroupId: "sg1",
+        portfolioId: "p1",
+        tradeId: "t1",
+        ticker: "COMI",
+        sharesClosed: 100,
+        exitPrice: 15,
+        executionDate: "2026-02-10",
+        executionTime: "10:00",
+      }),
+    ];
+    state.timeline = [
+      { id: "d1", portfolioId: "p1", type: "Deposit", timestamp: "2026-01-01T00:00", amount: 5000, attachments: [], createdAt: "2026-01-01T00:00" },
+    ];
+    renderPage();
+
+    await screen.findByText("Main");
+    expect(screen.queryByText("Portfolios missing an initial funding record")).not.toBeInTheDocument();
   });
 });
