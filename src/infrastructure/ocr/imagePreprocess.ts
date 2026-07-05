@@ -88,6 +88,34 @@ export interface OrderRowSlice {
 }
 
 /**
+ * Boundary between "line spacing within one order row" gaps and everything
+ * larger (row separation, list furniture like the "All orders" title or the
+ * Buy/Sell buttons), computed from the gaps themselves so it holds across
+ * resolutions. Infinity when every gap is within-row spacing (a single row).
+ *
+ * The within-row gaps form the smallest, tightest cluster, so the boundary
+ * is the first >=1.8x jump between consecutive sorted gaps — everything
+ * before the jump is line spacing, everything after separates rows. The
+ * previous formula, max(minGap*1.8, ((minGap+maxGap)/2)*0.8), failed on a
+ * real full-screen capture (measured gaps [73, 36x5, 122-124x4, 284]): the
+ * 284px gap before the Buy/Sell buttons dragged the midpoint term to ~143,
+ * above the real ~123px between-row gaps, merging all five rows into one
+ * slice that then parsed as a single order. A global minimum-variance
+ * two-cluster split fails on the same capture for the opposite reason —
+ * that outlier is so extreme that isolating it *alone* minimizes variance
+ * (threshold ~204), which again merges the rows. Only the first-jump rule
+ * finds the within/between boundary regardless of how many clusters sit
+ * above it.
+ */
+export function rowGroupingGapThreshold(gaps: number[]): number {
+  const sorted = [...gaps].sort((a, b) => a - b);
+  for (let i = 0; i < sorted.length - 1; i++) {
+    if (sorted[i + 1] >= sorted[i] * 1.8) return (sorted[i] + sorted[i + 1]) / 2;
+  }
+  return Infinity;
+}
+
+/**
  * Geometrically segments an Orders-screen screenshot into one canvas per
  * order row using ink-density scanlines, so each row is OCR'd independently
  * and cross-row status mispairing (Tesseract does not reliably preserve
@@ -157,16 +185,12 @@ export function segmentOrderRows(source: HTMLCanvasElement): OrderRowSlice[] {
   }
   if (bands.length === 0) return [];
 
-  // 4. Group bands into order rows. Threshold = max(minGap*1.8, midpoint*0.8)
-  // lands safely between the within-row (~36px) and between-row (~120px)
-  // gaps, and degrades gracefully to a single group when there's only one
-  // row (all gaps small, nothing crosses the threshold).
+  // 4. Group bands into order rows: gaps larger than rowGroupingGapThreshold
+  // separate rows, smaller ones are line spacing within a row.
   const groups: Array<Array<{ top: number; bottom: number }>> = [[bands[0]]];
   if (bands.length > 1) {
     const gaps = bands.slice(1).map((b, i) => b.top - bands[i].bottom);
-    const minGap = Math.min(...gaps);
-    const maxGap = Math.max(...gaps);
-    const threshold = Math.max(minGap * 1.8, ((minGap + maxGap) / 2) * 0.8);
+    const threshold = rowGroupingGapThreshold(gaps);
     for (let i = 0; i < gaps.length; i++) {
       if (gaps[i] > threshold) groups.push([]);
       groups[groups.length - 1].push(bands[i + 1]);
