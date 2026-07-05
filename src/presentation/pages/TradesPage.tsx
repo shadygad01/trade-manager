@@ -1,9 +1,9 @@
 import { Fragment, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink, Pencil, Check, X } from "lucide-react";
+import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink, Pencil, Check, X, Trash2 } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { recordBuy, moveTrade, correctTradeExecutionDate } from "@application/services/TradeService";
+import { recordBuy, moveTrade, deleteTrade, correctTradeExecutionDate } from "@application/services/TradeService";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { getTradeStatus } from "@domain/entities/Trade";
@@ -36,6 +36,22 @@ export function TradesPage() {
       setEditingDate(null);
     } catch (e) {
       setDateError({ tradeId: editingDate.tradeId, message: e instanceof Error ? e.message : "Failed to correct the date." });
+    }
+  }
+
+  async function handleDeleteTrade(trade: Trade) {
+    if (
+      !confirm(
+        `Delete this ${trade.ticker} lot (${formatShares(trade.shares)} sh @ ${formatMoney(trade.entryPrice)})? Its cost is refunded to cash and its timeline entry is removed. This can't be undone.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteTrade(repos, trade.id);
+      setDateError(null);
+    } catch (e) {
+      setDateError({ tradeId: trade.id, message: e instanceof Error ? e.message : "Failed to delete the trade." });
     }
   }
 
@@ -215,10 +231,10 @@ export function TradesPage() {
                             {formatDate(trade.executionDate)}
                             {trade.notes?.startsWith("Opening balance") ? (
                               <span
-                                title="Not a real purchase date — this lot was booked as an opening balance at the tracking floor because the actual buy predates 01 Jan 2026 (or its invoice was unavailable). Its avg cost came from a broker position screenshot."
-                                className="inline-flex items-center rounded-full bg-slate-700/40 px-2 py-0.5 text-[11px] font-medium text-slate-400"
+                                title="Not a real dated purchase — this lot was booked from a broker position screenshot only. Delete it (trash icon on the right) and import this ticker's real buy invoices/statement so the lots land with their true dates."
+                                className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
                               >
-                                Opening balance
+                                Placeholder — replace with real buys
                               </span>
                             ) : null}
                             <button
@@ -255,18 +271,32 @@ export function TradesPage() {
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-right">
-                        {otherPortfolios.length > 0 ? (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setMoveTradeTarget(trade);
-                            }}
-                            title="Move to another portfolio"
-                            className="rounded-md p-1 text-slate-500 hover:bg-slate-800 hover:text-slate-200"
-                          >
-                            <FolderSymlink size={14} />
-                          </button>
-                        ) : null}
+                        <span className="flex items-center justify-end gap-1">
+                          {otherPortfolios.length > 0 ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setMoveTradeTarget(trade);
+                              }}
+                              title="Move to another portfolio"
+                              className="rounded-md p-1 text-slate-500 hover:bg-slate-800 hover:text-slate-200"
+                            >
+                              <FolderSymlink size={14} />
+                            </button>
+                          ) : null}
+                          {trade.remainingShares === trade.shares ? (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void handleDeleteTrade(trade);
+                              }}
+                              title="Delete this lot — its cost is refunded to cash. Only available while no sell has closed shares from it."
+                              className="rounded-md p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          ) : null}
+                        </span>
                       </td>
                     </tr>
                     {isExpanded && tradeAllocations.length > 0 ? (
