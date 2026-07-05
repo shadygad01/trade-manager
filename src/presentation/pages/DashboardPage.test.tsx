@@ -29,7 +29,7 @@ vi.mock("@presentation/lib/data", () => ({
   },
 }));
 
-const { DashboardPage, indexEquityCurve } = await import("./DashboardPage");
+const { DashboardPage, mergeComparisonCurves, mergeMonthlyPerformance } = await import("./DashboardPage");
 
 function renderPage() {
   return render(
@@ -58,34 +58,38 @@ describe("DashboardPage — Sector Allocation panel", () => {
   });
 });
 
-describe("indexEquityCurve — Portfolio Comparison's growth-% rebasing", () => {
-  it("does not blow up into a many-thousand-percent spike when the account started near-zero and a real deposit lands later (the reported bug)", () => {
-    // Mirrors the reported shape: an account effectively starting at ~34 EGP,
-    // then a real 10,000 EGP deposit landing later with no trading gain/loss
-    // in between — the old base-equity-ratio index would read this as
-    // ~29,000%; contributed-capital indexing should read it as 0% (the
-    // deposit is new capital, not a gain).
-    const curve = [
-      { date: "2026-01-08", equity: 33.58, contributed: 0 },
-      { date: "2026-01-31", equity: 10033.58, contributed: 10000 },
-    ];
-    const indexed = indexEquityCurve(curve);
-    expect(indexed[0].index).toBe(100);
-    expect(indexed[1].index).toBeCloseTo(100.3358, 2);
+describe("mergeComparisonCurves — Portfolio Comparison, without any equity-curve indexing", () => {
+  it("combines each portfolio's own realized + dividend return % directly, no rebasing needed", () => {
+    const data = mergeComparisonCurves([
+      {
+        name: "Old School",
+        curve: [
+          { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 },
+          { date: "2026-02-01", realizedReturnPct: 5, dividendReturnPct: 1 },
+        ],
+      },
+      {
+        name: "Long Positions",
+        curve: [{ date: "2026-01-15", realizedReturnPct: 2, dividendReturnPct: 0 }],
+      },
+    ]);
+    expect(data).toEqual([
+      { date: "2026-01-01", "Old School": 0 },
+      { date: "2026-01-15", "Old School": 0, "Long Positions": 2 },
+      { date: "2026-02-01", "Old School": 6, "Long Positions": 2 },
+    ]);
   });
+});
 
-  it("stays at 100 while no capital has been contributed yet", () => {
-    const curve = [{ date: "2026-01-08", equity: 33.58, contributed: 0 }];
-    expect(indexEquityCurve(curve)).toEqual([{ date: "2026-01-08", index: 100 }]);
-  });
-
-  it("moves the index for a real gain/loss on already-contributed capital", () => {
-    const curve = [
-      { date: "2026-01-01", equity: 10000, contributed: 10000 },
-      { date: "2026-02-01", equity: 11000, contributed: 10000 },
-    ];
-    const indexed = indexEquityCurve(curve);
-    expect(indexed[0].index).toBe(100);
-    expect(indexed[1].index).toBe(110);
+describe("mergeMonthlyPerformance — averages realized + dividend % across portfolios", () => {
+  it("never reads a deposit or a near-zero starting balance as a fake return (the reported bug)", () => {
+    // Reproduces the reported shape at the merge level: a portfolio whose
+    // performance curve never involves cash/equity at all can't spike from
+    // a deposit landing mid-period — there's nothing here that touches cash.
+    const merged = mergeMonthlyPerformance([
+      [{ period: "2026-07", realizedReturnPct: 0, dividendReturnPct: 0 }],
+      [{ period: "2026-07", realizedReturnPct: 4, dividendReturnPct: 1 }],
+    ]);
+    expect(merged).toEqual([{ period: "2026-07", returnPct: 2.5 }]);
   });
 });

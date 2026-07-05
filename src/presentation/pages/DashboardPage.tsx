@@ -23,13 +23,13 @@ import { computeAnalytics } from "@application/analytics/AnalyticsEngine";
 import { sectorAllocation } from "@application/analytics/calculators/sectorAllocation";
 import { UNCLASSIFIED_SECTOR } from "@domain/value-objects/knownSectors";
 import { realizedPnlMicros } from "@domain/entities/TradeAllocation";
-import type { AnalyticsResult, EquityPoint, PeriodReturn } from "@presentation/lib/types";
+import type { AnalyticsResult, PerformancePoint, PerformancePeriod } from "@presentation/lib/types";
 import type { Portfolio } from "@domain/entities/Portfolio";
 import { StatTile } from "@presentation/components/StatTile";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
-import { formatMoney, formatMoneyCompact, formatPercent, signClass } from "@presentation/lib/format";
+import { formatMoney, formatPercent, signClass } from "@presentation/lib/format";
 import { CATEGORICAL, categoricalColor, CHART_AXIS, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
 
 const MAX_COMPARED_PORTFOLIOS = CATEGORICAL.length;
@@ -45,52 +45,26 @@ interface PortfolioSummary {
   dividends: number;
 }
 
-function mergeEquityCurves(curves: EquityPoint[][]): EquityPoint[] {
-  const allDates = Array.from(new Set(curves.flatMap((c) => c.map((p) => p.date)))).sort();
-  return allDates.map((date) => {
-    const equity = curves.reduce((sum, curve) => {
-      let last = 0;
-      for (const point of curve) {
-        if (point.date <= date) last = point.equity;
-        else break;
-      }
-      return sum + last;
-    }, 0);
-    return { date, equity };
-  });
-}
-
 /**
- * Rebases an equity curve to 100 = "no gain or loss yet" so portfolios of very
- * different sizes can share one axis (never a dual-axis chart) as cumulative
- * return %, not raw EGP. Indexing to the first data point's raw equity (the
- * original approach) breaks badly once a portfolio's very first tracked
- * balance happens to be near-zero — any later deposit alone would then read
- * as a many-thousand-percent "return" purely from dividing by a tiny
- * denominator, not because anything was actually earned. Using
- * `EquityPoint.contributed` (net Deposit − Withdrawal so far, same
- * denominator `portfolioReturn` already uses for its own "since inception %")
- * keeps the index stable regardless of how small the account started: it
- * only moves when equity diverges from money actually put in, i.e. real
- * gain/loss, and stays exactly at 100 while contributed capital is still 0.
+ * One combined line per portfolio for the comparison chart: realized +
+ * dividend return %, already a percentage, so unlike the old equity-curve
+ * approach nothing needs indexing/rebasing to compare portfolios of very
+ * different sizes on one axis — a deposit or a near-zero starting balance
+ * can never distort it, since neither ever enters this calculation (see
+ * performanceCurve.ts).
  */
-export function indexEquityCurve(curve: EquityPoint[]): { date: string; index: number }[] {
-  return curve.map((p) => {
-    const contributed = p.contributed ?? 0;
-    const returnPct = contributed !== 0 ? ((p.equity - contributed) / Math.abs(contributed)) * 100 : 0;
-    return { date: p.date, index: 100 + returnPct };
-  });
-}
-
-function mergeIndexedCurves(portfolios: { name: string; curve: EquityPoint[] }[]): Record<string, number | string>[] {
-  const indexed = portfolios.map((p) => ({ name: p.name, points: indexEquityCurve(p.curve) }));
-  const allDates = Array.from(new Set(indexed.flatMap((p) => p.points.map((pt) => pt.date)))).sort();
+export function mergeComparisonCurves(portfolios: { name: string; curve: PerformancePoint[] }[]): Record<string, number | string>[] {
+  const withCombined = portfolios.map((p) => ({
+    name: p.name,
+    points: p.curve.map((pt) => ({ date: pt.date, value: pt.realizedReturnPct + pt.dividendReturnPct })),
+  }));
+  const allDates = Array.from(new Set(withCombined.flatMap((p) => p.points.map((pt) => pt.date)))).sort();
   return allDates.map((date) => {
     const row: Record<string, number | string> = { date };
-    for (const p of indexed) {
+    for (const p of withCombined) {
       let last: number | undefined;
       for (const pt of p.points) {
-        if (pt.date <= date) last = pt.index;
+        if (pt.date <= date) last = pt.value;
         else break;
       }
       if (last !== undefined) row[p.name] = last;
@@ -99,12 +73,13 @@ function mergeIndexedCurves(portfolios: { name: string; curve: EquityPoint[] }[]
   });
 }
 
-function mergeMonthlyReturns(series: PeriodReturn[][]): { period: string; returnPct: number }[] {
+/** Simple (not money-weighted) average of each portfolio's own realized+dividend return % for a period, across every portfolio that has one. */
+export function mergeMonthlyPerformance(series: PerformancePeriod[][]): { period: string; returnPct: number }[] {
   const byPeriod = new Map<string, number[]>();
   for (const s of series) {
     for (const point of s) {
       const arr = byPeriod.get(point.period) ?? [];
-      arr.push(point.returnPct);
+      arr.push(point.realizedReturnPct + point.dividendReturnPct);
       byPeriod.set(point.period, arr);
     }
   }
@@ -166,11 +141,10 @@ export function DashboardPage() {
       (acc, d) => (!acc || d.analytics.portfolioReturn < acc.analytics.portfolioReturn ? d : acc),
       undefined,
     );
-    const equityCurve = mergeEquityCurves(dashboard.map((d) => d.analytics.equityCurve));
-    const monthlyReturn = mergeMonthlyReturns(dashboard.map((d) => d.analytics.monthlyReturn));
+    const monthlyReturn = mergeMonthlyPerformance(dashboard.map((d) => d.analytics.monthlyPerformance));
     const comparedPortfolios = dashboard.slice(0, MAX_COMPARED_PORTFOLIOS);
-    const comparisonData = mergeIndexedCurves(
-      comparedPortfolios.map((d) => ({ name: d.portfolio.name, curve: d.analytics.equityCurve })),
+    const comparisonData = mergeComparisonCurves(
+      comparedPortfolios.map((d) => ({ name: d.portfolio.name, curve: d.analytics.performanceCurve })),
     );
     const sectorSlices = sectorAllocation(
       dashboard.flatMap((d) =>
@@ -189,7 +163,6 @@ export function DashboardPage() {
       capitalDeployment,
       best,
       worst,
-      equityCurve,
       monthlyReturn,
       comparedPortfolios,
       comparisonData,
@@ -291,32 +264,46 @@ export function DashboardPage() {
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-200">Combined Equity Curve</h3>
-          {totals.equityCurve.length > 1 ? (
+        {totals.comparedPortfolios.length > 1 ? (
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+            <h3 className="mb-3 text-sm font-semibold text-slate-200">Portfolio Comparison</h3>
             <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={totals.equityCurve} style={{ background: CHART_SURFACE }}>
+              <LineChart data={totals.comparisonData}>
                 <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="date" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
                 <YAxis
                   tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
                   tickLine={false}
                   axisLine={{ stroke: CHART_GRID }}
-                  tickFormatter={(v: number) => formatMoneyCompact(v)}
-                  width={64}
+                  tickFormatter={(v: number) => `${v}%`}
+                  width={48}
                 />
                 <Tooltip
                   contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
                   labelStyle={{ color: "#c3c2b7" }}
-                  formatter={(v: number) => formatMoney(v)}
+                  formatter={(v: number) => formatPercent(v)}
                 />
-                <Line type="monotone" dataKey="equity" stroke={CATEGORICAL[0]} strokeWidth={2} dot={false} name="Equity" />
+                <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+                {totals.comparedPortfolios.map((d, i) => (
+                  <Line
+                    key={d.portfolio.id}
+                    type="monotone"
+                    dataKey={d.portfolio.name}
+                    stroke={categoricalColor(i)}
+                    strokeWidth={2}
+                    dot={false}
+                    connectNulls
+                  />
+                ))}
               </LineChart>
             </ResponsiveContainer>
-          ) : (
-            <EmptyState title="Not enough history yet" description="The equity curve fills in as trades and cash events accumulate." />
-          )}
-        </div>
+            <p className="mt-2 text-[11px] text-slate-500">
+              Each portfolio&apos;s realized + dividend return, as % of its own net contributed capital — directly
+              comparable across portfolios of any size without indexing.
+              {dashboard.length > MAX_COMPARED_PORTFOLIOS ? ` Showing the first ${MAX_COMPARED_PORTFOLIOS} portfolios.` : ""}
+            </p>
+          </div>
+        ) : null}
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
           <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-200">
@@ -350,47 +337,6 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {totals.comparedPortfolios.length > 1 ? (
-        <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-200">Portfolio Comparison</h3>
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={totals.comparisonData}>
-              <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
-              <YAxis
-                tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
-                tickLine={false}
-                axisLine={{ stroke: CHART_GRID }}
-                tickFormatter={(v: number) => `${v}`}
-                width={48}
-              />
-              <Tooltip
-                contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
-                labelStyle={{ color: "#c3c2b7" }}
-                formatter={(v: number) => v.toFixed(1)}
-              />
-              <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
-              {totals.comparedPortfolios.map((d, i) => (
-                <Line
-                  key={d.portfolio.id}
-                  type="monotone"
-                  dataKey={d.portfolio.name}
-                  stroke={categoricalColor(i)}
-                  strokeWidth={2}
-                  dot={false}
-                  connectNulls
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-          <p className="mt-2 text-[11px] text-slate-500">
-            Each portfolio&apos;s equity indexed to 100 at its first data point, so portfolios of very different sizes
-            can be compared as growth rather than raw EGP on one axis.
-            {dashboard.length > MAX_COMPARED_PORTFOLIOS ? ` Showing the first ${MAX_COMPARED_PORTFOLIOS} portfolios.` : ""}
-          </p>
-        </div>
-      ) : null}
-
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
           <h3 className="mb-3 text-sm font-semibold text-slate-200">Monthly Performance</h3>
@@ -410,7 +356,7 @@ export function DashboardPage() {
                   contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
                   formatter={(v: number) => formatPercent(v)}
                 />
-                <Bar dataKey="returnPct" name="Return %" radius={[3, 3, 0, 0]}>
+                <Bar dataKey="returnPct" name="Realized + Dividend %" radius={[3, 3, 0, 0]}>
                   {totals.monthlyReturn.map((entry) => (
                     <Cell key={entry.period} fill={entry.returnPct >= 0 ? STATUS.good : STATUS.critical} />
                   ))}
@@ -418,10 +364,11 @@ export function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyState title="No monthly data yet" description="Monthly returns populate once trades span multiple months." />
+            <EmptyState title="No monthly data yet" description="Monthly returns populate once sells or dividends are recorded." />
           )}
           <p className="mt-2 text-[11px] text-slate-500">
-            Simple average of each portfolio&apos;s monthly return (not money-weighted across portfolios).
+            Simple average of each portfolio&apos;s own realized + dividend return % (not money-weighted across
+            portfolios) — never raw cash flow, so a deposit or withdrawal never shows up as a fake gain or loss.
           </p>
         </div>
 

@@ -4,15 +4,13 @@ import {
   ResponsiveContainer,
   LineChart,
   Line,
-  AreaChart,
-  Area,
   BarChart,
   Bar,
   XAxis,
   YAxis,
   CartesianGrid,
   Tooltip,
-  Cell,
+  Legend,
 } from "recharts";
 import { repos } from "@presentation/lib/data";
 import { computeAnalytics } from "@application/analytics/AnalyticsEngine";
@@ -21,7 +19,7 @@ import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { StatTile } from "@presentation/components/StatTile";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatMoney, formatPercent, signClass } from "@presentation/lib/format";
-import { CATEGORICAL, CHART_GRID, CHART_SURFACE, CHART_TEXT_MUTED, STATUS } from "@presentation/lib/chartColors";
+import { CATEGORICAL, CHART_GRID, CHART_SURFACE, CHART_TEXT_MUTED } from "@presentation/lib/chartColors";
 
 export function AnalyticsPage() {
   const { id: portfolioId } = useParams<{ id: string }>();
@@ -57,14 +55,8 @@ export function AnalyticsPage() {
     );
   }
 
-  const drawdownSeries = analytics.equityCurve.map((point, i, arr) => {
-    const peak = Math.max(...arr.slice(0, i + 1).map((p) => p.equity));
-    const drawdownPct = peak > 0 ? ((point.equity - peak) / peak) * 100 : 0;
-    return { date: point.date, drawdownPct };
-  });
-
-  const latestMonthly = analytics.monthlyReturn.at(-1);
-  const latestAnnual = analytics.annualReturn.at(-1);
+  const latestMonthly = analytics.monthlyPerformance.at(-1);
+  const latestAnnual = analytics.annualPerformance.at(-1);
 
   return (
     <div>
@@ -82,15 +74,33 @@ export function AnalyticsPage() {
         <StatTile label="Max Drawdown" value={formatPercent(-analytics.drawdown, 1)} valueClassName="text-rose-400" />
         <StatTile label="Capital Deployment" value={formatPercent(analytics.capitalDeployment, 1)} />
         <StatTile
+          label="Realized Return"
+          value={formatPercent(analytics.realizedReturnPct)}
+          valueClassName={signClass(analytics.realizedReturnPct)}
+          sublabel="Cumulative, % of contributed capital"
+        />
+        <StatTile
+          label="Unrealized Return"
+          value={formatPercent(analytics.unrealizedReturnPct)}
+          valueClassName={signClass(analytics.unrealizedReturnPct)}
+          sublabel="Open positions, today's price only"
+        />
+        <StatTile
+          label="Dividend Return"
+          value={formatPercent(analytics.dividendReturnPct)}
+          valueClassName={signClass(analytics.dividendReturnPct)}
+          sublabel="Cumulative, % of contributed capital"
+        />
+        <StatTile
           label="Monthly Return (latest)"
-          value={formatPercent(latestMonthly?.returnPct ?? 0)}
-          valueClassName={signClass(latestMonthly?.returnPct ?? 0)}
+          value={formatPercent((latestMonthly?.realizedReturnPct ?? 0) + (latestMonthly?.dividendReturnPct ?? 0))}
+          valueClassName={signClass((latestMonthly?.realizedReturnPct ?? 0) + (latestMonthly?.dividendReturnPct ?? 0))}
           sublabel={latestMonthly?.period}
         />
         <StatTile
           label="Annual Return (latest)"
-          value={formatPercent(latestAnnual?.returnPct ?? 0)}
-          valueClassName={signClass(latestAnnual?.returnPct ?? 0)}
+          value={formatPercent((latestAnnual?.realizedReturnPct ?? 0) + (latestAnnual?.dividendReturnPct ?? 0))}
+          valueClassName={signClass((latestAnnual?.realizedReturnPct ?? 0) + (latestAnnual?.dividendReturnPct ?? 0))}
           sublabel={latestAnnual?.period}
         />
         <StatTile
@@ -101,52 +111,37 @@ export function AnalyticsPage() {
         />
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-200">Equity Curve</h3>
-          {analytics.equityCurve.length > 1 ? (
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={analytics.equityCurve}>
-                <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
-                <YAxis tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} width={64} />
-                <Tooltip
-                  contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
-                  formatter={(v: number) => formatMoney(v)}
-                />
-                <Line type="monotone" dataKey="equity" stroke={CATEGORICAL[0]} strokeWidth={2} dot={false} name="Equity" />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <EmptyState title="Not enough history yet" description="The equity curve fills in as trades and cash events accumulate." />
-          )}
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-200">Drawdown</h3>
-          {drawdownSeries.length > 1 ? (
-            <ResponsiveContainer width="100%" height={260}>
-              <AreaChart data={drawdownSeries}>
-                <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
-                <YAxis
-                  tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
-                  tickLine={false}
-                  axisLine={{ stroke: CHART_GRID }}
-                  tickFormatter={(v: number) => `${v}%`}
-                  width={48}
-                />
-                <Tooltip
-                  contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
-                  formatter={(v: number) => `${v.toFixed(2)}%`}
-                />
-                <Area type="monotone" dataKey="drawdownPct" stroke={STATUS.critical} fill={STATUS.critical} fillOpacity={0.18} name="Drawdown %" />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <EmptyState title="Not enough history yet" description="Drawdown is derived from the equity curve." />
-          )}
-        </div>
+      <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">Realized + Dividend Return</h3>
+        {analytics.performanceCurve.length > 1 ? (
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={analytics.performanceCurve}>
+              <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="date" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
+              <YAxis
+                tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
+                tickLine={false}
+                axisLine={{ stroke: CHART_GRID }}
+                tickFormatter={(v: number) => `${v}%`}
+                width={48}
+              />
+              <Tooltip
+                contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
+                formatter={(v: number) => formatPercent(v)}
+              />
+              <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+              <Line type="monotone" dataKey="realizedReturnPct" stroke={CATEGORICAL[0]} strokeWidth={2} dot={false} name="Realized %" />
+              <Line type="monotone" dataKey="dividendReturnPct" stroke={CATEGORICAL[1]} strokeWidth={2} dot={false} name="Dividend %" />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <EmptyState title="Not enough history yet" description="This fills in as sells close and dividends are recorded." />
+        )}
+        <p className="mt-2 text-[11px] text-slate-500">
+          Both lines are % of net contributed capital (deposits − withdrawals), never raw cash — a deposit never reads
+          as a gain. Unrealized P/L on still-open positions isn&apos;t part of this curve (no historical price feed
+          exists to plot it over time); see the Unrealized Return stat above for today&apos;s snapshot.
+        </p>
       </div>
 
       <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
@@ -214,9 +209,9 @@ export function AnalyticsPage() {
 
       <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <h3 className="mb-3 text-sm font-semibold text-slate-200">Monthly Return</h3>
-        {analytics.monthlyReturn.length > 0 ? (
+        {analytics.monthlyPerformance.length > 0 ? (
           <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={analytics.monthlyReturn}>
+            <BarChart data={analytics.monthlyPerformance}>
               <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="period" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
               <YAxis
@@ -230,15 +225,13 @@ export function AnalyticsPage() {
                 contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
                 formatter={(v: number) => formatPercent(v)}
               />
-              <Bar dataKey="returnPct" name="Return %" radius={[3, 3, 0, 0]}>
-                {analytics.monthlyReturn.map((entry) => (
-                  <Cell key={entry.period} fill={entry.returnPct >= 0 ? STATUS.good : STATUS.critical} />
-                ))}
-              </Bar>
+              <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+              <Bar dataKey="realizedReturnPct" name="Realized %" fill={CATEGORICAL[0]} radius={[3, 3, 0, 0]} />
+              <Bar dataKey="dividendReturnPct" name="Dividend %" fill={CATEGORICAL[1]} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <EmptyState title="No monthly data yet" description="Monthly returns populate once trades span multiple months." />
+          <EmptyState title="No monthly data yet" description="Monthly returns populate once sells or dividends are recorded." />
         )}
       </div>
     </div>

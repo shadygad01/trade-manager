@@ -9,21 +9,24 @@ import { avgLoser } from "./calculators/avgLoser";
 import { holdingTime } from "./calculators/holdingTime";
 import { exposure } from "./calculators/exposure";
 import { cashRatio } from "./calculators/cashRatio";
-import { drawdown } from "./calculators/drawdown";
-import { equityCurve, cashFlowCurve, type EquityPoint } from "./calculators/equityCurve";
+import {
+  performanceCurve,
+  bucketPerformance,
+  performanceDrawdown,
+  type PerformancePoint,
+  type PerformancePeriod,
+} from "./calculators/performanceCurve";
 import { capitalDeployment } from "./calculators/capitalDeployment";
-import { monthlyReturn } from "./calculators/monthlyReturn";
-import { annualReturn } from "./calculators/annualReturn";
 import { portfolioReturn } from "./calculators/portfolioReturn";
 import { portfolioHealth, type PortfolioHealth } from "./calculators/portfolioHealth";
 import { strategyAttribution, type StrategyAttribution } from "./calculators/strategyAttribution";
-import { summarizeOpenPositions, type PeriodReturn } from "./calculators/shared";
+import { summarizeOpenPositions } from "./calculators/shared";
 
 /**
  * Every calculator is a pure function over plain data (trades, allocations,
- * timeline events, a priceMap, and/or an equity-curve array) — no repository
- * access. This map exists purely for discoverability/introspection (e.g.
- * listing available metric names); computeAnalytics below wires each
+ * timeline events, a priceMap, and/or a performance-curve array) — no
+ * repository access. This map exists purely for discoverability/introspection
+ * (e.g. listing available metric names); computeAnalytics below wires each
  * calculator to the specific slice of input it needs, since signatures
  * intentionally vary by metric shape (a scalar vs. a curve vs. a bucketed
  * series). Adding a new metric is exactly: one new calculator file, one line
@@ -37,11 +40,10 @@ export const calculators = {
   holdingTime,
   exposure,
   cashRatio,
-  drawdown,
-  equityCurve,
+  performanceDrawdown,
+  performanceCurve,
   capitalDeployment,
-  monthlyReturn,
-  annualReturn,
+  bucketPerformance,
   portfolioReturn,
   portfolioHealth,
   strategyAttribution,
@@ -66,12 +68,21 @@ export interface AnalyticsResult {
   holdingTime: number;
   exposure: number;
   cashRatio: number;
+  /** Max peak-to-trough decline (percentage points) of cumulative realized + dividend return — never a raw cash-flow ratio (see performanceDrawdown). */
   drawdown: number;
   capitalDeployment: number;
-  monthlyReturn: PeriodReturn[];
-  annualReturn: PeriodReturn[];
+  /** Cumulative {date, realizedReturnPct, dividendReturnPct} series — the equity-curve replacement. No historical price feed is needed or used. */
+  performanceCurve: PerformancePoint[];
+  monthlyPerformance: PerformancePeriod[];
+  annualPerformance: PerformancePeriod[];
+  /** Since inception, net of deposits/withdrawals — unchanged, was never equity-curve-based. */
   portfolioReturn: number;
-  equityCurve: EquityPoint[];
+  /** Cumulative realized return %, as of `today` (the performance curve's last point). */
+  realizedReturnPct: number;
+  /** Cumulative dividend return %, as of `today`. */
+  dividendReturnPct: number;
+  /** Unrealized P/L on still-open positions as % of their cost basis — a snapshot against today's price only, never a historical series (no historical price feed exists). */
+  unrealizedReturnPct: number;
   portfolioHealth: PortfolioHealth;
   strategyAttribution: StrategyAttribution[];
 }
@@ -81,8 +92,10 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
 
   const { costBasis, marketValue } = summarizeOpenPositions(trades, priceMap);
   const totalEquity = cash + marketValue;
-  const curve = equityCurve(timelineEvents, cash, marketValue, today);
-  const flowCurve = cashFlowCurve(timelineEvents, cash, today);
+  const unrealizedPnl = marketValue - costBasis;
+
+  const curve = performanceCurve(trades, allocations, timelineEvents, today);
+  const lastPoint = curve[curve.length - 1];
 
   const deposits = timelineEvents
     .filter((e) => e.type === "Deposit")
@@ -99,12 +112,15 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     holdingTime: holdingTime(allocations, trades),
     exposure: exposure(marketValue, totalEquity),
     cashRatio: cashRatio(cash, totalEquity),
-    drawdown: drawdown(curve),
+    drawdown: performanceDrawdown(curve),
     capitalDeployment: capitalDeployment(costBasis, totalEquity),
-    monthlyReturn: monthlyReturn(flowCurve),
-    annualReturn: annualReturn(flowCurve),
+    performanceCurve: curve,
+    monthlyPerformance: bucketPerformance(trades, allocations, timelineEvents, 7),
+    annualPerformance: bucketPerformance(trades, allocations, timelineEvents, 4),
     portfolioReturn: portfolioReturn(totalEquity, deposits, withdrawals),
-    equityCurve: curve,
+    realizedReturnPct: lastPoint?.realizedReturnPct ?? 0,
+    dividendReturnPct: lastPoint?.dividendReturnPct ?? 0,
+    unrealizedReturnPct: costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0,
     portfolioHealth: portfolioHealth(trades, allocations, priceMap, cash),
     strategyAttribution: strategyAttribution(trades, allocations, input.journalEntries ?? []),
   };
