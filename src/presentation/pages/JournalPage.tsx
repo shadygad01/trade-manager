@@ -94,7 +94,7 @@ export function JournalPage() {
                 <button
                   key={trade.id}
                   onClick={() => setSelectedTradeId(trade.id)}
-                  className={`block w-full px-4 py-3 text-left transition-colors ${
+                  className={`block w-full px-4 py-3 text-start transition-colors ${
                     trade.id === activeTradeId ? "bg-cyan-500/10" : "hover:bg-slate-800/50"
                   }`}
                 >
@@ -149,12 +149,12 @@ function LessonsLearnedView({
         <button
           key={trade.id}
           onClick={() => onOpenTrade(trade.id)}
-          className="block w-full rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-left hover:border-slate-700"
+          className="block w-full rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-start hover:border-slate-700"
         >
           <div className="mb-1.5 flex items-center justify-between">
             <span className="text-sm font-medium text-slate-100">
               {trade.ticker}
-              {trade.companyName ? <span className="ml-2 text-xs font-normal text-slate-500">{trade.companyName}</span> : null}
+              {trade.companyName ? <span className="ms-2 text-xs font-normal text-slate-500">{trade.companyName}</span> : null}
             </span>
             <span className="text-xs text-slate-500">{formatDate(trade.executionDate)}</span>
           </div>
@@ -326,7 +326,7 @@ function JournalEditor({ portfolioId, trade }: { portfolioId: string; trade: Tra
                   <a href={src} target="_blank" rel="noopener noreferrer" title={t("journal.openFullSize")}>
                     <img src={src} alt="Journal attachment" className="h-20 w-full cursor-pointer object-cover" />
                   </a>
-                  <div className="absolute right-1 top-1 flex gap-1 opacity-0 group-hover:opacity-100">
+                  <div className="absolute end-1 top-1 flex gap-1 opacity-0 group-hover:opacity-100">
                     <a
                       href={src}
                       download={`journal-image-${i + 1}.png`}
@@ -392,7 +392,7 @@ function JournalEditor({ portfolioId, trade }: { portfolioId: string; trade: Tra
                     </a>
                     <button
                       onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
-                      className="ml-2 shrink-0 text-slate-500 hover:text-rose-400"
+                      className="ms-2 shrink-0 text-slate-500 hover:text-rose-400"
                     >
                       <X size={12} />
                     </button>

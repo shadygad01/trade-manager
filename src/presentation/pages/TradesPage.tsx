@@ -138,7 +138,7 @@ export function TradesPage() {
                 <select
                   value={activeBuyZoneTicker}
                   onChange={(e) => setBuyZoneTicker(e.target.value)}
-                  className="appearance-none rounded-md border border-cyan-500/50 bg-slate-800 py-1.5 pl-3 pr-8 text-sm font-semibold text-cyan-300 hover:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                  className="appearance-none rounded-md border border-cyan-500/50 bg-slate-800 py-1.5 ps-3 pe-8 text-sm font-semibold text-cyan-300 hover:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
                 >
                   {allTickers.map((t) => (
                     <option key={t} value={t}>
@@ -146,7 +146,7 @@ export function TradesPage() {
                     </option>
                   ))}
                 </select>
-                <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-cyan-400" />
+                <ChevronDown size={14} className="pointer-events-none absolute end-2.5 top-1/2 -translate-y-1/2 text-cyan-400" />
               </div>
             </label>
           </div>
@@ -167,15 +167,15 @@ export function TradesPage() {
       ) : (
         <div className="rounded-xl border border-slate-800 bg-slate-900/60">
           <table className="w-full text-sm">
-            <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+            <thead className="text-start text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="w-8 px-4 py-2"></th>
                 <th className="px-4 py-2">{t("trades.colTicker")}</th>
                 <th className="px-4 py-2">{t("trades.colExecuted")}</th>
-                <th className="px-4 py-2 text-right">{t("trades.colShares")}</th>
-                <th className="px-4 py-2 text-right">{t("trades.colRemaining")}</th>
-                <th className="px-4 py-2 text-right">{t("trades.colEntryPrice")}</th>
-                <th className="px-4 py-2 text-right">{t("trades.colFees")}</th>
+                <th className="px-4 py-2 text-end">{t("trades.colShares")}</th>
+                <th className="px-4 py-2 text-end">{t("trades.colRemaining")}</th>
+                <th className="px-4 py-2 text-end">{t("trades.colEntryPrice")}</th>
+                <th className="px-4 py-2 text-end">{t("trades.colFees")}</th>
                 <th className="px-4 py-2">{t("trades.colStatus")}</th>
                 <th className="w-8 px-4 py-2"></th>
               </tr>
@@ -199,7 +199,7 @@ export function TradesPage() {
                       <td className="px-4 py-2.5 font-medium text-slate-100">
                         {trade.ticker}
                         {trade.companyName ? (
-                          <span className="ml-2 text-xs font-normal text-slate-500">{trade.companyName}</span>
+                          <span className="ms-2 text-xs font-normal text-slate-500">{trade.companyName}</span>
                         ) : null}
                       </td>
                       <td className="px-4 py-2.5 text-slate-300" onClick={(e) => e.stopPropagation()}>
@@ -262,10 +262,10 @@ export function TradesPage() {
                           <p className="mt-1 text-xs text-rose-400">{dateError.message}</p>
                         ) : null}
                       </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatShares(trade.shares)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatShares(trade.remainingShares)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatMoney(trade.entryPrice)}</td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatMoney(trade.fees)}</td>
+                      <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatShares(trade.shares)}</td>
+                      <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatShares(trade.remainingShares)}</td>
+                      <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatMoney(trade.entryPrice)}</td>
+                      <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatMoney(trade.fees)}</td>
                       <td className="px-4 py-2.5">
                         <span
                           className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
@@ -279,7 +279,7 @@ export function TradesPage() {
                           {status === "open" ? t("trades.statusOpen") : status === "partial" ? t("trades.statusPartial") : t("trades.statusClosed")}
                         </span>
                       </td>
-                      <td className="px-4 py-2.5 text-right">
+                      <td className="px-4 py-2.5 text-end">
                         <span className="flex items-center justify-end gap-1">
                           {otherPortfolios.length > 0 ? (
                             <button
@@ -315,23 +315,23 @@ export function TradesPage() {
                             {t("trades.sellsClosingLot")}
                           </p>
                           <table className="w-full text-xs">
-                            <thead className="text-left text-slate-500">
+                            <thead className="text-start text-slate-500">
                               <tr>
-                                <th className="py-1 pr-3">{t("trades.colDate")}</th>
-                                <th className="py-1 pr-3 text-right">{t("trades.colSharesClosed")}</th>
-                                <th className="py-1 pr-3 text-right">{t("trades.colExitPrice")}</th>
-                                <th className="py-1 pr-3 text-right">{t("trades.colFees")}</th>
-                                <th className="py-1 pr-3">{t("trades.colReason")}</th>
+                                <th className="py-1 pe-3">{t("trades.colDate")}</th>
+                                <th className="py-1 pe-3 text-end">{t("trades.colSharesClosed")}</th>
+                                <th className="py-1 pe-3 text-end">{t("trades.colExitPrice")}</th>
+                                <th className="py-1 pe-3 text-end">{t("trades.colFees")}</th>
+                                <th className="py-1 pe-3">{t("trades.colReason")}</th>
                               </tr>
                             </thead>
                             <tbody>
                               {tradeAllocations.map((a) => (
                                 <tr key={a.id}>
-                                  <td className="py-1 pr-3 text-slate-300">{formatDate(a.executionDate)}</td>
-                                  <td className="py-1 pr-3 text-right tabular-nums text-slate-300">{formatShares(a.sharesClosed)}</td>
-                                  <td className="py-1 pr-3 text-right tabular-nums text-slate-300">{formatMoney(a.exitPrice)}</td>
-                                  <td className="py-1 pr-3 text-right tabular-nums text-slate-300">{formatMoney(a.fees)}</td>
-                                  <td className="py-1 pr-3 text-slate-400">{a.exitReason ?? "—"}</td>
+                                  <td className="py-1 pe-3 text-slate-300">{formatDate(a.executionDate)}</td>
+                                  <td className="py-1 pe-3 text-end tabular-nums text-slate-300">{formatShares(a.sharesClosed)}</td>
+                                  <td className="py-1 pe-3 text-end tabular-nums text-slate-300">{formatMoney(a.exitPrice)}</td>
+                                  <td className="py-1 pe-3 text-end tabular-nums text-slate-300">{formatMoney(a.fees)}</td>
+                                  <td className="py-1 pe-3 text-slate-400">{a.exitReason ?? "—"}</td>
                                 </tr>
                               ))}
                             </tbody>

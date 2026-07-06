@@ -1,8 +1,9 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Route, Switch, Redirect, Router } from "wouter";
 import { Menu } from "lucide-react";
 import { Sidebar } from "@presentation/components/Sidebar";
 import { useT } from "@presentation/i18n/translations";
+import { useLanguage } from "@presentation/i18n/language";
 
 const DashboardPage = lazy(() => import("@presentation/pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const PortfoliosPage = lazy(() => import("@presentation/pages/PortfoliosPage").then((m) => ({ default: m.PortfoliosPage })));
@@ -31,7 +32,17 @@ const ROUTER_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 // layout at `lg` and up (untouched desktop behavior).
 function AppShell() {
   const t = useT();
+  const language = useLanguage();
   const [navOpen, setNavOpen] = useState(false);
+
+  // Arabic reads right-to-left — the document direction has to follow the
+  // chosen language so native text flow, form fields, and every directional
+  // (ms-/me-/start-/end-/text-start/text-end) Tailwind utility below mirror
+  // correctly, not just the translated strings themselves.
+  useEffect(() => {
+    document.documentElement.dir = language === "ar" ? "rtl" : "ltr";
+    document.documentElement.lang = language;
+  }, [language]);
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">

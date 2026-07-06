@@ -47,8 +47,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-50 flex h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-950 text-slate-300 transition-transform duration-200 lg:static lg:translate-x-0 ${
-        open ? "translate-x-0" : "-translate-x-full"
+      className={`fixed inset-y-0 start-0 z-50 flex h-screen w-64 shrink-0 flex-col border-e border-slate-800/80 bg-slate-950 text-slate-300 transition-transform duration-200 lg:static lg:translate-x-0 ${
+        open ? "translate-x-0" : "max-lg:-translate-x-full max-lg:rtl:translate-x-full"
       }`}
     >
       <div className="flex items-center gap-2 border-b border-slate-800/80 px-5 py-5">
@@ -116,7 +116,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
             <div className="relative mb-2">
               <button
                 onClick={() => setSwitcherOpen((v) => !v)}
-                className="flex w-full items-center justify-between rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-left"
+                className="flex w-full items-center justify-between rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-start"
               >
                 <span className="truncate text-sm font-medium text-slate-100">
                   {activePortfolio?.name ?? t("sidebar.portfolioFallback")}

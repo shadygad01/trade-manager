@@ -1153,7 +1153,7 @@ export function ImportPage() {
               <div key={i} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">
                 <span className="font-medium text-slate-300">{r.fileName}</span>
                 {r.duplicate ? (
-                  <span className="ml-2 text-cyan-400">{t("importPage.duplicateFileSkipped")}</span>
+                  <span className="ms-2 text-cyan-400">{t("importPage.duplicateFileSkipped")}</span>
                 ) : r.warnings.length > 0 ? (
                   <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-300/80">
                     {r.warnings.map((w, wi) => (
@@ -1161,7 +1161,7 @@ export function ImportPage() {
                     ))}
                   </ul>
                 ) : (
-                  <span className="ml-2 text-emerald-400">{t("importPage.extractedSuccessfully")}</span>
+                  <span className="ms-2 text-emerald-400">{t("importPage.extractedSuccessfully")}</span>
                 )}
               </div>
             ))}

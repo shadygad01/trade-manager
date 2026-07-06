@@ -150,13 +150,13 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
     <div className="space-y-4">
       <div className="rounded-lg border border-slate-800 overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-slate-900/80 text-left text-xs uppercase tracking-wide text-slate-500">
+          <thead className="bg-slate-900/80 text-start text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-3 py-2 w-8"></th>
               <th className="px-3 py-2">{t("sellForm.colExecuted")}</th>
-              <th className="px-3 py-2 text-right">{t("sellForm.colEntryPrice")}</th>
-              <th className="px-3 py-2 text-right">{t("sellForm.colRemaining")}</th>
-              <th className="px-3 py-2 text-right">{t("sellForm.colCloseShares")}</th>
+              <th className="px-3 py-2 text-end">{t("sellForm.colEntryPrice")}</th>
+              <th className="px-3 py-2 text-end">{t("sellForm.colRemaining")}</th>
+              <th className="px-3 py-2 text-end">{t("sellForm.colCloseShares")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
@@ -173,9 +173,9 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
                     />
                   </td>
                   <td className="px-3 py-2 text-slate-300">{formatDate(trade.executionDate)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-300">{formatMoney(trade.entryPrice)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-300">{formatShares(trade.remainingShares)}</td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-end tabular-nums text-slate-300">{formatMoney(trade.entryPrice)}</td>
+                  <td className="px-3 py-2 text-end tabular-nums text-slate-300">{formatShares(trade.remainingShares)}</td>
+                  <td className="px-3 py-2 text-end">
                     <input
                       type="number"
                       disabled={!isChecked}
@@ -183,7 +183,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
                       max={trade.remainingShares}
                       value={selected[trade.id] ?? ""}
                       onChange={(e) => setShares(trade.id, e.target.value)}
-                      className="w-24 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-right tabular-nums text-slate-100 disabled:opacity-40"
+                      className="w-24 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-end tabular-nums text-slate-100 disabled:opacity-40"
                     />
                   </td>
                 </tr>

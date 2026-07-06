@@ -220,27 +220,27 @@ export function AnalyticsPage() {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+              <thead className="text-start text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-2">{t("analytics.colStrategy")}</th>
-                  <th className="px-4 py-2 text-right">{t("analytics.colTrades")}</th>
-                  <th className="px-4 py-2 text-right">{t("analytics.colWinRate")}</th>
-                  <th className="px-4 py-2 text-right">{t("analytics.colProfitFactor")}</th>
-                  <th className="px-4 py-2 text-right">{t("analytics.colTotalRealizedReturn")}</th>
+                  <th className="px-4 py-2 text-end">{t("analytics.colTrades")}</th>
+                  <th className="px-4 py-2 text-end">{t("analytics.colWinRate")}</th>
+                  <th className="px-4 py-2 text-end">{t("analytics.colProfitFactor")}</th>
+                  <th className="px-4 py-2 text-end">{t("analytics.colTotalRealizedReturn")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {analytics.strategyAttribution.map((s) => (
                   <tr key={s.tag}>
                     <td className="px-4 py-2.5 font-medium text-slate-100">{s.tag}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{s.tradeCount}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{s.tradeCount}</td>
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">
                       {s.closedAllocationCount > 0 ? formatPercent(s.winRate, 0) : "—"}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">
                       {s.closedAllocationCount === 0 ? "—" : Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞"}
                     </td>
-                    <td className={`px-4 py-2.5 text-right tabular-nums ${signClass(s.totalRealizedReturnPct)}`}>
+                    <td className={`px-4 py-2.5 text-end tabular-nums ${signClass(s.totalRealizedReturnPct)}`}>
                       {s.closedAllocationCount === 0 ? "—" : formatPercent(s.totalRealizedReturnPct, 1)}
                     </td>
                   </tr>

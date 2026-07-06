@@ -266,16 +266,16 @@ export function PortfolioDetailPage() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+              <thead className="text-start text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-4 py-2">{t("portfolioDetail.colTicker")}</th>
-                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colShares")}</th>
-                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colAvgCost")}</th>
-                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colCostBasis")}</th>
-                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colCurrentPrice")}</th>
-                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colMarketValue")}</th>
-                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colUnrealizedPnl")}</th>
-                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colLots")}</th>
+                  <th className="px-4 py-2 text-end">{t("portfolioDetail.colShares")}</th>
+                  <th className="px-4 py-2 text-end">{t("portfolioDetail.colAvgCost")}</th>
+                  <th className="px-4 py-2 text-end">{t("portfolioDetail.colCostBasis")}</th>
+                  <th className="px-4 py-2 text-end">{t("portfolioDetail.colCurrentPrice")}</th>
+                  <th className="px-4 py-2 text-end">{t("portfolioDetail.colMarketValue")}</th>
+                  <th className="px-4 py-2 text-end">{t("portfolioDetail.colUnrealizedPnl")}</th>
+                  <th className="px-4 py-2 text-end">{t("portfolioDetail.colLots")}</th>
                   <th className="px-4 py-2">{t("portfolioDetail.colVerification")}</th>
                 </tr>
               </thead>
@@ -285,22 +285,22 @@ export function PortfolioDetailPage() {
                   return (
                   <tr key={p.ticker}>
                     <td className="px-4 py-2.5 font-medium text-slate-100">{p.ticker}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatShares(p.totalShares)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatMoney(p.avgCost)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatMoney(p.costBasis)}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatShares(p.totalShares)}</td>
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatMoney(p.avgCost)}</td>
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatMoney(p.costBasis)}</td>
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">
                       {p.currentPrice !== undefined ? formatMoney(p.currentPrice) : "—"}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">
                       {p.marketValue !== undefined ? formatMoney(p.marketValue) : "—"}
                     </td>
-                    <td className={`px-4 py-2.5 text-right tabular-nums ${signClass(p.unrealizedPnl)}`}>
+                    <td className={`px-4 py-2.5 text-end tabular-nums ${signClass(p.unrealizedPnl)}`}>
                       {p.unrealizedPnl !== undefined ? formatMoney(p.unrealizedPnl) : "—"}
                       {p.unrealizedPnlPct !== undefined ? (
-                        <span className="ml-1 text-xs opacity-80">({formatPercent(p.unrealizedPnlPct)})</span>
+                        <span className="ms-1 text-xs opacity-80">({formatPercent(p.unrealizedPnlPct)})</span>
                       ) : null}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-400">{p.openTrades.length}</td>
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-400">{p.openTrades.length}</td>
                     <td className="px-4 py-2.5">
                       {!r ? (
                         <span className="text-xs text-slate-600">{t("common.dash")}</span>
