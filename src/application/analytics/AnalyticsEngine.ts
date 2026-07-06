@@ -78,7 +78,7 @@ export interface AnalyticsResult {
   /** Each period (real calendar month, not just months with activity) also carries unrealizedReturnPct — that period's own change in mark-to-market on still-open positions, from `priceHistory` — see performanceCurve.ts's bucketPerformance doc. */
   monthlyPerformance: PerformancePeriod[];
   annualPerformance: PerformancePeriod[];
-  /** Since inception: cumulative realizedReturnPct + dividendReturnPct (the performance curve's last point) — a quick combined figure, e.g. for ranking portfolios. Deliberately excludes unrealizedReturnPct below, which uses a different denominator (cost basis of currently-open positions only, not all invested cost basis). */
+  /** Since inception: cumulative realizedReturnPct + dividendReturnPct (the performance curve's last point). Deliberately excludes unrealizedReturnPct below, which uses a different denominator (cost basis of currently-open positions only, not all invested cost basis) — see totalReturnPct for the combined figure. */
   portfolioReturn: number;
   /** Cumulative realized return %, as of `today` (the performance curve's last point), against cost basis invested so far. */
   realizedReturnPct: number;
@@ -86,6 +86,8 @@ export interface AnalyticsResult {
   dividendReturnPct: number;
   /** Unrealized P/L on still-open positions as % of their cost basis, against today's price only — a snapshot, deliberately not the same figure as monthlyPerformance/annualPerformance's per-period unrealizedReturnPct (a different denominator: cost basis of open positions only here, vs. total cost basis ever invested there). */
   unrealizedReturnPct: number;
+  /** portfolioReturn + unrealizedReturnPct — the "how is this portfolio doing right now, including what's still open" headline figure. Mixes two different denominators (see the two fields above), so it's an intuitive combined snapshot rather than a mathematically pure single ratio; use this for ranking/comparing portfolios (e.g. Dashboard's Best/Worst Portfolio) so an all-open, nothing-sold-yet portfolio doesn't read as a flat 0% just because portfolioReturn alone only sees realized/dividend activity. */
+  totalReturnPct: number;
   portfolioHealth: PortfolioHealth;
   strategyAttribution: StrategyAttribution[];
   /** Number of sell allocations recorded so far — winRate/profitFactor/avgWinner/avgLoser/holdingTime and largestWinner/largestLoser are all 0 by construction until this is > 0 (nothing has been sold yet, not underperformance). */
@@ -104,6 +106,8 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
 
   const curve = performanceCurve(trades, allocations, timelineEvents, asOf);
   const lastPoint = curve[curve.length - 1];
+  const portfolioReturn = (lastPoint?.realizedReturnPct ?? 0) + (lastPoint?.dividendReturnPct ?? 0);
+  const unrealizedReturnPct = costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0;
 
   return {
     winRate: winRate(allocations, trades),
@@ -118,10 +122,11 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     performanceCurve: curve,
     monthlyPerformance: bucketPerformance(trades, allocations, timelineEvents, 7, priceHistory ?? {}, asOf),
     annualPerformance: bucketPerformance(trades, allocations, timelineEvents, 4, priceHistory ?? {}, asOf),
-    portfolioReturn: (lastPoint?.realizedReturnPct ?? 0) + (lastPoint?.dividendReturnPct ?? 0),
+    portfolioReturn,
     realizedReturnPct: lastPoint?.realizedReturnPct ?? 0,
     dividendReturnPct: lastPoint?.dividendReturnPct ?? 0,
-    unrealizedReturnPct: costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0,
+    unrealizedReturnPct,
+    totalReturnPct: portfolioReturn + unrealizedReturnPct,
     portfolioHealth: portfolioHealth(trades, allocations, priceMap, cash),
     strategyAttribution: strategyAttribution(trades, allocations, input.journalEntries ?? []),
     closedTradeCount: allocations.length,

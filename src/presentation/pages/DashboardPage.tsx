@@ -132,17 +132,17 @@ export function DashboardPage() {
     const totalAssets = totalCash + totalMarketValue;
     const totalValueWeightedReturn =
       totalAssets > 0
-        ? dashboard.reduce((s, d) => s + d.analytics.portfolioReturn * (d.marketValue + d.portfolio.cash), 0) /
+        ? dashboard.reduce((s, d) => s + d.analytics.totalReturnPct * (d.marketValue + d.portfolio.cash), 0) /
           totalAssets
         : 0;
     const capitalDeployment =
       dashboard.length > 0 ? dashboard.reduce((s, d) => s + d.analytics.capitalDeployment, 0) / dashboard.length : 0;
     const best = dashboard.reduce<PortfolioSummary | undefined>(
-      (acc, d) => (!acc || d.analytics.portfolioReturn > acc.analytics.portfolioReturn ? d : acc),
+      (acc, d) => (!acc || d.analytics.totalReturnPct > acc.analytics.totalReturnPct ? d : acc),
       undefined,
     );
     const worst = dashboard.reduce<PortfolioSummary | undefined>(
-      (acc, d) => (!acc || d.analytics.portfolioReturn < acc.analytics.portfolioReturn ? d : acc),
+      (acc, d) => (!acc || d.analytics.totalReturnPct < acc.analytics.totalReturnPct ? d : acc),
       undefined,
     );
     const monthlyReturn = mergeMonthlyPerformance(dashboard.map((d) => d.analytics.monthlyPerformance));
@@ -221,7 +221,7 @@ export function DashboardPage() {
           label="Total Return"
           value={formatPercent(totals.totalValueWeightedReturn)}
           valueClassName={signClass(totals.totalValueWeightedReturn)}
-          sublabel="Value-weighted across portfolios"
+          sublabel="Value-weighted, incl. unrealized"
           icon={totals.totalValueWeightedReturn >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
         />
         <StatTile
@@ -256,14 +256,14 @@ export function DashboardPage() {
         <StatTile
           label="Best Portfolio"
           value={totals.best ? totals.best.portfolio.name : "—"}
-          valueClassName={totals.best ? signClass(totals.best.analytics.portfolioReturn) : undefined}
-          sublabel={totals.best ? formatPercent(totals.best.analytics.portfolioReturn) : undefined}
+          valueClassName={totals.best ? signClass(totals.best.analytics.totalReturnPct) : undefined}
+          sublabel={totals.best ? formatPercent(totals.best.analytics.totalReturnPct) : undefined}
         />
         <StatTile
           label="Worst Portfolio"
           value={totals.worst ? totals.worst.portfolio.name : "—"}
-          valueClassName={totals.worst ? signClass(totals.worst.analytics.portfolioReturn) : undefined}
-          sublabel={totals.worst ? formatPercent(totals.worst.analytics.portfolioReturn) : undefined}
+          valueClassName={totals.worst ? signClass(totals.worst.analytics.totalReturnPct) : undefined}
+          sublabel={totals.worst ? formatPercent(totals.worst.analytics.totalReturnPct) : undefined}
         />
       </div>
 
@@ -303,7 +303,10 @@ export function DashboardPage() {
             </ResponsiveContainer>
             <p className="mt-2 text-[11px] text-slate-500">
               Each portfolio&apos;s realized + dividend return, as % of its own cost basis invested — directly
-              comparable across portfolios of any size without indexing.
+              comparable across portfolios of any size without indexing. Deliberately excludes unrealized P/L (a
+              day-by-day mark-to-market curve would need a different, growing denominator each day, unlike this
+              one); see Total Return/Best/Worst Portfolio above or Monthly Performance below for figures that
+              include it.
               {dashboard.length > MAX_COMPARED_PORTFOLIOS ? ` Showing the first ${MAX_COMPARED_PORTFOLIOS} portfolios.` : ""}
             </p>
           </div>
