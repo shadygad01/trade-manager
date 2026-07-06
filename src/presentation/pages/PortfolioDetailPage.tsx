@@ -239,7 +239,6 @@ export function PortfolioDetailPage() {
           valueClassName={signClass(unrealizedPnl)}
           sublabel={formatPercent(unrealizedPnlPct)}
         />
-        <StatTile label="Total Assets" value={formatMoney(marketValue + portfolio.cash)} />
       </div>
 
       <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-4">

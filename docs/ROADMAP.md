@@ -729,6 +729,14 @@ User-reported real screenshot: an all-open, nothing-sold-yet portfolio ("SMC Aut
 - 2 new/updated `computeAnalytics` test assertions for `totalReturnPct` (425 total, no new test files).
 - Verified end-to-end against a real running build: an all-open portfolio with a real unrealized gain and a separate portfolio with a modest realized gain — the all-open one now correctly wins "Best Portfolio" at its true unrealized %, and "Total Return" reflects the blended figure, instead of the all-open portfolio reading as a flat, misleading 0%.
 
+### Post-sprint-8 fix — the per-portfolio "Total Assets" tile still blended cash into the headline stock value
+
+User-reported follow-up, from a live screenshot: `PortfolioDetailPage`'s "Total Assets" tile (`marketValue + portfolio.cash`) was the one per-portfolio holdout from the earlier "Dashboard's Total Portfolio Value should be stock value only, not cash" fix — same complaint, different page. On the reported portfolio: Total Assets read E£80,565.63 (E£42,565.63 invested + E£38,000 cash), when only the E£42,565.63 stock value was wanted.
+
+- **Removed the "Total Assets" tile entirely** from `PortfolioDetailPage` rather than changing it to market-value-only — that would have made it a byte-for-byte duplicate of the "Invested (Market Value)" tile sitting right next to it. Cash Balance and Invested (Market Value) are both still shown individually, just never pre-summed.
+- No calculator/test changes needed (this was presentation-only); 425 tests still pass.
+- Verified end-to-end against a real running build: the portfolio detail page now shows exactly 3 stat tiles (Cash Balance, Invested (Market Value), Unrealized P/L) with no combined figure.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
