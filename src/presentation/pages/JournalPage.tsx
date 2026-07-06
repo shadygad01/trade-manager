@@ -152,9 +152,9 @@ function LessonsLearnedView({
           className="block w-full rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-start hover:border-slate-700"
         >
           <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-sm font-medium text-slate-100">
-              {trade.ticker}
-              {trade.companyName ? <span className="ms-2 text-xs font-normal text-slate-500">{trade.companyName}</span> : null}
+            <span dir="ltr" className="inline-flex items-baseline gap-2 text-sm font-medium text-slate-100">
+              <span>{trade.ticker}</span>
+              {trade.companyName ? <span className="text-xs font-normal text-slate-500">{trade.companyName}</span> : null}
             </span>
             <span className="text-xs text-slate-500">{formatDate(trade.executionDate)}</span>
           </div>

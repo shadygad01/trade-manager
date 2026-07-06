@@ -197,10 +197,12 @@ export function TradesPage() {
                         ) : null}
                       </td>
                       <td className="px-4 py-2.5 font-medium text-slate-100">
-                        {trade.ticker}
-                        {trade.companyName ? (
-                          <span className="ms-2 text-xs font-normal text-slate-500">{trade.companyName}</span>
-                        ) : null}
+                        <span dir="ltr" className="inline-flex items-baseline gap-2">
+                          <span>{trade.ticker}</span>
+                          {trade.companyName ? (
+                            <span className="text-xs font-normal text-slate-500">{trade.companyName}</span>
+                          ) : null}
+                        </span>
                       </td>
                       <td className="px-4 py-2.5 text-slate-300" onClick={(e) => e.stopPropagation()}>
                         {editingDate?.tradeId === trade.id ? (
