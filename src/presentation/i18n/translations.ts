@@ -105,8 +105,9 @@ export const en: Dict = {
     bestPortfolio: "Best Portfolio",
     worstPortfolio: "Worst Portfolio",
     portfolioComparison: "Portfolio Comparison",
+    portfolioComparisonUnrealizedLine: "Unrealized (avg, dashed)",
     portfolioComparisonCaption:
-      "Each portfolio's realized + dividend return, as % of its own peak capital deployed (the most cost basis ever open at once — recycling the same money through several round-trips no longer shrinks the %) — directly comparable across portfolios of any size without indexing. Deliberately excludes unrealized P/L (a day-by-day mark-to-market curve would need a different, growing denominator each day, unlike this one); see Total Return/Best/Worst Portfolio above or Monthly Performance below for figures that include it.",
+      "Each solid line is one portfolio's realized + dividend return, as % of its own peak capital deployed (the most cost basis ever open at once — recycling the same money through several round-trips no longer shrinks the %) — directly comparable across portfolios of any size without indexing. The dashed line is the simple average of every portfolio's own unrealized return %, against that same peak-capital denominator, moving only at the same dated events as the solid lines rather than a fabricated daily grid; see Total Return/Best/Worst Portfolio above or Monthly Performance below for each portfolio's own unrealized figure.",
     showingFirstN: " Showing the first {{n}} portfolios.",
     portfolioAllocation: "Portfolio Allocation",
     noValueYetTitle: "No value yet",
@@ -702,8 +703,9 @@ export const ar: Dict = {
     bestPortfolio: "أفضل محفظة",
     worstPortfolio: "أضعف محفظة",
     portfolioComparison: "مقارنة المحافظ",
+    portfolioComparisonUnrealizedLine: "غير محقق (متوسط، متقطع)",
     portfolioComparisonCaption:
-      "عائد كل محفظة المحقق + التوزيعات، كنسبة % من ذروة رأس المال المشغّل (أقصى تكلفة مراكز مفتوحة في نفس الوقت — إعادة تدوير نفس المال عبر عدة صفقات لم تعد تقلّص النسبة) — قابلة للمقارنة مباشرة بين محافظ بأي حجم دون إعادة فهرسة. تستبعد عمدًا الربح/الخسارة غير المحققة (منحنى تقييم يومي يحتاج مقامًا مختلفًا ومتغيرًا كل يوم، بخلاف هذا)؛ راجع إجمالي العائد/أفضل/أضعف محفظة أعلاه أو الأداء الشهري أدناه للأرقام التي تشمله.",
+      "كل خط متصل يمثل عائد محفظة واحدة المحقق + التوزيعات، كنسبة % من ذروة رأس المال المشغّل (أقصى تكلفة مراكز مفتوحة في نفس الوقت — إعادة تدوير نفس المال عبر عدة صفقات لم تعد تقلّص النسبة) — قابلة للمقارنة مباشرة بين محافظ بأي حجم دون إعادة فهرسة. الخط المتقطع هو المتوسط البسيط لعائد كل محفظة غير المحقق %، بنفس مقام ذروة رأس المال، ويتحرك فقط عند نفس التواريخ المؤرخة كالخطوط المتصلة وليس شبكة يومية مفتعلة؛ راجع إجمالي العائد/أفضل/أضعف محفظة أعلاه أو الأداء الشهري أدناه لرقم كل محفظة غير المحقق بمفرده.",
     showingFirstN: " يعرض أول {{n}} محافظ.",
     portfolioAllocation: "توزيع المحفظة",
     noValueYetTitle: "لا توجد قيمة بعد",
