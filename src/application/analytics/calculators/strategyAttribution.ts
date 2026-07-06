@@ -3,7 +3,7 @@ import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { JournalEntry } from "@domain/entities/JournalEntry";
 import { winRate } from "./winRate";
 import { profitFactor } from "./profitFactor";
-import { realizedPnlMicrosForAllocations } from "./shared";
+import { realizedPnlMicrosForAllocations, costBasisMicrosForAllocations } from "./shared";
 
 export interface StrategyAttribution {
   tag: string;
@@ -13,6 +13,8 @@ export interface StrategyAttribution {
   profitFactor: number;
   totalRealizedPnl: number;
   avgRealizedPnl: number;
+  /** Total realized P/L across this tag's closed allocations, as % of their combined cost basis — the money-based fields above stay for ranking; this is what the UI displays. */
+  totalRealizedReturnPct: number;
 }
 
 /**
@@ -52,7 +54,12 @@ export function strategyAttribution(
     const taggedTrades = trades.filter((t) => tradeIds.has(t.id));
     const taggedAllocations = allocations.filter((a) => tradeIds.has(a.tradeId));
     const pnlMicros = realizedPnlMicrosForAllocations(taggedAllocations, taggedTrades);
-    const totalRealizedPnl = pnlMicros.reduce((sum, p) => sum + p, 0) / 1_000_000;
+    const totalRealizedPnlMicros = pnlMicros.reduce((sum, p) => sum + p, 0);
+    const totalRealizedPnl = totalRealizedPnlMicros / 1_000_000;
+    const totalCostBasisMicros = costBasisMicrosForAllocations(taggedAllocations, taggedTrades).reduce(
+      (sum, c) => sum + c,
+      0
+    );
 
     results.push({
       tag,
@@ -62,6 +69,7 @@ export function strategyAttribution(
       profitFactor: profitFactor(taggedAllocations, taggedTrades),
       totalRealizedPnl,
       avgRealizedPnl: taggedAllocations.length > 0 ? totalRealizedPnl / taggedAllocations.length : 0,
+      totalRealizedReturnPct: totalCostBasisMicros > 0 ? (totalRealizedPnlMicros / totalCostBasisMicros) * 100 : 0,
     });
   }
 

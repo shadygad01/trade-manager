@@ -43,7 +43,7 @@ describe("computeAnalytics", () => {
     expect(result.winRate).toBe(0); // realized winRate stays 0 — nothing closed
     expect(result.openPositionStats.positionCount).toBe(1);
     expect(result.openPositionStats.winRate).toBe(100); // unrealized fallback reflects the open gain
-    expect(result.openPositionStats.avgWinner).toBeCloseTo(500);
+    expect(result.openPositionStats.avgWinner).toBeCloseTo(50); // (15-10)/10 * 100
   });
 
   it("composes open-position and realized-P/L data into one flat result, measured against cost basis invested — never a deposit/withdrawal", () => {

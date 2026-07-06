@@ -2,7 +2,7 @@ import { isOpen, type Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { cashRatio } from "./cashRatio";
-import { realizedPnlMicrosForAllocations } from "./shared";
+import { realizedReturnPctForAllocations } from "./shared";
 
 export interface PortfolioHealth {
   cashRatio: number;
@@ -13,6 +13,7 @@ export interface PortfolioHealth {
   concentrationScore: number;
   /** 1 - concentrationScore, expressed 0-100: higher = capital is spread across more positions. */
   diversificationScore: number;
+  /** Best/worst single realized allocation's return, as % of that lot's own cost basis (not a money amount). */
   largestWinner: number;
   largestLoser: number;
   /** Composite 0-100 score: rewards diversification and a moderate cash buffer, penalizes concentration and cash sitting completely idle or fully deployed. */
@@ -57,9 +58,9 @@ export function portfolioHealth(
   const largestPositionPct = investedValue > 0 ? (largestPositionValue / investedValue) * 100 : 0;
   const diversificationScore = investedValue > 0 ? (1 - concentrationScore) * 100 : 0;
 
-  const realizedMicros = realizedPnlMicrosForAllocations(allocations, trades);
-  const largestWinner = realizedMicros.length > 0 ? Math.max(...realizedMicros) / 1_000_000 : 0;
-  const largestLoser = realizedMicros.length > 0 ? Math.min(...realizedMicros) / 1_000_000 : 0;
+  const realizedPcts = realizedReturnPctForAllocations(allocations, trades);
+  const largestWinner = realizedPcts.length > 0 ? Math.max(...realizedPcts) : 0;
+  const largestLoser = realizedPcts.length > 0 ? Math.min(...realizedPcts) : 0;
 
   const cashRatioPct = cashRatio(cash, totalEquity);
   const cashComponent = investedValue > 0 ? Math.max(0, 100 - Math.abs(cashRatioPct - HEALTHY_CASH_RATIO_PCT) * 2) : 0;

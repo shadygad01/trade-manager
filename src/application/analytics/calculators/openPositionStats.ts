@@ -5,7 +5,9 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
 export interface OpenPositionStats {
   positionCount: number;
   winRate: number;
+  /** Gross unrealized profit / gross unrealized loss, in money — dollar-weighted, unlike the % fields below. */
   profitFactor: number;
+  /** Average/largest unrealized return, as % of that lot's own cost basis (not a money amount). */
   avgWinner: number;
   avgLoser: number;
   largestWinner: number;
@@ -28,7 +30,8 @@ export function openPositionStats(
   priceMap: Record<string, number>,
   today: string = new Date().toISOString().slice(0, 10)
 ): OpenPositionStats {
-  const pnls: number[] = [];
+  const moneyPnls: number[] = [];
+  const pctPnls: number[] = [];
   let weightedDaysTotal = 0;
   let sharesTotal = 0;
 
@@ -40,26 +43,30 @@ export function openPositionStats(
       trade.remainingShares / trade.shares
     );
     const marketValue = Money.from(trade.remainingShares * price);
-    pnls.push(marketValue.subtract(costBasis).toNumber());
+    const costBasisNumber = costBasis.toNumber();
+    moneyPnls.push(marketValue.subtract(costBasis).toNumber());
+    pctPnls.push(((marketValue.toNumber() - costBasisNumber) / costBasisNumber) * 100);
 
     const days = (Date.parse(today) - Date.parse(trade.executionDate)) / MS_PER_DAY;
     weightedDaysTotal += days * trade.remainingShares;
     sharesTotal += trade.remainingShares;
   }
 
-  const winners = pnls.filter((p) => p > 0);
-  const losers = pnls.filter((p) => p < 0);
-  const grossProfit = winners.reduce((sum, p) => sum + p, 0);
-  const grossLoss = Math.abs(losers.reduce((sum, p) => sum + p, 0));
+  const winnerMoney = moneyPnls.filter((p) => p > 0);
+  const loserMoney = moneyPnls.filter((p) => p < 0);
+  const grossProfit = winnerMoney.reduce((sum, p) => sum + p, 0);
+  const grossLoss = Math.abs(loserMoney.reduce((sum, p) => sum + p, 0));
+  const winnerPcts = pctPnls.filter((_, i) => moneyPnls[i] > 0);
+  const loserPcts = pctPnls.filter((_, i) => moneyPnls[i] < 0);
 
   return {
-    positionCount: pnls.length,
-    winRate: pnls.length > 0 ? (winners.length / pnls.length) * 100 : 0,
+    positionCount: moneyPnls.length,
+    winRate: moneyPnls.length > 0 ? (winnerMoney.length / moneyPnls.length) * 100 : 0,
     profitFactor: grossLoss === 0 ? (grossProfit > 0 ? Infinity : 0) : grossProfit / grossLoss,
-    avgWinner: winners.length > 0 ? grossProfit / winners.length : 0,
-    avgLoser: losers.length > 0 ? -grossLoss / losers.length : 0,
-    largestWinner: pnls.length > 0 ? Math.max(...pnls) : 0,
-    largestLoser: pnls.length > 0 ? Math.min(...pnls) : 0,
+    avgWinner: winnerPcts.length > 0 ? winnerPcts.reduce((sum, p) => sum + p, 0) / winnerPcts.length : 0,
+    avgLoser: loserPcts.length > 0 ? loserPcts.reduce((sum, p) => sum + p, 0) / loserPcts.length : 0,
+    largestWinner: pctPnls.length > 0 ? Math.max(...pctPnls) : 0,
+    largestLoser: pctPnls.length > 0 ? Math.min(...pctPnls) : 0,
     avgHoldingDays: sharesTotal > 0 ? weightedDaysTotal / sharesTotal : 0,
   };
 }

@@ -21,21 +21,21 @@ describe("openPositionStats", () => {
     expect(stats.positionCount).toBe(1);
     expect(stats.winRate).toBe(100);
     expect(stats.profitFactor).toBe(Infinity);
-    expect(stats.avgWinner).toBeCloseTo(500); // (15-10)*100
+    expect(stats.avgWinner).toBeCloseTo(50); // (15-10)/10 * 100
     expect(stats.avgLoser).toBe(0);
-    expect(stats.largestWinner).toBeCloseTo(500);
+    expect(stats.largestWinner).toBeCloseTo(50);
     expect(stats.avgHoldingDays).toBeCloseTo(10);
   });
 
-  it("computes a mixed win/loss profit factor across several open lots", () => {
+  it("computes a mixed win/loss profit factor (money-weighted) and largest %  across several open lots", () => {
     const winner = makeTrade({ id: "w1", ticker: "COMI", shares: 100, entryPrice: 10 });
     const loser = makeTrade({ id: "l1", ticker: "HRHO", shares: 100, entryPrice: 10 });
     const stats = openPositionStats([winner, loser], { COMI: 15, HRHO: 8 }, "2026-01-05");
     expect(stats.positionCount).toBe(2);
     expect(stats.winRate).toBe(50);
-    expect(stats.profitFactor).toBeCloseTo(500 / 200); // gross profit 500 / gross loss 200
-    expect(stats.largestWinner).toBeCloseTo(500);
-    expect(stats.largestLoser).toBeCloseTo(-200);
+    expect(stats.profitFactor).toBeCloseTo(500 / 200); // gross profit E£500 / gross loss E£200, still money-weighted
+    expect(stats.largestWinner).toBeCloseTo(50); // (15-10)/10 * 100
+    expect(stats.largestLoser).toBeCloseTo(-20); // (8-10)/10 * 100
   });
 
   it("skips a ticker missing from priceMap rather than fabricating a price", () => {

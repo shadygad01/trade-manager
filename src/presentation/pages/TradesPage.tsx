@@ -60,6 +60,7 @@ export function TradesPage() {
   const priceMap = useLiveQuery(() => repos.prices.getAllPrices(), []);
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []) ?? [];
   const otherPortfolios = useMemo(() => portfolios.filter((p) => p.id !== portfolioId), [portfolios, portfolioId]);
+  const portfolio = useMemo(() => portfolios.find((p) => p.id === portfolioId), [portfolios, portfolioId]);
 
   const allocationsByTrade = useMemo(() => {
     const map = new Map<string, TradeAllocation[]>();
@@ -103,7 +104,7 @@ export function TradesPage() {
   return (
     <div>
       <PageHeader
-        title="Trades"
+        title={portfolio ? `${portfolio.name} — Trades` : "Trades"}
         description="Every buy execution and the specific lots each sell closed."
         actions={
           <>

@@ -34,15 +34,15 @@ describe("portfolioHealth", () => {
     expect(health.largestPositionPct).toBeCloseTo(100);
   });
 
-  it("reports the largest realized winner and loser", () => {
+  it("reports the largest realized winner and loser as % of that lot's cost basis", () => {
     const trade = makeTrade({ id: "t1", shares: 100, entryPrice: 10 });
     const allocations = [
       makeAllocation({ tradeId: "t1", sharesClosed: 50, exitPrice: 20 }),
       makeAllocation({ tradeId: "t1", sharesClosed: 50, exitPrice: 5 }),
     ];
     const health = portfolioHealth([trade], allocations, {}, 10_000);
-    expect(health.largestWinner).toBeCloseTo(50 * (20 - 10));
-    expect(health.largestLoser).toBeCloseTo(50 * (5 - 10));
+    expect(health.largestWinner).toBeCloseTo(100); // (20-10)/10 * 100
+    expect(health.largestLoser).toBeCloseTo(-50); // (5-10)/10 * 100
   });
 
   it("keeps healthScore within 0-100", () => {

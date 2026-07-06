@@ -14,6 +14,33 @@ export function realizedPnlMicrosForAllocations(allocations: TradeAllocation[], 
   });
 }
 
+/** Pro-rated cost basis (in micros) of the specific shares one allocation closed — the denominator behind realizedReturnPctForAllocations, exposed separately for callers that need to weight several allocations together (e.g. a total return % across a whole strategy tag). */
+export function costBasisMicrosForAllocations(allocations: TradeAllocation[], trades: Trade[]): number[] {
+  const tradesById = new Map(trades.map((t) => [t.id, t]));
+  return allocations.map((allocation) => {
+    const trade = tradesById.get(allocation.tradeId);
+    if (!trade) {
+      throw new Error(`Trade not found for allocation ${allocation.id}: ${allocation.tradeId}`);
+    }
+    const costBasisPerShare = trade.entryPrice + (trade.fees + trade.taxes) / trade.shares;
+    return Math.round(costBasisPerShare * allocation.sharesClosed * 1_000_000);
+  });
+}
+
+/** Per-allocation realized return, as % of that lot's own cost basis (entry price + pro-rated entry fees/taxes) — the same win/loss sign as realizedPnlMicros, just normalized by position size instead of expressed in money. */
+export function realizedReturnPctForAllocations(allocations: TradeAllocation[], trades: Trade[]): number[] {
+  const tradesById = new Map(trades.map((t) => [t.id, t]));
+  return allocations.map((allocation) => {
+    const trade = tradesById.get(allocation.tradeId);
+    if (!trade) {
+      throw new Error(`Trade not found for allocation ${allocation.id}: ${allocation.tradeId}`);
+    }
+    const costBasisPerShare = trade.entryPrice + (trade.fees + trade.taxes) / trade.shares;
+    const proceedsPerShare = allocation.exitPrice - (allocation.fees + allocation.taxes) / allocation.sharesClosed;
+    return ((proceedsPerShare - costBasisPerShare) / costBasisPerShare) * 100;
+  });
+}
+
 export interface OpenPositionsSummary {
   costBasis: number;
   marketValue: number;

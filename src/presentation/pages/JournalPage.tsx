@@ -23,6 +23,7 @@ function readAsDataUrl(file: File): Promise<string> {
 
 export function JournalPage() {
   const { id: portfolioId } = useParams<{ id: string }>();
+  const portfolio = useLiveQuery(() => repos.portfolios.getById(portfolioId), [portfolioId]);
   const [selectedTradeId, setSelectedTradeId] = useState<string | null>(null);
   const [tab, setTab] = useState<JournalTab>("byTrade");
 
@@ -55,7 +56,7 @@ export function JournalPage() {
   return (
     <div>
       <PageHeader
-        title="Journal"
+        title={portfolio ? `${portfolio.name} — Journal` : "Journal"}
         description="Reflections per trade: why you took it, why you exited, and what you learned."
         actions={
           <div className="flex rounded-md border border-slate-700 p-0.5 text-xs">

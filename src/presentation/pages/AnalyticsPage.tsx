@@ -18,11 +18,13 @@ import { PageHeader } from "@presentation/components/PageHeader";
 import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { StatTile } from "@presentation/components/StatTile";
 import { EmptyState } from "@presentation/components/EmptyState";
-import { formatMoney, formatPercent, signClass } from "@presentation/lib/format";
+import { formatPercent, signClass } from "@presentation/lib/format";
 import { CATEGORICAL, CHART_GRID, CHART_SURFACE, CHART_TEXT_MUTED } from "@presentation/lib/chartColors";
 
 export function AnalyticsPage() {
   const { id: portfolioId } = useParams<{ id: string }>();
+  const portfolio = useLiveQuery(() => repos.portfolios.getById(portfolioId), [portfolioId]);
+  const pageTitle = portfolio ? `${portfolio.name} — Analytics` : "Analytics";
 
   const analytics = useLiveQuery(async () => {
     const [portfolio, trades, allocations, timelineEvents, priceMap, journalEntries] = await Promise.all([
@@ -44,7 +46,7 @@ export function AnalyticsPage() {
   if (analytics === undefined) {
     return (
       <div>
-        <PageHeader title="Analytics" description="Performance, risk and behavioral stats for this portfolio." />
+        <PageHeader title={pageTitle} description="Performance, risk and behavioral stats for this portfolio." />
         <p className="text-sm text-slate-500">Loading…</p>
       </div>
     );
@@ -53,7 +55,7 @@ export function AnalyticsPage() {
   if (!analytics) {
     return (
       <div>
-        <PageHeader title="Analytics" description="Performance, risk and behavioral stats for this portfolio." />
+        <PageHeader title={pageTitle} description="Performance, risk and behavioral stats for this portfolio." />
         <EmptyState title="Portfolio not found" description="It may have been deleted." />
       </div>
     );
@@ -69,7 +71,7 @@ export function AnalyticsPage() {
 
   return (
     <div>
-      <PageHeader title="Analytics" description="Performance, risk and behavioral stats for this portfolio." />
+      <PageHeader title={pageTitle} description="Performance, risk and behavioral stats for this portfolio." />
       <PriceFreshness />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -85,13 +87,13 @@ export function AnalyticsPage() {
         />
         <StatTile
           label="Avg Winner"
-          value={formatMoney(hasClosedTrades ? analytics.avgWinner : analytics.openPositionStats.avgWinner)}
+          value={formatPercent(hasClosedTrades ? analytics.avgWinner : analytics.openPositionStats.avgWinner, 1)}
           valueClassName="text-emerald-400"
           sublabel={tradeStatsSublabel}
         />
         <StatTile
           label="Avg Loser"
-          value={formatMoney(hasClosedTrades ? analytics.avgLoser : analytics.openPositionStats.avgLoser)}
+          value={formatPercent(hasClosedTrades ? analytics.avgLoser : analytics.openPositionStats.avgLoser, 1)}
           valueClassName="text-rose-400"
           sublabel={tradeStatsSublabel}
         />
@@ -196,15 +198,16 @@ export function AnalyticsPage() {
           <StatTile label="Open Trades" value={String(analytics.portfolioHealth.openTradeCount)} />
           <StatTile
             label="Largest Winner / Loser"
-            value={formatMoney(
-              hasClosedTrades ? analytics.portfolioHealth.largestWinner : analytics.openPositionStats.largestWinner
+            value={formatPercent(
+              hasClosedTrades ? analytics.portfolioHealth.largestWinner : analytics.openPositionStats.largestWinner,
+              1
             )}
             valueClassName="text-emerald-400"
             sublabel={
               hasClosedTrades
-                ? formatMoney(analytics.portfolioHealth.largestLoser)
+                ? formatPercent(analytics.portfolioHealth.largestLoser, 1)
                 : hasOpenPositions
-                  ? `${formatMoney(analytics.openPositionStats.largestLoser)} · ${unrealizedSublabel}`
+                  ? `${formatPercent(analytics.openPositionStats.largestLoser, 1)} · ${unrealizedSublabel}`
                   : noTradesSublabel
             }
           />
@@ -224,7 +227,7 @@ export function AnalyticsPage() {
                   <th className="px-4 py-2 text-right">Trades</th>
                   <th className="px-4 py-2 text-right">Win Rate</th>
                   <th className="px-4 py-2 text-right">Profit Factor</th>
-                  <th className="px-4 py-2 text-right">Total Realized P/L</th>
+                  <th className="px-4 py-2 text-right">Total Realized Return</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
@@ -238,8 +241,8 @@ export function AnalyticsPage() {
                     <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
                       {s.closedAllocationCount === 0 ? "—" : Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞"}
                     </td>
-                    <td className={`px-4 py-2.5 text-right tabular-nums ${signClass(s.totalRealizedPnl)}`}>
-                      {formatMoney(s.totalRealizedPnl)}
+                    <td className={`px-4 py-2.5 text-right tabular-nums ${signClass(s.totalRealizedReturnPct)}`}>
+                      {s.closedAllocationCount === 0 ? "—" : formatPercent(s.totalRealizedReturnPct, 1)}
                     </td>
                   </tr>
                 ))}
