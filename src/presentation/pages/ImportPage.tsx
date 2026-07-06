@@ -924,7 +924,9 @@ export function ImportPage() {
       const remainingBuys = group.buys.filter(
         (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
       );
-      const remainingSells = group.sells.filter((e) => !addedKeys.has(e.key));
+      const remainingSells = group.sells.filter(
+        (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+      );
       const pendingBuyShares = remainingBuys.reduce((sum, e) => sum + e.candidate.shares, 0);
       const pendingSellShares = remainingSells.reduce((sum, e) => sum + e.candidate.shares, 0);
       const remainingBuysAndSells = [...remainingBuys, ...remainingSells];

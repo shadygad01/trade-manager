@@ -350,6 +350,8 @@ export const en: Dict = {
     recordSellFailed: "Failed to record sell.",
     noOpenLots: "No open lots for {{ticker}} in this portfolio.",
     openLotsElsewhere: "{{ticker}} has open lots in: {{portfolios}}. Open the sell from that portfolio instead.",
+    allSharesAllocated:
+      "All {{bought}} bought shares of {{ticker}} are already allocated to recorded sells ({{sold}} sold). This sell is most likely already on the ledger — check the ticker's history before recording it again.",
     cancel: "Cancel",
     recording: "Recording…",
     recordSell: "Record Sell",
@@ -949,6 +951,8 @@ export const ar: Dict = {
     recordSellFailed: "فشل تسجيل البيع.",
     noOpenLots: "لا توجد دفعات مفتوحة لـ {{ticker}} في هذه المحفظة.",
     openLotsElsewhere: "توجد دفعات مفتوحة لـ {{ticker}} في: {{portfolios}}. افتح البيع من تلك المحفظة بدلاً من هذه.",
+    allSharesAllocated:
+      "كل الأسهم المشتراة ({{bought}}) من {{ticker}} مخصصة بالفعل لبيعات مسجلة ({{sold}} مباعة). هذه البيعة على الأغلب مسجلة مسبقاً — راجع سجل السهم قبل تسجيلها مرة أخرى.",
     cancel: "إلغاء",
     recording: "جارٍ التسجيل…",
     recordSell: "تسجيل بيع",

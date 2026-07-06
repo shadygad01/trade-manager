@@ -92,6 +92,28 @@ describe("findDuplicateBuyMatch", () => {
   });
 });
 
+describe("findDuplicateSellMatch — legacy allocations without sellGroupId", () => {
+  it("re-unifies a sell split across lots by date+price so re-imports still match", () => {
+    const base = { ticker: "HRHO", executionDate: "2026-06-28", exitPrice: 26.63, sellGroupId: undefined };
+    const a1 = createTradeAllocation({ ...base, id: "a1", sharesClosed: 24 });
+    const a2 = createTradeAllocation({ ...base, id: "a2", sharesClosed: 15 });
+    const match = findDuplicateSellMatch(
+      buyCandidate({ ticker: "HRHO", side: "SELL", date: "2026-06-28", shares: 39, price: 26.63 }),
+      [a1, a2],
+    );
+    expect(match?.matchType).toBe("exact");
+    expect(match?.matchedPrice).toBe(26.63);
+  });
+
+  it("does not merge legacy rows with different prices", () => {
+    const a1 = createTradeAllocation({ id: "a1", ticker: "HRHO", executionDate: "2026-06-28", exitPrice: 26.63, sharesClosed: 24, sellGroupId: undefined });
+    const a2 = createTradeAllocation({ id: "a2", ticker: "HRHO", executionDate: "2026-06-28", exitPrice: 27.1, sharesClosed: 15, sellGroupId: undefined });
+    expect(
+      findDuplicateSellMatch(buyCandidate({ ticker: "HRHO", side: "SELL", date: "2026-06-28", shares: 39, price: 26.63 }), [a1, a2]),
+    ).toBeUndefined();
+  });
+});
+
 describe("pricesWithinOcrNoise", () => {
   it("accepts price gaps at or under 1% (commission-inclusive vs raw execution price)", () => {
     expect(pricesWithinOcrNoise(50, 50.5)).toBe(true); // exactly 1% of 50.5-max

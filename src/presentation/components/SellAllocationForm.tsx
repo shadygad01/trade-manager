@@ -46,7 +46,26 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
    * distributed into another portfolio, or the trades were moved). Name the
    * portfolios that do hold open lots so the fix is one portfolio switch
    * away instead of a mystery.
+   *
+   * The second dead end: no open lots ANYWHERE because every bought share of
+   * this ticker was already allocated to recorded sells. Without this the
+   * modal reads like data loss; with it the user sees the sell they're trying
+   * to record most likely already exists on the ledger.
    */
+  const allocationSummary = useLiveQuery(async () => {
+    const [trades, allocations] = await Promise.all([
+      repos.trades.getByPortfolio(portfolioId),
+      repos.allocations.getByPortfolio(portfolioId),
+    ]);
+    const bought = trades
+      .filter((t) => normalizeTicker(t.ticker) === normalizedTicker)
+      .reduce((sum, t) => sum + t.shares, 0);
+    const sold = allocations
+      .filter((a) => normalizeTicker(a.ticker) === normalizedTicker)
+      .reduce((sum, a) => sum + a.sharesClosed, 0);
+    return { bought, sold };
+  }, [portfolioId, normalizedTicker]);
+
   const openLotsElsewhere = useLiveQuery(async () => {
     const [allTrades, portfolios] = await Promise.all([repos.trades.getAll(), repos.portfolios.getAll()]);
     const portfolioNames = new Map(portfolios.map((p) => [p.id, p.name]));
@@ -171,6 +190,14 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
         {openLotsElsewhere && openLotsElsewhere.length > 0 ? (
           <p className="text-sm text-amber-300">
             {t("sellForm.openLotsElsewhere", { ticker, portfolios: openLotsElsewhere.join("، ") })}
+          </p>
+        ) : allocationSummary && allocationSummary.bought > 0 && allocationSummary.sold >= allocationSummary.bought ? (
+          <p className="text-sm text-amber-300">
+            {t("sellForm.allSharesAllocated", {
+              ticker,
+              bought: allocationSummary.bought,
+              sold: allocationSummary.sold,
+            })}
           </p>
         ) : null}
       </div>

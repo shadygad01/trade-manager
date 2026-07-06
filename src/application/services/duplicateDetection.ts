@@ -91,8 +91,11 @@ export function findDuplicateSellMatch(
   for (const a of existingAllocations) {
     if (normalizeTicker(a.ticker) !== ticker || a.executionDate !== candidate.date) continue;
     // sellGroupId identifies one real sell order regardless of how many lots
-    // it was allocated across. A legacy row without one is its own group.
-    const key = a.sellGroupId || `row:${a.id}`;
+    // it was allocated across. Legacy rows recorded before sellGroupId existed
+    // must be re-unified by date+exact price, or a 39-share sell split 24+15
+    // across two lots would never sum back to 39 and the re-imported candidate
+    // would sit pending forever against a fully-consumed position.
+    const key = a.sellGroupId || `legacy:${a.executionDate}|${round4(a.exitPrice)}`;
     const g = groups.get(key);
     if (g) {
       g.totalShares += a.sharesClosed;
