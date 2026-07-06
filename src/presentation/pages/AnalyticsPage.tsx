@@ -62,7 +62,10 @@ export function AnalyticsPage() {
   const latestMonthly = analytics.monthlyPerformance.at(-1);
   const latestAnnual = analytics.annualPerformance.at(-1);
   const hasClosedTrades = analytics.closedTradeCount > 0;
-  const noClosedTradesSublabel = "No closed trades yet";
+  const hasOpenPositions = analytics.openPositionStats.positionCount > 0;
+  const unrealizedSublabel = "Unrealized — positions not closed";
+  const noTradesSublabel = "No trades yet";
+  const tradeStatsSublabel = hasClosedTrades ? undefined : hasOpenPositions ? unrealizedSublabel : noTradesSublabel;
 
   return (
     <div>
@@ -72,30 +75,30 @@ export function AnalyticsPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
           label="Win Rate"
-          value={hasClosedTrades ? formatPercent(analytics.winRate, 1) : "—"}
-          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+          value={formatPercent(hasClosedTrades ? analytics.winRate : analytics.openPositionStats.winRate, 1)}
+          sublabel={tradeStatsSublabel}
         />
         <StatTile
           label="Profit Factor"
-          value={hasClosedTrades ? analytics.profitFactor.toFixed(2) : "—"}
-          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+          value={(hasClosedTrades ? analytics.profitFactor : analytics.openPositionStats.profitFactor).toFixed(2)}
+          sublabel={tradeStatsSublabel}
         />
         <StatTile
           label="Avg Winner"
-          value={hasClosedTrades ? formatMoney(analytics.avgWinner) : "—"}
+          value={formatMoney(hasClosedTrades ? analytics.avgWinner : analytics.openPositionStats.avgWinner)}
           valueClassName="text-emerald-400"
-          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+          sublabel={tradeStatsSublabel}
         />
         <StatTile
           label="Avg Loser"
-          value={hasClosedTrades ? formatMoney(analytics.avgLoser) : "—"}
+          value={formatMoney(hasClosedTrades ? analytics.avgLoser : analytics.openPositionStats.avgLoser)}
           valueClassName="text-rose-400"
-          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+          sublabel={tradeStatsSublabel}
         />
         <StatTile
           label="Avg Holding Time"
-          value={hasClosedTrades ? `${analytics.holdingTime.toFixed(1)}d` : "—"}
-          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+          value={`${(hasClosedTrades ? analytics.holdingTime : analytics.openPositionStats.avgHoldingDays).toFixed(1)}d`}
+          sublabel={tradeStatsSublabel}
         />
         <StatTile label="Exposure" value={formatPercent(analytics.exposure, 1)} />
         <StatTile label="Cash Ratio" value={formatPercent(analytics.cashRatio, 1)} />
@@ -193,9 +196,17 @@ export function AnalyticsPage() {
           <StatTile label="Open Trades" value={String(analytics.portfolioHealth.openTradeCount)} />
           <StatTile
             label="Largest Winner / Loser"
-            value={hasClosedTrades ? formatMoney(analytics.portfolioHealth.largestWinner) : "—"}
+            value={formatMoney(
+              hasClosedTrades ? analytics.portfolioHealth.largestWinner : analytics.openPositionStats.largestWinner
+            )}
             valueClassName="text-emerald-400"
-            sublabel={hasClosedTrades ? formatMoney(analytics.portfolioHealth.largestLoser) : noClosedTradesSublabel}
+            sublabel={
+              hasClosedTrades
+                ? formatMoney(analytics.portfolioHealth.largestLoser)
+                : hasOpenPositions
+                  ? `${formatMoney(analytics.openPositionStats.largestLoser)} · ${unrealizedSublabel}`
+                  : noTradesSublabel
+            }
           />
         </div>
       </div>

@@ -687,6 +687,15 @@ User-reported real screenshot: a portfolio with 29 open trades and zero sells sh
 - Verified end-to-end against a real running build: a fresh portfolio with one open buy (no sell) shows `—`/"No closed trades yet" on every affected tile while Exposure, Cash Ratio, Realized Return (correctly 0.00%), and Unrealized Return still render normally; adding a sell on a second portfolio immediately replaced the placeholders with real figures (Win Rate 100%, Profit Factor Infinity, Largest Winner E£500.00).
 - 2 existing `computeAnalytics` tests extended to assert `closedTradeCount` (417 total, unchanged — no new test cases).
 
+### Post-sprint-8 fix — replaced the "No closed trades yet" placeholder with a real mark-to-market fallback
+
+Direct user follow-up, immediately after the fix above shipped: rejected the blank `—` placeholder outright — wanted Win Rate/Profit Factor/Avg Winner/Avg Loser/Avg Holding Time/Largest Winner/Loser computed against **today's market price** on a buy-only portfolio, explicitly labeled as unrealized so it's never mistaken for a closed-trade result.
+
+- **`openPositionStats.ts`** (new calculator, one file/one registry entry per the usual extension pattern): mark-to-market win/loss breakdown of every still-open Trade lot against `priceMap` — same win/loss/profit-factor/avg-winner/avg-loser/largest-winner/largest-loser shape as the realized calculators, plus `avgHoldingDays` (days held so far, not days-to-close since nothing's closed). A ticker missing from `priceMap` is skipped entirely rather than priced at zero, matching `summarizeOpenPositions`' documented behavior; cost basis uses the same prorated-by-remaining-shares `Money` math as `summarizeOpenPositions`.
+- **`AnalyticsPage`**: the six affected tiles now show, in priority order, (1) the real realized figure once `closedTradeCount > 0`, (2) the `openPositionStats` mark-to-market figure when there's at least one open position, labeled "Unrealized — positions not closed", or (3) "No trades yet" only when the portfolio truly has nothing recorded at all.
+- 5 new tests for `openPositionStats` (mixed win/loss profit factor, missing-price skip, fully-closed-trade exclusion) plus one `computeAnalytics` test asserting the fallback kicks in when `closedTradeCount` is 0; realized-path behavior is unchanged and re-verified (423 total).
+- Verified end-to-end against a real running build: a fresh buy-only portfolio now shows a real Win Rate/Profit Factor/Avg Winner/Largest Winner computed from today's price with the "Unrealized — positions not closed" sublabel on every affected tile; a portfolio with an actual closed sell still shows the plain realized figures with no such label (no regression); a portfolio with zero trades at all still correctly shows "No trades yet".
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

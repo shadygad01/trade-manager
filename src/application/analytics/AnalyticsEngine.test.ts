@@ -24,6 +24,26 @@ describe("computeAnalytics", () => {
     expect(result.portfolioReturn).toBe(0);
     expect(result.performanceCurve).toEqual([{ date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 }]);
     expect(result.closedTradeCount).toBe(0);
+    expect(result.openPositionStats.positionCount).toBe(0);
+  });
+
+  it("falls back to mark-to-market openPositionStats when nothing has been sold yet", () => {
+    const openTrade = makeTrade({ id: "open1", ticker: "COMI", shares: 100, entryPrice: 10, executionDate: "2026-01-01" });
+
+    const result = computeAnalytics({
+      trades: [openTrade],
+      allocations: [],
+      timelineEvents: [],
+      priceMap: { COMI: 15 },
+      cash: -1000,
+      today: "2026-01-11",
+    });
+
+    expect(result.closedTradeCount).toBe(0);
+    expect(result.winRate).toBe(0); // realized winRate stays 0 — nothing closed
+    expect(result.openPositionStats.positionCount).toBe(1);
+    expect(result.openPositionStats.winRate).toBe(100); // unrealized fallback reflects the open gain
+    expect(result.openPositionStats.avgWinner).toBeCloseTo(500);
   });
 
   it("composes open-position and realized-P/L data into one flat result, measured against cost basis invested — never a deposit/withdrawal", () => {
@@ -110,6 +130,7 @@ describe("computeAnalytics", () => {
         "bucketPerformance",
         "portfolioHealth",
         "strategyAttribution",
+        "openPositionStats",
       ].sort()
     );
   });
