@@ -90,7 +90,8 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
           />
           <Tooltip
             contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
-            labelStyle={{ color: "#c3c2b7" }}
+            labelStyle={{ color: CHART_TEXT_SECONDARY }}
+            itemStyle={{ color: CHART_TEXT_SECONDARY }}
             formatter={(value: number, _name, entry) => [
               formatMoney(value),
               `Entry price · ${formatShares(entry.payload.remainingShares)}/${formatShares(entry.payload.shares)} shares remaining`,
@@ -102,6 +103,7 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
               stroke={CATEGORICAL[0]}
               strokeWidth={2}
               strokeDasharray="4 4"
+              ifOverflow="extendDomain"
               label={{
                 value: `Current ${formatMoney(currentPrice)}`,
                 position: "top",
