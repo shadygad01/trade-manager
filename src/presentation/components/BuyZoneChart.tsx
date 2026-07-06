@@ -96,7 +96,12 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
             type="category"
             dataKey="label"
             orientation={isRtl ? "right" : "left"}
-            tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
+            // Recharts computes textAnchor="start" for orientation="right" (its
+            // default assumes a *mirrored* left axis, not a genuinely right-docked
+            // one) — that grows the date labels rightward off the SVG edge instead
+            // of ending flush against the axis line. "end" is what orientation="left"
+            // already defaults to, so pinning it explicitly keeps both sides correct.
+            tick={{ fill: CHART_TEXT_MUTED, fontSize: 11, textAnchor: "end" }}
             tickLine={false}
             axisLine={{ stroke: CHART_GRID }}
             width={72}
