@@ -944,7 +944,10 @@ describe("TickerGroupCard — Orders timeline evidence", () => {
     expect(screen.getByText("Matches Orders history")).toBeInTheDocument();
     expect(screen.getByText("Ready — click Confirm above")).toBeInTheDocument();
     expect(screen.getByText("Fulfilled")).toBeInTheDocument();
-    expect(screen.getByText("Cancelled")).toBeInTheDocument();
+    // Cancelled orders never render during manual review — a struck-through
+    // BUY/SELL line still reads like a transaction and invites recording
+    // something that never executed.
+    expect(screen.queryByText("Cancelled")).not.toBeInTheDocument();
     expect(screen.queryByText("No matching order")).not.toBeInTheDocument();
   });
 
