@@ -201,3 +201,40 @@ describe("PortfolioDetailPage — a verified-but-untracked position points at Im
     });
   });
 });
+
+describe("PortfolioDetailPage — Edit Cash", () => {
+  beforeEach(() => {
+    state.portfolios = [createPortfolio({ id: "p1", name: "Cash Edit Test", kind: "Trading", initialCash: 413_154.06 })];
+    state.trades = [];
+    state.verifications = [];
+  });
+
+  it("lets a cleared field be typed into without snapping back to the old balance", async () => {
+    const user = userEvent.setup();
+    renderPage("p1");
+
+    await user.click(await screen.findByRole("button", { name: /edit cash/i }));
+    const input = await screen.findByLabelText(/cash balance/i);
+    expect(input).toHaveValue(413154.06);
+
+    await user.clear(input);
+    expect(input).toHaveValue(null); // cleared, not reverted to 413154.06
+    await user.type(input, "500000");
+    expect(input).toHaveValue(500000);
+  });
+
+  it("saves the newly typed balance, not the pre-fill", async () => {
+    const user = userEvent.setup();
+    renderPage("p1");
+
+    await user.click(await screen.findByRole("button", { name: /edit cash/i }));
+    const input = await screen.findByLabelText(/cash balance/i);
+    await user.clear(input);
+    await user.type(input, "500000");
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => {
+      expect(state.portfolios[0].cash).toBe(500000);
+    });
+  });
+});
