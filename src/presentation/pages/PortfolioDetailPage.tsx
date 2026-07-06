@@ -531,6 +531,14 @@ function CashModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Pre-fills the field with the current balance when Edit Cash opens, once —
+  // the input's value is otherwise just `amount`, so clearing it to type a new
+  // number no longer snaps back to currentCash mid-edit (see the old
+  // `amount === "" ? currentCash : amount` value prop this replaced).
+  useEffect(() => {
+    if (kind === "editCash") setAmount(String(currentCash));
+  }, [kind, currentCash]);
+
   if (!kind) return null;
 
   const titles: Record<Exclude<CashModalKind, null>, string> = {
@@ -540,7 +548,7 @@ function CashModal({
   };
 
   async function handleSubmit() {
-    const n = kind === "editCash" && amount === "" ? currentCash : Number.parseFloat(amount);
+    const n = Number.parseFloat(amount);
     if (kind === "editCash") {
       if (!Number.isFinite(n)) {
         setError("Enter the correct cash balance.");
@@ -591,7 +599,7 @@ function CashModal({
           {kind === "adjustment" ? "Amount (EGP) — negative to decrease" : kind === "editCash" ? "Cash balance (EGP)" : "Amount (EGP)"}
           <input
             type="number"
-            value={kind === "editCash" && amount === "" ? String(currentCash) : amount}
+            value={amount}
             onChange={(e) => setAmount(e.target.value)}
             className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
           />

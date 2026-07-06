@@ -707,6 +707,16 @@ Six items requested together; four were unambiguous and shipped now, two (full A
 - 423 tests updated/passing (percent-basis math re-derived by hand for every changed assertion, not just re-run); typecheck clean.
 - Verified end-to-end against a real running build: sidebar order, portfolio name in all four tab headers, Analytics tiles showing e.g. "+1197.1%" instead of an E£ amount, and Dashboard's Total Portfolio Value showing only market value with a cost-basis sublabel.
 
+### Post-sprint-8 fix — Edit Cash reverted to the old balance the instant the field was cleared, before Confirm
+
+User-reported real bug, from live screenshots: every attempt to edit a portfolio's cash balance seemed to "revert on its own" before pressing Confirm. Root cause in `PortfolioDetailPage.tsx`'s `CashModal`: the input's `value` was `kind === "editCash" && amount === "" ? String(currentCash) : amount` — meant to pre-fill the field when the modal first opens, but it re-fired on *every* render where the local `amount` state happened to be empty, including the moment a user backspaces the field down to nothing to type a fresh number. The field would snap back to the old balance mid-edit, making it look uneditable.
+
+- Pre-fill now happens once, via a `useEffect` keyed on `kind`/`currentCash` (mirroring the existing `RenamePortfolioModal` pattern) that sets `amount` to `String(currentCash)` only when the modal opens for `editCash`. The input's `value` is simply `amount` from then on — clearing it behaves like any normal controlled input.
+- `handleSubmit`'s parsing simplified to a plain `Number.parseFloat(amount)` (the old `amount === "" ? currentCash : ...` special case is no longer needed, and correctly surfaces the "enter the correct cash balance" validation error if the field is left empty on submit).
+- 2 new tests reproducing the exact bug shape (clear-then-type doesn't revert; the newly typed value, not the pre-fill, is what actually gets saved) — 425 total.
+- Verified end-to-end against a real running build with Playwright, replicating the user's actual gesture (click into the field, clear it character-by-character via repeated Backspace, then type a new number): the field stays empty while clearing and accepts/saves the new value correctly.
+- **Separately raised, not changed**: the user also described an expectation that recording a Buy should *increase* Cash Balance (their proposed definition: cost of shares bought + realized dividends + closed-trade P&L). Verified live that a Buy currently *decreases* cash by its cost (E£100,000 → E£99,000 on a E£1,000 buy) — standard spendable-cash bookkeeping, and the same model this app's cash handling was deliberately redesigned around in the "remove Deposit/Withdrawal and Starting Balance" sprint above, per that sprint's own explicit user confirmation. Flagging as open rather than changing it, since reversing that would contradict a previous direct decision — needs explicit re-confirmation from the user before any change.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
