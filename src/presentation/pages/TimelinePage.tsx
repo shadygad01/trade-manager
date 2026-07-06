@@ -42,6 +42,7 @@ function describe(event: TimelineEvent): string {
 
 export function TimelinePage() {
   const { id: portfolioId } = useParams<{ id: string }>();
+  const portfolio = useLiveQuery(() => repos.portfolios.getById(portfolioId), [portfolioId]);
   const events = useLiveQuery(() => repos.timeline.getByPortfolio(portfolioId), [portfolioId]);
   const [deleteError, setDeleteError] = useState<{ eventId: string; message: string } | null>(null);
   const [clearAllError, setClearAllError] = useState<string | null>(null);
@@ -109,7 +110,7 @@ export function TimelinePage() {
   return (
     <div>
       <PageHeader
-        title="Timeline"
+        title={portfolio ? `${portfolio.name} — Timeline` : "Timeline"}
         description="Every buy, sell, deposit and cash event, in order."
         actions={
           duplicateDividendIds.size > 0 ? (

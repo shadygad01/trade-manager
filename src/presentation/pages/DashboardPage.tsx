@@ -213,8 +213,8 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
           label="Total Portfolio Value"
-          value={formatMoney(totals.totalAssets)}
-          sublabel={`${formatMoney(totals.totalMarketValue)} invested + ${formatMoney(totals.totalCash)} cash`}
+          value={formatMoney(totals.totalMarketValue)}
+          sublabel={`Cost basis ${formatMoney(totals.totalCostBasis)}`}
           icon={<Wallet size={16} />}
         />
         <StatTile

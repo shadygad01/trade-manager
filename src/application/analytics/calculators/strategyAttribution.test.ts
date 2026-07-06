@@ -16,6 +16,7 @@ describe("strategyAttribution", () => {
     expect(result.tag).toBe("Swing");
     expect(result.tradeCount).toBe(1);
     expect(result.totalRealizedPnl).toBeCloseTo(100 * (20 - 10));
+    expect(result.totalRealizedReturnPct).toBeCloseTo(100); // 1000 profit / 1000 cost basis
     expect(result.winRate).toBe(100);
   });
 
