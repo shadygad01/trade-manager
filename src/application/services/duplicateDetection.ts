@@ -49,15 +49,42 @@ export function findDuplicateBuyMatch(candidate: ParsedTradeCandidate, existingT
   );
 }
 
+/**
+ * One real sell order allocated across several buy lots is stored as several
+ * TradeAllocation rows (e.g. a 45-share sell closed against a 30-lot and a
+ * 15-lot) that share one `sellGroupId`. Matching the candidate against
+ * individual rows would never find a 45-share allocation — so the same sell
+ * re-imported keeps looking "new" forever. Aggregate rows by their sell
+ * order's identity (sellGroupId, guarded by ticker+date) and match the
+ * candidate against each order's total shares; two distinct sell orders that
+ * happen to share date and price are never merged into a false duplicate.
+ */
 export function findDuplicateSellMatch(
   candidate: ParsedTradeCandidate,
   existingAllocations: TradeAllocation[]
 ): DuplicateMatch | undefined {
-  return findMatch(
-    { ticker: candidate.ticker, date: candidate.date, shares: candidate.shares },
-    candidate.price,
-    existingAllocations.map((a) => ({ id: a.id, ticker: a.ticker, date: a.executionDate, shares: a.sharesClosed, price: a.exitPrice }))
-  );
+  const ticker = normalizeTicker(candidate.ticker);
+  const groups = new Map<string, { id: string; price: number; totalShares: number }>();
+  for (const a of existingAllocations) {
+    if (normalizeTicker(a.ticker) !== ticker || a.executionDate !== candidate.date) continue;
+    // sellGroupId identifies one real sell order regardless of how many lots
+    // it was allocated across. A legacy row without one is its own group.
+    const key = a.sellGroupId || `row:${a.id}`;
+    const g = groups.get(key);
+    if (g) {
+      g.totalShares += a.sharesClosed;
+    } else {
+      groups.set(key, { id: a.id, price: a.exitPrice, totalShares: a.sharesClosed });
+    }
+  }
+
+  const matching = [...groups.values()].filter((g) => g.totalShares === candidate.shares);
+  if (matching.length === 0) return undefined;
+
+  const exact = matching.find((g) => round4(g.price) === round4(candidate.price));
+  if (exact) return { matchType: "exact", matchedId: exact.id };
+
+  return { matchType: "possible", matchedId: matching[0].id };
 }
 
 /**

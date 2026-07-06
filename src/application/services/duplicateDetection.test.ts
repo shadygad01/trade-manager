@@ -90,6 +90,56 @@ describe("findDuplicateSellMatch", () => {
     const candidate = buyCandidate({ side: "SELL", shares: 40, price: 55, date: "2026-06-10" });
     expect(findDuplicateSellMatch(candidate, [allocation])).toEqual({ matchType: "exact", matchedId: "a1" });
   });
+
+  it("matches one sell order split across multiple buy lots (shared sellGroupId) by its total shares", () => {
+    const base = {
+      sellGroupId: "sg1",
+      portfolioId: "p1",
+      ticker: "HRHO",
+      exitPrice: 27.6,
+      executionDate: "2026-02-02",
+      executionTime: "11:00",
+    };
+    const allocations = [
+      createTradeAllocation({ ...base, id: "a1", tradeId: "t1", sharesClosed: 30 }),
+      createTradeAllocation({ ...base, id: "a2", tradeId: "t2", sharesClosed: 15 }),
+    ];
+    const candidate = buyCandidate({ ticker: "HRHO", side: "SELL", shares: 45, price: 27.6, date: "2026-02-02" });
+    expect(findDuplicateSellMatch(candidate, allocations)).toEqual({ matchType: "exact", matchedId: "a1" });
+  });
+
+  it("never merges two distinct sell orders (different sellGroupIds) into a false duplicate, even at the same date and price", () => {
+    const base = {
+      portfolioId: "p1",
+      ticker: "HRHO",
+      exitPrice: 27.6,
+      executionDate: "2026-02-02",
+      executionTime: "11:00",
+    };
+    const allocations = [
+      createTradeAllocation({ ...base, id: "a1", sellGroupId: "sg1", tradeId: "t1", sharesClosed: 30 }),
+      createTradeAllocation({ ...base, id: "a2", sellGroupId: "sg2", tradeId: "t2", sharesClosed: 15 }),
+    ];
+    const candidate = buyCandidate({ ticker: "HRHO", side: "SELL", shares: 45, price: 27.6, date: "2026-02-02" });
+    expect(findDuplicateSellMatch(candidate, allocations)).toBeUndefined();
+  });
+
+  it("flags a split sell as a possible match when the shares total matches but the price differs", () => {
+    const base = {
+      sellGroupId: "sg1",
+      portfolioId: "p1",
+      ticker: "HRHO",
+      exitPrice: 27.6,
+      executionDate: "2026-02-02",
+      executionTime: "11:00",
+    };
+    const allocations = [
+      createTradeAllocation({ ...base, id: "a1", tradeId: "t1", sharesClosed: 30 }),
+      createTradeAllocation({ ...base, id: "a2", tradeId: "t2", sharesClosed: 15 }),
+    ];
+    const candidate = buyCandidate({ ticker: "HRHO", side: "SELL", shares: 45, price: 27.75, date: "2026-02-02" });
+    expect(findDuplicateSellMatch(candidate, allocations)).toEqual({ matchType: "possible", matchedId: "a1" });
+  });
 });
 
 describe("buildExistingDividendKeys / isDividendAlreadyRecorded", () => {
