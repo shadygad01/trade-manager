@@ -3,6 +3,7 @@ import { getTradeStatus, type Trade, type TradeStatus } from "@domain/entities/T
 import { STATUS, CATEGORICAL, CHART_GRID, CHART_TEXT_MUTED, CHART_TEXT_SECONDARY, CHART_AXIS, CHART_SURFACE } from "@presentation/lib/chartColors";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
 import { useT } from "@presentation/i18n/translations";
+import { useLanguage } from "@presentation/i18n/language";
 
 // STATUS.good is the only status color that passes the dataviz skill's
 // validator on this dark surface (STATUS.warning fails the lightness-band
@@ -37,6 +38,11 @@ interface BuyZoneChartProps {
  */
 export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
   const t = useT();
+  // Bars/axes are drawn on an SVG canvas, which never picks up `dir` the way
+  // DOM/flexbox chrome does — read the language directly so the whole plot
+  // (axis sides, bar growth direction, price-label side) mirrors under
+  // Arabic instead of staying LTR while the rest of the page flips.
+  const isRtl = useLanguage() === "ar";
   const STATUS_LABEL: Record<TradeStatus, string> = {
     open: t("trades.statusOpen"),
     partial: t("trades.statusPartial"),
@@ -72,10 +78,15 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
         ))}
       </div>
       <ResponsiveContainer width="100%" height={Math.max(140, data.length * 34)}>
-        <BarChart data={data} layout="vertical" margin={{ left: 8, right: 56, top: 22, bottom: 4 }}>
+        <BarChart
+          data={data}
+          layout="vertical"
+          margin={isRtl ? { left: 56, right: 8, top: 22, bottom: 4 } : { left: 8, right: 56, top: 22, bottom: 4 }}
+        >
           <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" horizontal={false} />
           <XAxis
             type="number"
+            reversed={isRtl}
             tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
             tickLine={false}
             axisLine={{ stroke: CHART_GRID }}
@@ -84,6 +95,7 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
           <YAxis
             type="category"
             dataKey="label"
+            orientation={isRtl ? "right" : "left"}
             tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
             tickLine={false}
             axisLine={{ stroke: CHART_GRID }}
@@ -114,13 +126,13 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
               }}
             />
           ) : null}
-          <Bar dataKey="price" radius={[0, 3, 3, 0]}>
+          <Bar dataKey="price" radius={isRtl ? [3, 0, 0, 3] : [0, 3, 3, 0]}>
             {data.map((d, i) => (
               <Cell key={i} fill={STATUS_COLOR[d.status]} fillOpacity={STATUS_OPACITY[d.status]} />
             ))}
             <LabelList
               dataKey="price"
-              position="right"
+              position={isRtl ? "left" : "right"}
               formatter={(v: number) => formatMoney(v)}
               fill={CHART_TEXT_SECONDARY}
               fontSize={12}
