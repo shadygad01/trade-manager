@@ -205,6 +205,37 @@ export function ImportPage() {
   }
 
   /**
+   * A pending Sell that's an exact duplicate of a sell already allocated on
+   * the ledger (same ticker/date/total shares/price — e.g. the same sell
+   * order previously allocated across one or more buy lots, then re-imported)
+   * has nothing left to do: allocating it again would double-count the exit.
+   * Auto-mark it skipped, mirroring commitTickerGroup's silent skip for
+   * exact-duplicate Buys. This never allocates anything itself (ADR-002 —
+   * which lots a sell closes stays a manual decision); it only closes a row
+   * whose real-world transaction is already fully recorded. Gated on
+   * initialDataLoaded so a briefly-empty allocations read can't mislabel
+   * (or fail to label) a row off stale data.
+   */
+  useEffect(() => {
+    if (!initialDataLoaded) return;
+    const state = importSession.getState();
+    const ownAllocs = state.addedAllocationIds ?? {};
+    const keysToSkip = state.pendingCandidates
+      .filter(
+        (e) =>
+          e.candidate.side === "SELL" &&
+          !state.addedKeys.includes(e.key) &&
+          !state.skippedKeys.includes(e.key) &&
+          !state.dismissedKeys.includes(e.key) &&
+          duplicateMatch(e.candidate, undefined, ownAllocs[e.key])?.matchType === "exact",
+      )
+      .map((e) => e.key);
+    if (keysToSkip.length === 0) return;
+    importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDataLoaded, pendingCandidates, existingAllocations, session.addedKeys, session.skippedKeys, session.dismissedKeys]);
+
+  /**
    * A ticker that already has trades recorded somewhere shouldn't make the
    * user re-pick a portfolio every time it's re-imported — this is the
    * "suggest the portfolio it already lives in" behavior. When it lives in
@@ -1691,6 +1722,7 @@ export function TickerGroupCard({
               entry={entry}
               match={match}
               added={added}
+              skipped={skippedKeys.has(entry.key)}
               actionLabel={match ? t("importPage.allocateAnyway") : t("importPage.allocateSell")}
               actionClassName="bg-rose-500 hover:bg-rose-400"
               onAction={() => onAllocateSell(entry)}
@@ -2094,6 +2126,7 @@ export function CandidateRow({
   entry,
   match,
   added,
+  skipped = false,
   actionLabel,
   actionClassName,
   onAction,
@@ -2110,6 +2143,8 @@ export function CandidateRow({
   entry: CandidateEntry;
   match: { matchType: "exact" | "possible"; matchedId: string } | undefined;
   added: boolean;
+  /** True when this row was auto-resolved as an exact duplicate of an already-recorded transaction (see the exact-duplicate-sell auto-skip effect) — replaces the action button with a "Skipped — duplicate" state so nothing invites a double-count. */
+  skipped?: boolean;
   actionLabel: string;
   actionClassName: string;
   onAction: () => void;
@@ -2133,8 +2168,8 @@ export function CandidateRow({
   const t = useT();
   const c = entry.candidate;
   const isLowConfidence = c.confidence === "low";
-  const canDiscard = suspectedDuplicate && !added;
-  const flaggedForRemoval = !added && (suggestedRemoval || wrongTickerHint !== undefined);
+  const canDiscard = suspectedDuplicate && !added && !skipped;
+  const flaggedForRemoval = !added && !skipped && (suggestedRemoval || wrongTickerHint !== undefined);
   return (
     <div
       className={`px-4 py-2.5 text-sm ${canDiscard || flaggedForRemoval ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}
@@ -2226,6 +2261,10 @@ export function CandidateRow({
         {added ? (
           <span className="flex items-center gap-1 text-xs text-emerald-400">
             <CheckCircle2 size={14} /> {t("importPage.added")}
+          </span>
+        ) : skipped ? (
+          <span className="flex items-center gap-1 text-xs text-slate-400">
+            <CheckCircle2 size={14} /> {t("importPage.skippedDuplicate")}
           </span>
         ) : (
           <span className="flex items-center gap-1.5">
