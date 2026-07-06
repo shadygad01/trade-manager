@@ -32,6 +32,7 @@ import { EmptyState } from "@presentation/components/EmptyState";
 import { formatMoney, formatPercent, signClass } from "@presentation/lib/format";
 import { CATEGORICAL, categoricalColor, CHART_AXIS, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
 import { useT } from "@presentation/i18n/translations";
+import { useLanguage } from "@presentation/i18n/language";
 
 const MAX_COMPARED_PORTFOLIOS = CATEGORICAL.length;
 
@@ -90,6 +91,7 @@ export function mergeMonthlyPerformance(series: PerformancePeriod[][]): { period
 
 export function DashboardPage() {
   const t = useT();
+  const isRtl = useLanguage() === "ar";
   const dashboard = useLiveQuery(async () => {
     const portfolios = await repos.portfolios.getAll();
     const priceMap = await repos.prices.getAllPrices();
@@ -276,9 +278,16 @@ export function DashboardPage() {
             <ResponsiveContainer width="100%" height={260}>
               <LineChart data={totals.comparisonData}>
                 <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
-                <YAxis
+                <XAxis
+                  dataKey="date"
+                  reversed={isRtl}
                   tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={{ stroke: CHART_GRID }}
+                />
+                <YAxis
+                  orientation={isRtl ? "right" : "left"}
+                  tick={{ fill: CHART_TEXT_MUTED, fontSize: 11, textAnchor: "end" }}
                   tickLine={false}
                   axisLine={{ stroke: CHART_GRID }}
                   tickFormatter={(v: number) => `${v}%`}
@@ -349,9 +358,16 @@ export function DashboardPage() {
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={totals.monthlyReturn}>
                 <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="period" tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }} tickLine={false} axisLine={{ stroke: CHART_GRID }} />
-                <YAxis
+                <XAxis
+                  dataKey="period"
+                  reversed={isRtl}
                   tick={{ fill: CHART_TEXT_MUTED, fontSize: 11 }}
+                  tickLine={false}
+                  axisLine={{ stroke: CHART_GRID }}
+                />
+                <YAxis
+                  orientation={isRtl ? "right" : "left"}
+                  tick={{ fill: CHART_TEXT_MUTED, fontSize: 11, textAnchor: "end" }}
                   tickLine={false}
                   axisLine={{ stroke: CHART_GRID }}
                   tickFormatter={(v: number) => `${v}%`}
