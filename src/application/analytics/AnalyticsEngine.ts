@@ -19,6 +19,7 @@ import {
 import { capitalDeployment } from "./calculators/capitalDeployment";
 import { portfolioHealth, type PortfolioHealth } from "./calculators/portfolioHealth";
 import { strategyAttribution, type StrategyAttribution } from "./calculators/strategyAttribution";
+import { openPositionStats, type OpenPositionStats } from "./calculators/openPositionStats";
 import { summarizeOpenPositions } from "./calculators/shared";
 
 /**
@@ -45,6 +46,7 @@ export const calculators = {
   bucketPerformance,
   portfolioHealth,
   strategyAttribution,
+  openPositionStats,
 };
 
 export interface AnalyticsInput {
@@ -88,6 +90,8 @@ export interface AnalyticsResult {
   strategyAttribution: StrategyAttribution[];
   /** Number of sell allocations recorded so far — winRate/profitFactor/avgWinner/avgLoser/holdingTime and largestWinner/largestLoser are all 0 by construction until this is > 0 (nothing has been sold yet, not underperformance). */
   closedTradeCount: number;
+  /** Mark-to-market win/loss breakdown of still-open Trade lots — the fallback the UI shows (labeled "unrealized") for winRate/profitFactor/avgWinner/avgLoser/avgHoldingTime/largestWinner/largestLoser when closedTradeCount is 0, so a buy-only portfolio isn't stuck reading "0" everywhere. */
+  openPositionStats: OpenPositionStats;
 }
 
 export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
@@ -121,5 +125,6 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     portfolioHealth: portfolioHealth(trades, allocations, priceMap, cash),
     strategyAttribution: strategyAttribution(trades, allocations, input.journalEntries ?? []),
     closedTradeCount: allocations.length,
+    openPositionStats: openPositionStats(trades, priceMap, asOf),
   };
 }
