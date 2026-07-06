@@ -16,7 +16,9 @@ infrastructure -->  domain
 - `src/infrastructure` — Dexie (IndexedDB) persistence, the OCR subsystem, and the market-data snapshot client. Implements `@domain` repository interfaces.
 - `src/presentation` — React UI. Wires infrastructure repositories into application services.
 
-No backend server. No database server. Everything runs in the browser; the app is a static bundle deployed to GitHub Pages. Market prices come from a JSON snapshot published by this repo's own scheduled GitHub Action (`scripts/fetch-prices`) — that snapshot is the single source of truth for prices; do not add a second price source.
+No backend server. No database server. Everything runs in the browser; the app is a static bundle. Market prices come from a JSON snapshot published by this repo's own scheduled GitHub Action (`scripts/fetch-prices`) — that snapshot is the single source of truth for prices; do not add a second price source.
+
+Deployed to two static targets from the same build: **GitHub Pages** (`deploy-pages.yml`, primary/documented — `https://shadygad01.github.io/trade-manager/`) and **Cloudflare Workers** (`wrangler.jsonc` + the `@cloudflare/vite-plugin` entry in `vite.config.ts`, deployed via Cloudflare's own GitHub build integration — `https://trade-manager.shady-gad-mb.workers.dev/`). The Cloudflare plugin is guarded with `process.env.VITEST` in `vite.config.ts` since it crashes inside Vitest's own dev server otherwise. Both `ci.yml` and `deploy-pages.yml` run on Node 22 (not 20) because `wrangler`/`miniflare` require it.
 
 ## Core domain rule
 
