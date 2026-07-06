@@ -25,11 +25,13 @@ import { Modal } from "@presentation/components/Modal";
 import { StatTile } from "@presentation/components/StatTile";
 import { CapitalDeploymentFlow } from "@presentation/components/CapitalDeploymentFlow";
 import { formatDate, formatMoney, formatPercent, formatShares, signClass } from "@presentation/lib/format";
+import { useT } from "@presentation/i18n/translations";
 
 type CashModalKind = "editCash" | "dividend" | "adjustment" | null;
 type CorporateActionKind = "split" | "rightsIssue" | null;
 
 export function PortfolioDetailPage() {
+  const t = useT();
   const { id } = useParams<{ id: string }>();
   const [cashModal, setCashModal] = useState<CashModalKind>(null);
   const [corporateActionOpen, setCorporateActionOpen] = useState(false);
@@ -62,7 +64,7 @@ export function PortfolioDetailPage() {
   const timelineEvents = useLiveQuery(() => repos.timeline.getByPortfolio(id), [id]);
 
   async function handleDeleteTrade(tradeId: string) {
-    if (!confirm("Delete this trade? Its cost will be refunded to the portfolio's cash balance. This can't be undone.")) {
+    if (!confirm(t("portfolioDetail.deleteTradeConfirm"))) {
       return;
     }
     setDeleteError(null);
@@ -70,7 +72,7 @@ export function PortfolioDetailPage() {
       await deleteTrade(repos, tradeId);
       setRefreshKey((k) => k + 1);
     } catch (e) {
-      setDeleteError({ tradeId, message: e instanceof Error ? e.message : "Failed to delete trade." });
+      setDeleteError({ tradeId, message: e instanceof Error ? e.message : t("portfolioDetail.deleteTradeFailed") });
     }
   }
 
@@ -89,11 +91,7 @@ export function PortfolioDetailPage() {
    * looking exactly like the click did nothing.
    */
   async function handleDeleteVerification(ticker: string, verificationId: string) {
-    if (
-      !confirm(
-        "Discard this broker verification? It never affects cash or trades — this only removes the recorded screenshot reading itself. Use this when the position it describes actually belongs to a different portfolio."
-      )
-    ) {
+    if (!confirm(t("portfolioDetail.discardVerificationConfirm"))) {
       return;
     }
     setDeleteError(null);
@@ -103,16 +101,16 @@ export function PortfolioDetailPage() {
       await Promise.all(matching.map((v) => repos.verifications.delete(v.id)));
       setRefreshKey((k) => k + 1);
     } catch (e) {
-      setDeleteError({ tradeId: verificationId, message: e instanceof Error ? e.message : "Failed to discard verification." });
+      setDeleteError({ tradeId: verificationId, message: e instanceof Error ? e.message : t("portfolioDetail.discardVerificationFailed") });
     }
   }
 
   if (portfolio === undefined || positions === undefined) {
-    return <p className="text-sm text-slate-500">Loading…</p>;
+    return <p className="text-sm text-slate-500">{t("common.loading")}</p>;
   }
 
   if (!portfolio) {
-    return <EmptyState title="Portfolio not found" description="It may have been deleted." />;
+    return <EmptyState title={t("portfolioDetail.notFoundTitle")} description={t("portfolioDetail.notFoundDescription")} />;
   }
 
   const marketValue = positions.reduce((sum, p) => sum + (p.marketValue ?? p.costBasis), 0);
@@ -139,11 +137,7 @@ export function PortfolioDetailPage() {
 
   async function handleClearAllSuspectedDuplicates() {
     if (suspectedDuplicateIds.length === 0) return;
-    if (
-      !confirm(
-        `Delete ${suspectedDuplicateIds.length} suspected duplicate trade${suspectedDuplicateIds.length === 1 ? "" : "s"} across every mismatched ticker? Each one's cost will be refunded to cash. This can't be undone.`
-      )
-    ) {
+    if (!confirm(t("portfolioDetail.clearAllDuplicatesConfirm", { n: suspectedDuplicateIds.length }))) {
       return;
     }
     setClearAllError(null);
@@ -153,13 +147,13 @@ export function PortfolioDetailPage() {
       try {
         await deleteTrade(repos, tradeId);
       } catch (e) {
-        failures.push(e instanceof Error ? e.message : "Failed to delete a trade.");
+        failures.push(e instanceof Error ? e.message : t("portfolioDetail.deleteTradeFailed"));
       }
     }
     setClearingAll(false);
     setRefreshKey((k) => k + 1);
     if (failures.length > 0) {
-      setClearAllError(`${failures.length} of ${suspectedDuplicateIds.length} deletions failed: ${failures.join("; ")}`);
+      setClearAllError(t("portfolioDetail.clearAllFailedSummary", { failed: failures.length, total: suspectedDuplicateIds.length, messages: failures.join("; ") }));
     }
   }
 
@@ -167,56 +161,56 @@ export function PortfolioDetailPage() {
     <div>
       <PageHeader
         title={portfolio.name}
-        description={`${portfolio.kind === "Custom" ? portfolio.customKindLabel || "Custom" : portfolio.kind} · ${portfolio.currency}`}
+        description={`${portfolio.kind === "Custom" ? portfolio.customKindLabel || t("portfolioKind.Custom") : t(`portfolioKind.${portfolio.kind}`)} · ${portfolio.currency}`}
         actions={
           <>
             <button
               onClick={() => setRenameOpen(true)}
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
-              <Pencil size={16} /> Rename
+              <Pencil size={16} /> {t("portfolioDetail.rename")}
             </button>
             <button
               onClick={() => setCashModal("editCash")}
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
-              <Banknote size={16} /> Edit Cash
+              <Banknote size={16} /> {t("portfolioDetail.editCash")}
             </button>
             <button
               onClick={() => setCashModal("dividend")}
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
-              <CircleDollarSign size={16} /> Dividend
+              <CircleDollarSign size={16} /> {t("portfolioDetail.dividend")}
             </button>
             <button
               onClick={() => setCashModal("adjustment")}
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
-              <Wrench size={16} /> Adjust Cash
+              <Wrench size={16} /> {t("portfolioDetail.adjustCash")}
             </button>
             <button
               onClick={() => setCorporateActionOpen(true)}
               className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             >
-              <SplitSquareHorizontal size={16} /> Corporate Action
+              <SplitSquareHorizontal size={16} /> {t("portfolioDetail.corporateAction")}
             </button>
             {portfolio.archivedAt ? (
               <button
                 onClick={() => void unarchivePortfolio(repos, portfolio.id)}
                 className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
               >
-                <ArchiveRestore size={16} /> Unarchive
+                <ArchiveRestore size={16} /> {t("portfolioDetail.unarchive")}
               </button>
             ) : (
               <button
                 onClick={() => {
-                  if (confirm(`Archive "${portfolio.name}"? It's hidden from the main list but nothing is deleted — unarchive anytime.`)) {
+                  if (confirm(t("portfolioDetail.archiveConfirm", { name: portfolio.name }))) {
                     void archivePortfolio(repos, portfolio.id);
                   }
                 }}
                 className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
               >
-                <Archive size={16} /> Archive
+                <Archive size={16} /> {t("portfolioDetail.archive")}
               </button>
             )}
           </>
@@ -226,15 +220,15 @@ export function PortfolioDetailPage() {
 
       {portfolio.archivedAt ? (
         <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-2.5 text-sm text-amber-300">
-          This portfolio is archived (hidden from the main Portfolios list). Its data is untouched — unarchive anytime.
+          {t("portfolioDetail.archivedBanner")}
         </div>
       ) : null}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile label="Cash Balance" value={formatMoney(portfolio.cash)} />
-        <StatTile label="Invested (Market Value)" value={formatMoney(marketValue)} sublabel={`Cost basis ${formatMoney(costBasis)}`} />
+        <StatTile label={t("portfolioDetail.cashBalance")} value={formatMoney(portfolio.cash)} />
+        <StatTile label={t("portfolioDetail.investedMarketValue")} value={formatMoney(marketValue)} sublabel={t("portfolioDetail.costBasisSub", { value: formatMoney(costBasis) })} />
         <StatTile
-          label="Unrealized P/L"
+          label={t("portfolioDetail.unrealizedPnl")}
           value={formatMoney(unrealizedPnl)}
           valueClassName={signClass(unrealizedPnl)}
           sublabel={formatPercent(unrealizedPnlPct)}
@@ -242,13 +236,13 @@ export function PortfolioDetailPage() {
       </div>
 
       <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-200">Capital Deployment</h3>
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("portfolioDetail.capitalDeployment")}</h3>
         <CapitalDeploymentFlow events={timelineEvents ?? []} />
       </div>
 
       <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900/60">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
-          <h3 className="text-sm font-semibold text-slate-200">Holdings</h3>
+          <h3 className="text-sm font-semibold text-slate-200">{t("portfolioDetail.holdings")}</h3>
           {suspectedDuplicateIds.length > 0 ? (
             <button
               onClick={() => void handleClearAllSuspectedDuplicates()}
@@ -257,8 +251,8 @@ export function PortfolioDetailPage() {
             >
               <Eraser size={13} />
               {clearingAll
-                ? "Clearing…"
-                : `Clear all suspected duplicates (${suspectedDuplicateIds.length})`}
+                ? t("portfolioDetail.clearingDuplicates")
+                : t("portfolioDetail.clearDuplicates", { n: suspectedDuplicateIds.length })}
             </button>
           ) : null}
         </div>
@@ -267,22 +261,22 @@ export function PortfolioDetailPage() {
         ) : null}
         {positions.length === 0 ? (
           <div className="p-6">
-            <EmptyState title="No open positions" description="Record a buy trade to see holdings here." />
+            <EmptyState title={t("portfolioDetail.noOpenPositionsTitle")} description={t("portfolioDetail.noOpenPositionsDescription")} />
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  <th className="px-4 py-2">Ticker</th>
-                  <th className="px-4 py-2 text-right">Shares</th>
-                  <th className="px-4 py-2 text-right">Avg Cost</th>
-                  <th className="px-4 py-2 text-right">Cost Basis</th>
-                  <th className="px-4 py-2 text-right">Current Price</th>
-                  <th className="px-4 py-2 text-right">Market Value</th>
-                  <th className="px-4 py-2 text-right">Unrealized P/L</th>
-                  <th className="px-4 py-2 text-right">Lots</th>
-                  <th className="px-4 py-2">Verification</th>
+                  <th className="px-4 py-2">{t("portfolioDetail.colTicker")}</th>
+                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colShares")}</th>
+                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colAvgCost")}</th>
+                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colCostBasis")}</th>
+                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colCurrentPrice")}</th>
+                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colMarketValue")}</th>
+                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colUnrealizedPnl")}</th>
+                  <th className="px-4 py-2 text-right">{t("portfolioDetail.colLots")}</th>
+                  <th className="px-4 py-2">{t("portfolioDetail.colVerification")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
@@ -309,49 +303,49 @@ export function PortfolioDetailPage() {
                     <td className="px-4 py-2.5 text-right tabular-nums text-slate-400">{p.openTrades.length}</td>
                     <td className="px-4 py-2.5">
                       {!r ? (
-                        <span className="text-xs text-slate-600">—</span>
+                        <span className="text-xs text-slate-600">{t("common.dash")}</span>
                       ) : r.verificationStale ? (
-                        <span className="text-xs text-slate-500">Verification outdated</span>
+                        <span className="text-xs text-slate-500">{t("portfolioDetail.verificationOutdated")}</span>
                       ) : r.quantityMismatch ? (
                         (() => {
                           const suggestedIds = new Set(suspectedDuplicateIdsByTicker.get(p.ticker) ?? []);
                           return (
                             <div className="flex flex-col gap-1.5">
                               <span className="flex items-center gap-1 text-xs text-rose-400">
-                                <ShieldAlert size={13} /> {formatShares(p.totalShares)} vs {formatShares(r.verifiedUnits)} verified
+                                <ShieldAlert size={13} /> {t("portfolioDetail.sharesVsVerified", { shares: formatShares(p.totalShares), verified: formatShares(r.verifiedUnits) })}
                               </span>
                               <p className="text-[11px] text-slate-500">
-                                Likely a duplicate import — delete the suspected duplicate{suggestedIds.size === 1 ? "" : "s"} below, then this should match on its own.
+                                {t("portfolioDetail.duplicateImportHint", { n: suggestedIds.size })}
                               </p>
                               <ul className="space-y-1">
-                                {p.openTrades.map((t) => {
-                                  const deletable = t.remainingShares === t.shares;
-                                  const suspected = suggestedIds.has(t.id);
+                                {p.openTrades.map((tr) => {
+                                  const deletable = tr.remainingShares === tr.shares;
+                                  const suspected = suggestedIds.has(tr.id);
                                   return (
                                     <li
-                                      key={t.id}
+                                      key={tr.id}
                                       className={`flex items-center gap-2 rounded px-1 py-0.5 text-[11px] ${
                                         suspected ? "bg-rose-500/10 text-rose-300" : "text-slate-400"
                                       }`}
                                     >
                                       <span className="tabular-nums">
-                                        {formatShares(t.shares)} sh @ {formatMoney(t.entryPrice)} · {formatDate(t.executionDate)}
+                                        {formatShares(tr.shares)} sh @ {formatMoney(tr.entryPrice)} · {formatDate(tr.executionDate)}
                                       </span>
                                       {suspected ? (
                                         <span className="flex items-center gap-1 font-medium">
-                                          <ShieldAlert size={11} /> Suspected duplicate
+                                          <ShieldAlert size={11} /> {t("portfolioDetail.suspectedDuplicate")}
                                         </span>
                                       ) : null}
                                       {deletable ? (
                                         <button
-                                          onClick={() => void handleDeleteTrade(t.id)}
-                                          title="Delete this trade and refund its cost"
+                                          onClick={() => void handleDeleteTrade(tr.id)}
+                                          title={t("portfolioDetail.deleteTradeTitle")}
                                           className={`rounded p-1 hover:bg-rose-500/10 hover:text-rose-400 ${suspected ? "text-rose-400" : "text-slate-500"}`}
                                         >
                                           <Trash2 size={12} />
                                         </button>
                                       ) : (
-                                        <span title="Has shares sold against it — can't be deleted" className="text-slate-700">
+                                        <span title={t("portfolioDetail.cannotDeleteHasSells")} className="text-slate-700">
                                           <Trash2 size={12} />
                                         </span>
                                       )}
@@ -359,7 +353,7 @@ export function PortfolioDetailPage() {
                                   );
                                 })}
                               </ul>
-                              {deleteError && p.openTrades.some((t) => t.id === deleteError.tradeId) ? (
+                              {deleteError && p.openTrades.some((tr) => tr.id === deleteError.tradeId) ? (
                                 <p className="text-[11px] text-rose-400">{deleteError.message}</p>
                               ) : null}
                             </div>
@@ -367,11 +361,11 @@ export function PortfolioDetailPage() {
                         })()
                       ) : r.quantityShortfall ? (
                         <span className="flex items-center gap-1 text-xs text-amber-400">
-                          <ShieldAlert size={13} /> Missing {formatShares(r.verifiedUnits - p.totalShares)} shares
+                          <ShieldAlert size={13} /> {t("portfolioDetail.missingShares", { n: formatShares(r.verifiedUnits - p.totalShares) })}
                         </span>
                       ) : (
                         <span className="flex items-center gap-1 text-xs text-emerald-400">
-                          <ShieldCheck size={13} /> Matches broker
+                          <ShieldCheck size={13} /> {t("portfolioDetail.matchesBroker")}
                         </span>
                       )}
                     </td>
@@ -387,7 +381,7 @@ export function PortfolioDetailPage() {
       {(reconciliations ?? []).some((r) => r.quantityShortfall && r.computedShares === 0) ? (
         <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
           <p className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-400">
-            <ShieldAlert size={16} /> Verified positions with no recorded trades
+            <ShieldAlert size={16} /> {t("portfolioDetail.verifiedNoTradesTitle")}
           </p>
           <ul className="space-y-2 text-sm text-amber-200/80">
             {(reconciliations ?? [])
@@ -396,15 +390,14 @@ export function PortfolioDetailPage() {
                 <li key={r.ticker} className="flex items-start justify-between gap-2">
                   <div>
                     <span>
-                      {r.ticker}: the broker screenshot shows {formatShares(r.verifiedUnits)} units
-                      {r.verifiedAvgCost !== undefined ? ` @ ${formatMoney(r.verifiedAvgCost)} avg` : ""}, but this portfolio
-                      has no open trades for it.
+                      {t("portfolioDetail.verifiedNoTradesRow", {
+                        ticker: r.ticker,
+                        units: formatShares(r.verifiedUnits),
+                        avgCostSuffix: r.verifiedAvgCost !== undefined ? t("portfolioDetail.avgCostSuffix", { avgCost: formatMoney(r.verifiedAvgCost) }) : "",
+                      })}
                     </span>
                     <p className="text-[11px] text-amber-300/70">
-                      Every real purchase is dated on/after {TRACKING_START_DATE} — upload this ticker's buy
-                      invoices/statement in Import so its lots land with their true dates, or record the buy manually if
-                      you know them. If this ticker's real trades actually live in a different portfolio, this
-                      verification was likely misfiled here — discard it instead.
+                      {t("portfolioDetail.verifiedNoTradesHint", { date: TRACKING_START_DATE })}
                     </p>
                     {deleteError && deleteError.tradeId === r.verificationId ? (
                       <p className="mt-1 text-[11px] text-rose-400">{deleteError.message}</p>
@@ -412,7 +405,7 @@ export function PortfolioDetailPage() {
                   </div>
                   <button
                     onClick={() => void handleDeleteVerification(r.ticker, r.verificationId)}
-                    title="Discard this verification — it never affects cash or trades"
+                    title={t("portfolioDetail.discardVerificationTitle")}
                     className="shrink-0 rounded p-1 text-amber-300/60 hover:bg-rose-500/10 hover:text-rose-400"
                   >
                     <Trash2 size={12} />
@@ -446,6 +439,7 @@ function RenamePortfolioModal({
   currentName: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState(currentName);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -456,7 +450,7 @@ function RenamePortfolioModal({
 
   async function handleSubmit() {
     if (!name.trim()) {
-      setError("Enter a name.");
+      setError(t("portfolioDetail.enterName"));
       return;
     }
     setSubmitting(true);
@@ -465,7 +459,7 @@ function RenamePortfolioModal({
       await renamePortfolio(repos, portfolioId, name);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Rename failed.");
+      setError(e instanceof Error ? e.message : t("portfolioDetail.renameFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -473,7 +467,7 @@ function RenamePortfolioModal({
 
   return (
     <Modal
-      title="Rename Portfolio"
+      title={t("portfolioDetail.renameModalTitle")}
       open={open}
       onClose={() => {
         setName(currentName);
@@ -483,7 +477,7 @@ function RenamePortfolioModal({
     >
       <div className="space-y-3">
         <label className="block text-xs text-slate-400 space-y-1">
-          Name
+          {t("portfolioDetail.nameLabel")}
           <input
             autoFocus
             value={name}
@@ -497,14 +491,14 @@ function RenamePortfolioModal({
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={() => void handleSubmit()}
             disabled={submitting}
             className="rounded-md bg-cyan-500 px-3 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
           >
-            Save
+            {t("common.save")}
           </button>
         </div>
       </div>
@@ -523,6 +517,7 @@ function CashModal({
   currentCash: number;
   onClose: () => void;
 }) {
+  const t = useT();
   const [amount, setAmount] = useState("");
   const [ticker, setTicker] = useState("");
   const [date, setDate] = useState("");
@@ -541,29 +536,29 @@ function CashModal({
   if (!kind) return null;
 
   const titles: Record<Exclude<CashModalKind, null>, string> = {
-    editCash: "Edit Cash",
-    dividend: "Record Dividend",
-    adjustment: "Adjust Cash",
+    editCash: t("portfolioDetail.cashModalTitleEditCash"),
+    dividend: t("portfolioDetail.cashModalTitleDividend"),
+    adjustment: t("portfolioDetail.cashModalTitleAdjustment"),
   };
 
   async function handleSubmit() {
     const n = Number.parseFloat(amount);
     if (kind === "editCash") {
       if (!Number.isFinite(n)) {
-        setError("Enter the correct cash balance.");
+        setError(t("portfolioDetail.enterCorrectCashBalance"));
         return;
       }
     } else if (kind === "adjustment") {
       if (!Number.isFinite(n) || n === 0) {
-        setError("Enter a non-zero amount (negative to decrease cash).");
+        setError(t("portfolioDetail.enterNonZeroAmount"));
         return;
       }
       if (!notes.trim()) {
-        setError("Explain what this adjustment is for.");
+        setError(t("portfolioDetail.explainAdjustment"));
         return;
       }
     } else if (!Number.isFinite(n) || n <= 0) {
-      setError("Enter a positive amount.");
+      setError(t("portfolioDetail.enterPositiveAmount"));
       return;
     }
     setSubmitting(true);
@@ -579,7 +574,7 @@ function CashModal({
       setNotes("");
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Action failed.");
+      setError(e instanceof Error ? e.message : t("portfolioDetail.actionFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -590,12 +585,11 @@ function CashModal({
       <div className="space-y-3">
         {kind === "editCash" ? (
           <p className="text-xs text-slate-400">
-            The cash balance shown on this portfolio — purely informational, never used in any return calculation.
-            Correcting it here does not create a deposit, withdrawal, or any other history entry.
+            {t("portfolioDetail.editCashDescription")}
           </p>
         ) : null}
         <label className="block text-xs text-slate-400 space-y-1">
-          {kind === "adjustment" ? "Amount (EGP) — negative to decrease" : kind === "editCash" ? "Cash balance (EGP)" : "Amount (EGP)"}
+          {kind === "adjustment" ? t("portfolioDetail.amountAdjustmentLabel") : kind === "editCash" ? t("portfolioDetail.cashBalanceLabel") : t("portfolioDetail.amountLabel")}
           <input
             type="number"
             value={amount}
@@ -606,7 +600,7 @@ function CashModal({
         {kind === "dividend" ? (
           <>
             <label className="block text-xs text-slate-400 space-y-1">
-              Ticker (optional)
+              {t("portfolioDetail.tickerOptional")}
               <input
                 value={ticker}
                 onChange={(e) => setTicker(e.target.value.toUpperCase())}
@@ -614,7 +608,7 @@ function CashModal({
               />
             </label>
             <label className="block text-xs text-slate-400 space-y-1">
-              Date paid (optional — defaults to now)
+              {t("portfolioDetail.datePaidOptional")}
               <input
                 type="date"
                 min={TRACKING_START_DATE}
@@ -627,7 +621,7 @@ function CashModal({
         ) : null}
         {kind !== "editCash" ? (
           <label className="block text-xs text-slate-400 space-y-1">
-            Notes{kind === "adjustment" ? " (required)" : ""}
+            {t("portfolioDetail.notesLabel")}{kind === "adjustment" ? t("portfolioDetail.notesRequiredSuffix") : ""}
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
@@ -639,14 +633,14 @@ function CashModal({
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={handleSubmit}
             disabled={submitting}
             className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
           >
-            {submitting ? "Saving…" : "Confirm"}
+            {submitting ? t("common.saving") : t("common.confirm")}
           </button>
         </div>
       </div>
@@ -669,6 +663,7 @@ function CorporateActionModal({
   portfolioId: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const [kind, setKind] = useState<Exclude<CorporateActionKind, null>>("split");
   const [ticker, setTicker] = useState("");
   const [notes, setNotes] = useState("");
@@ -686,11 +681,11 @@ function CorporateActionModal({
     const trimmedTicker = ticker.trim();
     const trimmedNotes = notes.trim();
     if (!trimmedTicker) {
-      setError("Enter a ticker.");
+      setError(t("portfolioDetail.enterTicker"));
       return;
     }
     if (!trimmedNotes) {
-      setError(kind === "split" ? "Describe the split ratio (e.g. \"2-for-1\")." : "Describe the rights issue (e.g. \"1-for-4 at 10 EGP\").");
+      setError(kind === "split" ? t("portfolioDetail.describeSplit") : t("portfolioDetail.describeRightsIssue"));
       return;
     }
     setSubmitting(true);
@@ -701,7 +696,7 @@ function CorporateActionModal({
       reset();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Action failed.");
+      setError(e instanceof Error ? e.message : t("portfolioDetail.actionFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -709,7 +704,7 @@ function CorporateActionModal({
 
   return (
     <Modal
-      title="Record Corporate Action"
+      title={t("portfolioDetail.recordCorporateActionTitle")}
       open={open}
       onClose={() => {
         reset();
@@ -718,25 +713,24 @@ function CorporateActionModal({
     >
       <div className="space-y-3">
         <p className="text-xs text-slate-400">
-          Logged on the timeline as a record of what happened — share counts and entry prices on existing trades are
-          not automatically rebased.
+          {t("portfolioDetail.corporateActionDescription")}
         </p>
         <div className="flex rounded-md border border-slate-700 p-0.5 text-xs">
           <button
             onClick={() => setKind("split")}
             className={`flex-1 rounded px-3 py-1.5 ${kind === "split" ? "bg-cyan-500 text-slate-950 font-medium" : "text-slate-300 hover:bg-slate-800"}`}
           >
-            Split
+            {t("portfolioDetail.split")}
           </button>
           <button
             onClick={() => setKind("rightsIssue")}
             className={`flex-1 rounded px-3 py-1.5 ${kind === "rightsIssue" ? "bg-cyan-500 text-slate-950 font-medium" : "text-slate-300 hover:bg-slate-800"}`}
           >
-            Rights Issue
+            {t("portfolioDetail.rightsIssue")}
           </button>
         </div>
         <label className="block text-xs text-slate-400 space-y-1">
-          Ticker
+          {t("portfolioDetail.tickerLabel")}
           <input
             value={ticker}
             onChange={(e) => setTicker(e.target.value.toUpperCase())}
@@ -745,7 +739,7 @@ function CorporateActionModal({
           />
         </label>
         <label className="block text-xs text-slate-400 space-y-1">
-          Details (required)
+          {t("portfolioDetail.detailsRequiredLabel")}
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -757,14 +751,14 @@ function CorporateActionModal({
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={handleSubmit}
             disabled={submitting}
             className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
           >
-            {submitting ? "Saving…" : "Record"}
+            {submitting ? t("common.saving") : t("portfolioDetail.record")}
           </button>
         </div>
       </div>

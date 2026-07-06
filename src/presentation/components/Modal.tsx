@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
+import { useT } from "@presentation/i18n/translations";
 
 interface ModalProps {
   title: string;
@@ -10,6 +11,7 @@ interface ModalProps {
 }
 
 export function Modal({ title, open, onClose, children, widthClassName }: ModalProps) {
+  const t = useT();
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/70 px-4 py-10 backdrop-blur-sm">
@@ -21,7 +23,7 @@ export function Modal({ title, open, onClose, children, widthClassName }: ModalP
           <button
             onClick={onClose}
             className="rounded-md p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
-            aria-label="Close"
+            aria-label={t("common.close")}
           >
             <X size={18} />
           </button>

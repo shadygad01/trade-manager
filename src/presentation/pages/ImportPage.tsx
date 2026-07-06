@@ -41,12 +41,19 @@ import { EmptyState } from "@presentation/components/EmptyState";
 import { SellAllocationForm } from "@presentation/components/SellAllocationForm";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
 import { STATUS } from "@presentation/lib/chartColors";
+import { useT, type TFunction } from "@presentation/i18n/translations";
 
-const CONFIDENCE_STYLE: Record<"high" | "medium" | "low", { label: string; color: string }> = {
-  high: { label: "High", color: STATUS.good },
-  medium: { label: "Medium", color: STATUS.warning },
-  low: { label: "Low", color: STATUS.critical },
+const CONFIDENCE_COLOR: Record<"high" | "medium" | "low", string> = {
+  high: STATUS.good,
+  medium: STATUS.warning,
+  low: STATUS.critical,
 };
+
+function confidenceLabel(t: TFunction, confidence: "high" | "medium" | "low"): string {
+  if (confidence === "high") return t("importPage.confidenceHigh");
+  if (confidence === "medium") return t("importPage.confidenceMedium");
+  return t("importPage.confidenceLow");
+}
 
 type Stage = "idle" | "reading" | "error";
 
@@ -95,6 +102,7 @@ const inFlightKeys = new Set<string>();
  * away everything extracted so far the moment the page unmounted.
  */
 export function ImportPage() {
+  const t = useT();
   const [dragOver, setDragOver] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
   const [queueProgress, setQueueProgress] = useState<{ index: number; total: number; fileName: string } | null>(null);
@@ -413,7 +421,7 @@ export function ImportPage() {
   async function deleteAutoAddedTrade(entry: CandidateEntry) {
     const tradeId = importSession.getState().addedTradeIds[entry.key];
     if (!tradeId) return;
-    if (!confirm("Delete this trade? Its cost will be refunded to the portfolio's cash balance. This can't be undone.")) {
+    if (!confirm(t("importPage.deleteTradeConfirm"))) {
       return;
     }
     try {
@@ -528,7 +536,7 @@ export function ImportPage() {
     // elsewhere).
     if (!initialDataLoaded) {
       setStage("error");
-      setErrorMessage("Still loading your portfolios and trades — wait a moment and click Confirm again.");
+      setErrorMessage(t("importPage.stillLoadingError"));
       return;
     }
     const matchedTickers = tickerGroups
@@ -541,7 +549,7 @@ export function ImportPage() {
       setStage("idle");
     } catch (e) {
       setStage("error");
-      setErrorMessage(e instanceof Error ? e.message : "Confirm failed — please try again.");
+      setErrorMessage(e instanceof Error ? e.message : t("importPage.confirmFailed"));
     } finally {
       setDistributing(false);
     }
@@ -551,7 +559,7 @@ export function ImportPage() {
   async function confirmTicker(ticker: string) {
     if (!initialDataLoaded) {
       setStage("error");
-      setErrorMessage("Still loading your portfolios and trades — wait a moment and click Confirm again.");
+      setErrorMessage(t("importPage.stillLoadingError"));
       return;
     }
     if (!tickerMatchStatuses.get(ticker)?.matched) return;
@@ -561,7 +569,7 @@ export function ImportPage() {
       setStage("idle");
     } catch (e) {
       setStage("error");
-      setErrorMessage(e instanceof Error ? e.message : "Confirm failed — please try again.");
+      setErrorMessage(e instanceof Error ? e.message : t("importPage.confirmFailed"));
     } finally {
       setDistributing(false);
     }
@@ -1067,40 +1075,36 @@ export function ImportPage() {
   return (
     <div>
       <PageHeader
-        title="Import"
-        description="Step 1: extract every transaction from as many screenshots/PDFs/CSVs as you need — statements, invoices, position screens, per-stock Orders screens, and the account-wide Orders history. Step 2: every ticker's share count must match a broker 'My Position' screenshot (or every transaction must be confirmed by an invoice or the Orders history) before anything can be distributed."
+        title={t("importPage.title")}
+        description={t("importPage.description")}
         actions={
           <button
             onClick={() => {
-              if (
-                confirm(
-                  "Clear all? This wipes the extracted list and this device's uploaded-file history (so a re-uploaded file is no longer treated as a duplicate). Trades you've already added are not affected."
-                )
-              ) {
+              if (confirm(t("importPage.clearAllConfirm"))) {
                 void clearAll();
               }
             }}
             className="flex items-center gap-1.5 rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800"
           >
-            <RotateCcw size={14} /> Clear all
+            <RotateCcw size={14} /> {t("importPage.clearAll")}
           </button>
         }
       />
 
       {portfolios.length === 0 ? (
         <EmptyState
-          title="Create a portfolio first"
-          description="Distributing extracted trades needs at least one portfolio to assign them to."
+          title={t("importPage.createPortfolioFirstTitle")}
+          description={t("importPage.createPortfolioFirstDescription")}
           action={
             <Link href="/portfolios" className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950">
-              Create a portfolio
+              {t("importPage.createPortfolio")}
             </Link>
           }
         />
       ) : null}
 
       <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-200">Step 1 — Extract</h3>
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("importPage.step1Title")}</h3>
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -1118,10 +1122,10 @@ export function ImportPage() {
           }`}
         >
           <UploadCloud size={28} className="text-slate-500" />
-          <p className="text-sm font-medium text-slate-200">Drag & drop screenshots, PDFs, or CSVs here — select as many at once as you like</p>
-          <p className="text-xs text-slate-500">or</p>
+          <p className="text-sm font-medium text-slate-200">{t("importPage.dropzoneText")}</p>
+          <p className="text-xs text-slate-500">{t("importPage.or")}</p>
           <label className="cursor-pointer rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400">
-            Choose files
+            {t("importPage.chooseFiles")}
             <input
               type="file"
               multiple
@@ -1137,7 +1141,7 @@ export function ImportPage() {
           {queueProgress ? (
             <div className="mt-1 flex items-center gap-2 text-sm text-slate-300">
               <Loader2 size={14} className="animate-spin" />
-              <FileText size={14} /> Processing {queueProgress.index} of {queueProgress.total}: {queueProgress.fileName}
+              <FileText size={14} /> {t("importPage.processingProgress", { index: queueProgress.index, total: queueProgress.total, fileName: queueProgress.fileName })}
             </div>
           ) : null}
           {stage === "error" ? <p className="text-sm text-rose-400">{errorMessage}</p> : null}
@@ -1149,7 +1153,7 @@ export function ImportPage() {
               <div key={i} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">
                 <span className="font-medium text-slate-300">{r.fileName}</span>
                 {r.duplicate ? (
-                  <span className="ml-2 text-cyan-400">already imported before — skipped as a duplicate file.</span>
+                  <span className="ml-2 text-cyan-400">{t("importPage.duplicateFileSkipped")}</span>
                 ) : r.warnings.length > 0 ? (
                   <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-300/80">
                     {r.warnings.map((w, wi) => (
@@ -1157,7 +1161,7 @@ export function ImportPage() {
                     ))}
                   </ul>
                 ) : (
-                  <span className="ml-2 text-emerald-400">extracted successfully.</span>
+                  <span className="ml-2 text-emerald-400">{t("importPage.extractedSuccessfully")}</span>
                 )}
               </div>
             ))}
@@ -1166,13 +1170,7 @@ export function ImportPage() {
 
         <p className="mt-3 flex items-center gap-2 text-sm text-slate-300">
           {totalPending > 0 || pendingOrderEvidences.length > 0 ? <CheckCircle2 size={15} className="text-emerald-400" /> : null}
-          <span className="font-medium">{totalPending}</span> transaction{totalPending === 1 ? "" : "s"}
-          {pendingOrderEvidences.length > 0
-            ? ` + ${pendingOrderEvidences.length} order-history row${pendingOrderEvidences.length === 1 ? "" : "s"}`
-            : ""}{" "}
-          extracted so far
-          {filesProcessed > 0 ? ` from ${filesProcessed} file${filesProcessed === 1 ? "" : "s"}` : ""}. Drop more files anytime,
-          or move on to Step 2 once you're done.
+          {t("importPage.extractedSummary", { n: totalPending, orderRows: pendingOrderEvidences.length, files: filesProcessed })}
         </p>
       </div>
 
@@ -1180,15 +1178,13 @@ export function ImportPage() {
         <div className="mt-4 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
             <div>
-              <h3 className="text-sm font-semibold text-slate-200">Step 2 — Verify &amp; Distribute</h3>
+              <h3 className="text-sm font-semibold text-slate-200">{t("importPage.step2Title")}</h3>
               <p className="mt-1 text-xs text-slate-400">
                 {allTickersMatched
-                  ? "Every ticker's share count matches its broker position screenshot — ready to distribute."
+                  ? t("importPage.allMatchedStatus")
                   : matchedTickerCount > 0
-                    ? `${matchedTickerCount} of ${tickerGroups.length} ticker${tickerGroups.length === 1 ? "" : "s"} verified and ready — the rest can be confirmed individually below, or fix them and use Confirm All.`
-                    : `${unmatchedTickerCount} of ${tickerGroups.length} ticker${tickerGroups.length === 1 ? "" : "s"} still ${
-                        unmatchedTickerCount === 1 ? "needs" : "need"
-                      } to match a broker position screenshot before anything can be allocated to a portfolio.`}
+                    ? t("importPage.someMatchedStatus", { matched: matchedTickerCount, total: tickerGroups.length })
+                    : t("importPage.noneMatchedStatus", { unmatched: unmatchedTickerCount, total: tickerGroups.length })}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1198,7 +1194,7 @@ export function ImportPage() {
                   className="flex items-center gap-1.5 rounded-md border border-rose-500/40 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10"
                 >
                   <Eraser size={14} />
-                  Clear suspected duplicates ({pendingDuplicateCandidateKeys.length})
+                  {t("importPage.clearSuspectedDuplicates", { n: pendingDuplicateCandidateKeys.length })}
                 </button>
               ) : null}
               <button
@@ -1206,15 +1202,15 @@ export function ImportPage() {
                 disabled={matchedTickerCount === 0 || distributing || !initialDataLoaded}
                 title={
                   matchedTickerCount === 0
-                    ? "No ticker is verified yet."
+                    ? t("importPage.noTickerVerified")
                     : allTickersMatched
                       ? undefined
-                      : `Confirms every verified ticker now (${matchedTickerCount} of ${tickerGroups.length}) — the rest stay pending until fixed.`
+                      : t("importPage.confirmSubsetTitle", { matched: matchedTickerCount, total: tickerGroups.length })
                 }
                 className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:hover:bg-slate-700"
               >
                 {distributing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                {allTickersMatched ? "Confirm — Distribute to Portfolios" : `Confirm All Verified (${matchedTickerCount})`}
+                {allTickersMatched ? t("importPage.confirmDistributeAll") : t("importPage.confirmAllVerified", { n: matchedTickerCount })}
               </button>
             </div>
           </div>
@@ -1268,7 +1264,7 @@ export function ImportPage() {
       ) : null}
 
       <Modal
-        title={`Allocate Sell${sellCandidate ? ` · ${sellCandidate.ticker}` : ""}`}
+        title={t("importPage.allocateSellModalTitle", { tickerSuffix: sellCandidate ? t("importPage.allocateSellTickerSuffix", { ticker: sellCandidate.ticker }) : "" })}
         open={sellCandidate !== null}
         onClose={() => setSellCandidate(null)}
         widthClassName="max-w-2xl"
@@ -1402,6 +1398,7 @@ export function TickerGroupCard({
   /** The real EGX symbol this group's company-name-fallback "ticker" maps to (see tickerForCompanyNameFallback) — drives the one-click rename banner. */
   knownTickerSuggestion?: string;
 }) {
+  const t = useT();
   const matched = matchStatus?.matched ?? false;
   const [renaming, setRenaming] = useState(false);
   const [draftTicker, setDraftTicker] = useState(ticker);
@@ -1436,36 +1433,34 @@ export function TickerGroupCard({
       {mergeSuggestion ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-amber-500/5 px-4 py-2.5 text-xs text-amber-300">
           <span>
-            These rows look identical to <strong>{mergeSuggestion}</strong> — likely the same stock read as a different
-            ticker.
+            {t("importPage.mergeSuggestionText", { ticker: mergeSuggestion })}
           </span>
           <button
             onClick={() => onRenameTicker(mergeSuggestion)}
             className="rounded-md border border-amber-400/40 px-2.5 py-1 font-medium text-amber-300 hover:bg-amber-500/10"
           >
-            Merge into {mergeSuggestion}
+            {t("importPage.mergeInto", { ticker: mergeSuggestion })}
           </button>
         </div>
       ) : null}
       {!mergeSuggestion && knownTickerSuggestion ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-cyan-500/5 px-4 py-2.5 text-xs text-cyan-300">
           <span>
-            "{ticker}" is a company name, not a ticker — on the EGX this stock is <strong>{knownTickerSuggestion}</strong>.
-            Renaming fixes every pending row and any trades already recorded under this name.
+            {t("importPage.knownTickerSuggestionText", { ticker, realTicker: knownTickerSuggestion })}
           </span>
           <button
             onClick={() => onRenameTicker(knownTickerSuggestion)}
             className="rounded-md border border-cyan-400/40 px-2.5 py-1 font-medium text-cyan-300 hover:bg-cyan-500/10"
           >
-            Rename to {knownTickerSuggestion}
+            {t("importPage.renameToTicker", { ticker: knownTickerSuggestion })}
           </button>
         </div>
       ) : null}
       {existingPortfolioHint ? (
         <div className="border-b border-slate-800 bg-slate-950/40 px-4 py-2 text-xs text-slate-400">
           {existingPortfolioHint.multiple
-            ? `${ticker} already has trades in more than one portfolio (${existingPortfolioHint.names.join(", ")}) — pick where these belong.`
-            : `${ticker} already has trades in ${existingPortfolioHint.names[0]} — selected automatically.`}
+            ? t("importPage.existingPortfolioHintMultiple", { ticker, names: existingPortfolioHint.names.join(", ") })
+            : t("importPage.existingPortfolioHintSingle", { ticker, name: existingPortfolioHint.names[0] })}
         </div>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
@@ -1488,7 +1483,7 @@ export function TickerGroupCard({
               onClick={confirmRename}
               className="rounded-md bg-cyan-500 px-2 py-1 text-xs font-medium text-slate-950 hover:bg-cyan-400"
             >
-              Save
+              {t("importPage.save")}
             </button>
             <button
               onClick={() => {
@@ -1497,7 +1492,7 @@ export function TickerGroupCard({
               }}
               className="rounded-md px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
             >
-              Cancel
+              {t("importPage.cancel")}
             </button>
           </div>
         ) : (
@@ -1506,7 +1501,7 @@ export function TickerGroupCard({
               setDraftTicker(ticker);
               setRenaming(true);
             }}
-            title="Wrong ticker? Click to correct it — this fixes every pending row extracted under this name."
+            title={t("importPage.renameTitle")}
             className="flex items-center gap-1.5 text-sm font-semibold text-slate-100 hover:text-cyan-400"
           >
             {ticker}
@@ -1516,7 +1511,7 @@ export function TickerGroupCard({
         <div className="flex items-center gap-3">
           <MatchBadge status={matchStatus} />
           <label className="flex items-center gap-2 text-xs text-slate-400">
-            Portfolio
+            {t("importPage.portfolioLabel")}
             <select
               value={portfolioId}
               onChange={(e) => onPortfolioChange(e.target.value)}
@@ -1528,7 +1523,7 @@ export function TickerGroupCard({
             >
               {!portfolioResolved ? (
                 <option value="" disabled>
-                  Select a portfolio…
+                  {t("importPage.selectPortfolioPlaceholder")}
                 </option>
               ) : null}
               {portfolios.map((p) => (
@@ -1542,108 +1537,98 @@ export function TickerGroupCard({
             <button
               onClick={onConfirmTicker}
               disabled={distributing}
-              title={`Distribute just ${ticker} now, without waiting on any other ticker still stuck.`}
+              title={t("importPage.confirmTickerTitle", { ticker })}
               className="flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
             >
               {distributing ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
-              Confirm {ticker}
+              {t("importPage.confirmTickerButton", { ticker })}
             </button>
           ) : null}
         </div>
       </div>
       {matchStatus?.reason === "matched" && (matchStatus.existingRemainingShares ?? 0) > 0 ? (
         <div className="border-b border-slate-800 bg-emerald-500/5 px-4 py-2 text-xs text-slate-400">
-          Matches the broker: {formatShares(matchStatus.existingRemainingShares!)} already on the ledger +{" "}
-          {formatShares(matchStatus.netShares - matchStatus.existingRemainingShares!)} in this batch ={" "}
-          {formatShares(matchStatus.verifiedUnits ?? matchStatus.netShares)} — the rows below only show this batch's
-          part.
+          {t("importPage.matchesBrokerBanner", {
+            onLedger: formatShares(matchStatus.existingRemainingShares!),
+            batch: formatShares(matchStatus.netShares - matchStatus.existingRemainingShares!),
+            total: formatShares(matchStatus.verifiedUnits ?? matchStatus.netShares),
+          })}
         </div>
       ) : matchStatus?.reason === "no-verification" && matchStatus.netShares < -1e-6 ? (
         <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          Pending Sell(s) for {ticker} total {formatShares(pendingSellShares)} shares, but only{" "}
-          {formatShares(matchStatus.existingRemainingShares ?? 0)} already on the ledger + {formatShares(pendingBuyShares)}{" "}
-          in this batch = {formatShares((matchStatus.existingRemainingShares ?? 0) + pendingBuyShares)} are available —{" "}
-          {formatShares(-matchStatus.netShares)} short. A broker "My Position" screenshot can't help here since the
-          position is already sold out; the ledger is most likely missing earlier Buy transactions for the missing
-          shares. Upload a Statement/Orders screenshot covering the full purchase history for {ticker}, or record the
-          missing buy(s) manually if the invoices aren't available.
+          {t("importPage.missingBuyHistoryBanner", {
+            ticker,
+            pendingSellShares: formatShares(pendingSellShares),
+            existing: formatShares(matchStatus.existingRemainingShares ?? 0),
+            pendingBuy: formatShares(pendingBuyShares),
+            available: formatShares((matchStatus.existingRemainingShares ?? 0) + pendingBuyShares),
+            short: formatShares(-matchStatus.netShares),
+          })}
         </div>
       ) : matchStatus?.reason === "no-verification" ? (
         <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
-          No broker "My Position" screenshot uploaded for {ticker} yet — upload one in Step 1 so its share count can be
-          verified before anything is allocated to a portfolio.
-          {tickerHasFulfilledOrders
-            ? " (This ticker has Orders-history rows, but not every transaction below is matched by one — a position screenshot settles it.)"
-            : " An account-wide Orders history screenshot also works when it confirms every transaction below."}
+          {t("importPage.needsScreenshotBanner", {
+            ticker,
+            suffix: tickerHasFulfilledOrders
+              ? t("importPage.needsScreenshotSuffixHasOrders")
+              : t("importPage.needsScreenshotSuffixNoOrders"),
+          })}
         </div>
       ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded && placeholderReplacement ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
           <span>
-            {ticker}'s recorded position is an opening-balance placeholder with no real dates — and this batch carries
-            its real dated transactions, adding up to the same {formatShares(matchStatus.verifiedUnits!)} the broker
-            shows. Replace the placeholder with them? Its cost refunds to cash, then the rows below verify and confirm
-            as usual.
+            {t("importPage.placeholderReplaceBanner", { ticker, verified: formatShares(matchStatus.verifiedUnits!) })}
           </span>
           <button
             onClick={onReplacePlaceholder}
             disabled={replacingPlaceholder}
             className="shrink-0 rounded-md border border-cyan-400/40 px-2.5 py-1 font-medium text-cyan-300 hover:bg-cyan-500/10 disabled:opacity-50"
           >
-            {replacingPlaceholder ? "Replacing…" : "Replace placeholder with real rows"}
+            {replacingPlaceholder ? t("importPage.replacing") : t("importPage.replacePlaceholder")}
           </button>
         </div>
       ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
           <span>
-            {ticker}'s existing position already matches the broker's count on its own — every transaction extracted in
-            this batch looks like it's re-describing shares already on the ledger, just split into different
-            dates/lots than before. Discard all {formatShares(matchStatus.netShares - matchStatus.verifiedUnits!)} extra
-            shares' worth of pending rows for {ticker}?
+            {t("importPage.alreadyFullyRecordedBanner", { ticker, extra: formatShares(matchStatus.netShares - matchStatus.verifiedUnits!) })}
           </span>
           <button
             onClick={onDiscardAllPending}
             className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
           >
-            Discard all pending for {ticker}
+            {t("importPage.discardAllPendingFor", { ticker })}
           </button>
         </div>
       ) : matchStatus?.reason === "mismatch" && reconcileSuggestion ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
           <span>
-            Mismatch: this batch's rows
-            {(matchStatus.existingRemainingShares ?? 0) > 0
-              ? ` plus ${formatShares(matchStatus.existingRemainingShares!)} already on the ledger`
-              : ""}{" "}
-            total {formatShares(matchStatus.netShares)} shares, but the broker's "My Position" screenshot — the trusted
-            source — shows {formatShares(matchStatus.verifiedUnits ?? 0)}. Removing the{" "}
-            {reconcileSuggestion.keysToRemove.length === 1 ? "highlighted row" : `${reconcileSuggestion.keysToRemove.length} highlighted rows`}{" "}
-            below leaves exactly {formatShares(matchStatus.verifiedUnits ?? 0)}
-            {reconcileSuggestion.rankedByAvgCost ? " and lands closest to the broker's avg cost" : ""}.
-            {reconcileSuggestion.alternatives > 0
-              ? ` ${reconcileSuggestion.alternatives} other combination${reconcileSuggestion.alternatives === 1 ? "" : "s"} would also reconcile — double-check before removing.`
-              : ""}
+            {t("importPage.mismatchReconcileBanner", {
+              existingSuffix: (matchStatus.existingRemainingShares ?? 0) > 0 ? t("importPage.existingLedgerSuffix", { existing: formatShares(matchStatus.existingRemainingShares!) }) : "",
+              netShares: formatShares(matchStatus.netShares),
+              verified: formatShares(matchStatus.verifiedUnits ?? 0),
+              removeCount: reconcileSuggestion.keysToRemove.length,
+              avgCostSuffix: reconcileSuggestion.rankedByAvgCost ? t("importPage.rankedByAvgCostSuffix") : "",
+              alternativesSuffix: t("importPage.alternativesSuffix", { n: reconcileSuggestion.alternatives }),
+            })}
           </span>
           <button
             onClick={() => onDiscardPendingKeys?.(reconcileSuggestion.keysToRemove)}
             className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
           >
-            Remove suggested {reconcileSuggestion.keysToRemove.length === 1 ? "row" : `rows (${reconcileSuggestion.keysToRemove.length})`}
+            {t("importPage.removeSuggestedRows", { n: reconcileSuggestion.keysToRemove.length })}
           </button>
         </div>
       ) : matchStatus?.reason === "mismatch" ? (
         <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          Mismatch: this batch's rows
-          {(matchStatus.existingRemainingShares ?? 0) > 0
-            ? ` plus ${formatShares(matchStatus.existingRemainingShares!)} already on the ledger`
-            : ""}{" "}
-          total {formatShares(matchStatus.netShares)} shares, but the broker's "My Position" screenshot — the trusted
-          source — shows {formatShares(matchStatus.verifiedUnits ?? 0)}. The transaction list below is the likely cause:
-          look for a duplicate or misclassified row (remove it with the icon on the right to test-fix the match), or
-          upload an Orders screenshot to confirm the exact transaction count before this can be distributed.
+          {t("importPage.mismatchGenericBanner", {
+            existingSuffix: (matchStatus.existingRemainingShares ?? 0) > 0 ? t("importPage.existingLedgerSuffix", { existing: formatShares(matchStatus.existingRemainingShares!) }) : "",
+            netShares: formatShares(matchStatus.netShares),
+            verified: formatShares(matchStatus.verifiedUnits ?? 0),
+          })}
         </div>
       ) : !portfolioResolved ? (
         <div className="border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
-          This ticker is new to more than one of your portfolios — pick one above so it's ready once you confirm.
+          {t("importPage.newTickerAmbiguousBanner")}
         </div>
       ) : null}
 
@@ -1683,15 +1668,15 @@ export function TickerGroupCard({
               entry={entry}
               match={match}
               added={added}
-              actionLabel={match ? "Allocate anyway" : "Allocate Sell"}
+              actionLabel={match ? t("importPage.allocateAnyway") : t("importPage.allocateSell")}
               actionClassName="bg-rose-500 hover:bg-rose-400"
               onAction={() => onAllocateSell(entry)}
               disabled={disabled}
               disabledReason={
                 !matched
-                  ? "Verify this ticker's share count against a broker position screenshot first."
+                  ? t("importPage.verifyTickerFirst")
                   : !portfolioResolved
-                    ? "Pick a portfolio above first."
+                    ? t("importPage.pickPortfolioFirst")
                     : undefined
               }
               suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
@@ -1709,23 +1694,25 @@ export function TickerGroupCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-slate-300">
                 <ShieldCheck size={14} className="text-cyan-400" />
-                Broker position check: {formatShares(entry.verification.units)} units
-                {entry.verification.avgCost !== undefined ? ` @ ${formatMoney(entry.verification.avgCost)} avg` : ""}
+                {t("importPage.brokerPositionCheck", {
+                  units: formatShares(entry.verification.units),
+                  avgCostSuffix: entry.verification.avgCost !== undefined ? t("importPage.avgCostSuffix", { avgCost: formatMoney(entry.verification.avgCost) }) : "",
+                })}
               </span>
               {acceptedKeys.has(entry.key) ? (
                 <span className="flex items-center gap-1 text-xs text-emerald-400">
-                  <CheckCircle2 size={14} /> Accepted
+                  <CheckCircle2 size={14} /> {t("importPage.accepted")}
                 </span>
               ) : !matched ? (
-                <span className="text-xs text-amber-300">Blocked — needs verification</span>
+                <span className="text-xs text-amber-300">{t("importPage.blockedNeedsVerification")}</span>
               ) : !portfolioResolved ? (
-                <span className="text-xs text-slate-500">Waiting for portfolio</span>
+                <span className="text-xs text-slate-500">{t("importPage.waitingForPortfolio")}</span>
               ) : distributing ? (
                 <span className="flex items-center gap-1 text-xs text-slate-500">
-                  <Loader2 size={13} className="animate-spin" /> Accepting…
+                  <Loader2 size={13} className="animate-spin" /> {t("importPage.accepting")}
                 </span>
               ) : (
-                <span className="text-xs text-slate-500">Ready — click Confirm above</span>
+                <span className="text-xs text-slate-500">{t("importPage.readyClickConfirm")}</span>
               )}
             </div>
             {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
@@ -1736,22 +1723,22 @@ export function TickerGroupCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-slate-300">
                 <CircleDollarSign size={14} className="text-emerald-400" />
-                Dividend: {formatMoney(entry.dividend.amount)} on {formatDate(entry.dividend.date)}
+                {t("importPage.dividendRow", { amount: formatMoney(entry.dividend.amount), date: formatDate(entry.dividend.date) })}
               </span>
               {addedKeys.has(entry.key) ? (
                 <span className="flex items-center gap-1 text-xs text-emerald-400">
-                  <CheckCircle2 size={14} /> Added
+                  <CheckCircle2 size={14} /> {t("importPage.added")}
                 </span>
               ) : !matched ? (
-                <span className="text-xs text-amber-300">Blocked — needs verification</span>
+                <span className="text-xs text-amber-300">{t("importPage.blockedNeedsVerification")}</span>
               ) : !portfolioResolved ? (
-                <span className="text-xs text-slate-500">Waiting for portfolio</span>
+                <span className="text-xs text-slate-500">{t("importPage.waitingForPortfolio")}</span>
               ) : distributing ? (
                 <span className="flex items-center gap-1 text-xs text-slate-500">
-                  <Loader2 size={13} className="animate-spin" /> Adding…
+                  <Loader2 size={13} className="animate-spin" /> {t("importPage.adding")}
                 </span>
               ) : (
-                <span className="text-xs text-slate-500">Ready — click Confirm above</span>
+                <span className="text-xs text-slate-500">{t("importPage.readyClickConfirm")}</span>
               )}
             </div>
             {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
@@ -1762,19 +1749,24 @@ export function TickerGroupCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs text-slate-400">
                 <History size={13} className={entry.evidence.status === "fulfilled" ? "text-cyan-400" : "text-slate-600"} />
-                Orders history: {entry.evidence.side} {formatShares(entry.evidence.shares)} sh @{" "}
-                {formatMoney(entry.evidence.price)} ({entry.evidence.orderType}) — total {formatMoney(entry.evidence.totalValue)}
+                {t("importPage.ordersHistoryRow", {
+                  side: entry.evidence.side,
+                  shares: formatShares(entry.evidence.shares),
+                  price: formatMoney(entry.evidence.price),
+                  orderType: entry.evidence.orderType,
+                  total: formatMoney(entry.evidence.totalValue),
+                })}
                 <span
                   className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                     entry.evidence.status === "fulfilled" ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-700/40 text-slate-400 line-through"
                   }`}
                 >
-                  {entry.evidence.status === "fulfilled" ? "Fulfilled" : "Cancelled"}
+                  {entry.evidence.status === "fulfilled" ? t("importPage.fulfilled") : t("importPage.cancelled")}
                 </span>
               </span>
               <button
                 onClick={() => onDiscardOrderEvidence?.(entry)}
-                title="Remove this order row if it was misread — it's evidence only, nothing was committed from it."
+                title={t("importPage.discardOrderEvidenceTitle")}
                 className="rounded p-1 text-slate-600 hover:bg-rose-500/10 hover:text-rose-400"
               >
                 <Trash2 size={12} />
@@ -1789,6 +1781,7 @@ export function TickerGroupCard({
 
 /** The verification-gate badge on a ticker card's header — the visual anchor for the whole two-phase workflow. */
 function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
+  const t = useT();
   if (!status || status.reason === "no-verification") {
     // netShares < 0 means this batch's Sell(s) already exceed what's on the
     // ledger (existing remaining shares + this batch's pending buys) — no
@@ -1798,54 +1791,54 @@ function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
     if (status && status.netShares < -1e-6) {
       return (
         <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-400">
-          <ShieldAlert size={11} /> Missing buy history
+          <ShieldAlert size={11} /> {t("importPage.matchMissingBuyHistory")}
         </span>
       );
     }
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
-        <ShieldAlert size={11} /> Needs broker screenshot
+        <ShieldAlert size={11} /> {t("importPage.matchNeedsScreenshot")}
       </span>
     );
   }
   if (status.reason === "mismatch") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-400">
-        <ShieldAlert size={11} /> Mismatch
+        <ShieldAlert size={11} /> {t("importPage.matchMismatch")}
       </span>
     );
   }
   if (status.reason === "closed-position") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> Sold out — no screenshot needed
+        <ShieldCheck size={11} /> {t("importPage.matchSoldOut")}
       </span>
     );
   }
   if (status.reason === "invoice-verified") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> Verified by invoice
+        <ShieldCheck size={11} /> {t("importPage.matchInvoiceVerified")}
       </span>
     );
   }
   if (status.reason === "cross-verified") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> Verified — two documents agree
+        <ShieldCheck size={11} /> {t("importPage.matchCrossVerified")}
       </span>
     );
   }
   if (status.reason === "orders-verified") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> Verified — matches Orders history
+        <ShieldCheck size={11} /> {t("importPage.matchOrdersVerified")}
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-      <ShieldCheck size={11} /> Verified
+      <ShieldCheck size={11} /> {t("importPage.matchVerified")}
     </span>
   );
 }
@@ -1914,6 +1907,7 @@ export function AutoCommitRow({
    */
   onDiscardPending?: () => void;
 }) {
+  const t = useT();
   const c = entry.candidate;
   const isLowConfidence = c.confidence === "low";
   const stillPending = !added && !skipped && !dismissed;
@@ -1933,91 +1927,91 @@ export function AutoCommitRow({
           <span className="text-slate-400">{formatDate(c.date)}</span>
           {isLowConfidence ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
-              <ShieldAlert size={11} /> Low-confidence ticker guess
+              <ShieldAlert size={11} /> {t("importPage.lowConfidenceGuess")}
             </span>
           ) : c.confidence ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CONFIDENCE_STYLE[c.confidence].color }} />
-              {CONFIDENCE_STYLE[c.confidence].label}
+              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CONFIDENCE_COLOR[c.confidence] }} />
+              {confidenceLabel(t, c.confidence)}
             </span>
           ) : null}
           {match ? (
             <span
               title={
                 match.matchType === "exact"
-                  ? "Same ticker, date, shares and price as an existing trade."
-                  : "Same ticker, date and shares as an existing trade, but a different price."
+                  ? t("importPage.exactMatchTitle")
+                  : t("importPage.possibleMatchTitle")
               }
               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
                 match.matchType === "exact" ? "bg-rose-500/10 text-rose-400" : "bg-amber-500/10 text-amber-400"
               }`}
             >
-              <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
+              <ShieldAlert size={11} /> {match.matchType === "exact" ? t("importPage.duplicate") : t("importPage.possibleDuplicate")}
             </span>
           ) : null}
           {canDiscard && !match ? (
             <span
-              title="Same ticker, side, date and share count as another row still pending in this batch — very likely the same transaction read twice."
+              title={t("importPage.suspectedDuplicateTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
-              <ShieldAlert size={11} /> Suspected duplicate
+              <ShieldAlert size={11} /> {t("importPage.suspectedDuplicate")}
             </span>
           ) : null}
           {stillPending && wrongTickerHint ? (
             <span
-              title={`Same side, date, share count and a near-identical price as a ${wrongTickerHint} transaction — very likely the same execution read under a wrong ticker guess.`}
+              title={t("importPage.likelyOthersTransactionTitle", { ticker: wrongTickerHint })}
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
-              <ShieldAlert size={11} /> Likely {wrongTickerHint}'s transaction
+              <ShieldAlert size={11} /> {t("importPage.likelyOthersTransaction", { ticker: wrongTickerHint })}
             </span>
           ) : null}
           {stillPending && suggestedRemoval ? (
             <span
-              title="Removing this row would leave exactly the broker's verified share count — see the Mismatch banner above."
+              title={t("importPage.suggestedRemovalTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
-              <ShieldAlert size={11} /> Suggested removal
+              <ShieldAlert size={11} /> {t("importPage.suggestedRemoval")}
             </span>
           ) : null}
           {crossSourceVerified ? (
             <span
-              title="This exact transaction (same side, date and share count) was read from two different document types — independently confirmed by two documents."
+              title={t("importPage.crossSourceVerifiedTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
             >
-              <ShieldCheck size={11} /> Two documents agree
+              <ShieldCheck size={11} /> {t("importPage.twoDocumentsAgree")}
             </span>
           ) : null}
           {orderConfirmed ? (
             <span
-              title="A fulfilled order with this exact side, share count and a near-identical price appears on the broker's own Orders history screenshot — this transaction is confirmed by the broker."
+              title={t("importPage.orderConfirmedTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
             >
-              <History size={11} /> Matches Orders history
+              <History size={11} /> {t("importPage.matchesOrdersHistory")}
             </span>
           ) : stillPending && noMatchingOrder ? (
             <span
-              title="This ticker's Orders history was uploaded, but no fulfilled order matches this row's side/shares/price — it's the likely extra, misread, or misfiled row behind the mismatch."
+              title={t("importPage.noMatchingOrderTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
             >
-              <History size={11} /> No matching order
+              <History size={11} /> {t("importPage.noMatchingOrder")}
             </span>
           ) : null}
         </div>
         {skipped ? (
           <span className="flex items-center gap-1 text-xs text-slate-500">
-            <XCircle size={14} /> Skipped — duplicate
+            <XCircle size={14} /> {t("importPage.skippedDuplicate")}
           </span>
         ) : dismissed ? (
-          <span className="text-xs text-slate-600">Removed</span>
+          <span className="text-xs text-slate-600">{t("importPage.removed")}</span>
         ) : added ? (
           <span className="flex items-center gap-2 text-xs text-emerald-400">
             <span className="flex items-center gap-1">
-              <CheckCircle2 size={14} /> Added
+              <CheckCircle2 size={14} /> {t("importPage.added")}
             </span>
             {isLowConfidence ? (
               <button
                 onClick={onDelete}
-                title="Delete this trade and refund its cost"
+                title={t("importPage.deleteTradeTitle")}
                 className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
               >
                 <Trash2 size={12} />
@@ -2027,28 +2021,28 @@ export function AutoCommitRow({
         ) : canDiscard ? (
           <button
             onClick={onDiscardPending}
-            title="Discard this duplicate row — it was never committed, so there's nothing to refund"
+            title={t("importPage.discardDuplicateTitle")}
             className="flex items-center gap-1 rounded-md border border-rose-500/40 px-2 py-1 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
           >
-            <Trash2 size={12} /> Discard
+            <Trash2 size={12} /> {t("importPage.discard")}
           </button>
         ) : (
           <span className="flex items-center gap-1.5">
             {!matched ? (
-              <span className="text-xs text-amber-300">Blocked — needs verification</span>
+              <span className="text-xs text-amber-300">{t("importPage.blockedNeedsVerification")}</span>
             ) : !portfolioResolved ? (
-              <span className="text-xs text-slate-500">Waiting for portfolio</span>
+              <span className="text-xs text-slate-500">{t("importPage.waitingForPortfolio")}</span>
             ) : distributing ? (
               <span className="flex items-center gap-1 text-xs text-slate-500">
-                <Loader2 size={13} className="animate-spin" /> Adding…
+                <Loader2 size={13} className="animate-spin" /> {t("importPage.adding")}
               </span>
             ) : (
-              <span className="text-xs text-slate-500">Ready — click Confirm above</span>
+              <span className="text-xs text-slate-500">{t("importPage.readyClickConfirm")}</span>
             )}
             <button
               onClick={onDiscardPending}
               disabled={distributing}
-              title="Remove this row from the pending list — nothing was committed, so there's nothing to refund. Useful when you suspect this specific row is the extra/wrong one behind a Mismatch."
+              title={t("importPage.discardGenericTitle")}
               className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Trash2 size={12} />
@@ -2113,6 +2107,7 @@ export function CandidateRow({
   /** Discards this row from the pending pool outright — available on every still-pending row, not just ones auto-flagged as a suspected duplicate (see AutoCommitRow's onDiscardPending). */
   onDiscardPending?: () => void;
 }) {
+  const t = useT();
   const c = entry.candidate;
   const isLowConfidence = c.confidence === "low";
   const canDiscard = suspectedDuplicate && !added;
@@ -2135,79 +2130,79 @@ export function CandidateRow({
           <span className="text-slate-400">{formatDate(c.date)}</span>
           {isLowConfidence ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
-              <ShieldAlert size={11} /> Low-confidence ticker guess
+              <ShieldAlert size={11} /> {t("importPage.lowConfidenceGuess")}
             </span>
           ) : c.confidence ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CONFIDENCE_STYLE[c.confidence].color }} />
-              {CONFIDENCE_STYLE[c.confidence].label}
+              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CONFIDENCE_COLOR[c.confidence] }} />
+              {confidenceLabel(t, c.confidence)}
             </span>
           ) : null}
           {match ? (
             <span
               title={
                 match.matchType === "exact"
-                  ? "Same ticker, date, shares and price as an existing trade."
-                  : "Same ticker, date and shares as an existing trade, but a different price."
+                  ? t("importPage.exactMatchTitle")
+                  : t("importPage.possibleMatchTitle")
               }
               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
                 match.matchType === "exact" ? "bg-rose-500/10 text-rose-400" : "bg-amber-500/10 text-amber-400"
               }`}
             >
-              <ShieldAlert size={11} /> {match.matchType === "exact" ? "Duplicate" : "Possible duplicate"}
+              <ShieldAlert size={11} /> {match.matchType === "exact" ? t("importPage.duplicate") : t("importPage.possibleDuplicate")}
             </span>
           ) : null}
           {canDiscard && !match ? (
             <span
-              title="Same ticker, side, date and share count as another row still pending in this batch — very likely the same transaction read twice."
+              title={t("importPage.suspectedDuplicateTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
-              <ShieldAlert size={11} /> Suspected duplicate
+              <ShieldAlert size={11} /> {t("importPage.suspectedDuplicate")}
             </span>
           ) : null}
           {!added && wrongTickerHint ? (
             <span
-              title={`Same side, date, share count and a near-identical price as a ${wrongTickerHint} transaction — very likely the same execution read under a wrong ticker guess.`}
+              title={t("importPage.likelyOthersTransactionTitle", { ticker: wrongTickerHint })}
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
-              <ShieldAlert size={11} /> Likely {wrongTickerHint}'s transaction
+              <ShieldAlert size={11} /> {t("importPage.likelyOthersTransaction", { ticker: wrongTickerHint })}
             </span>
           ) : null}
           {!added && suggestedRemoval ? (
             <span
-              title="Removing this row would leave exactly the broker's verified share count — see the Mismatch banner above."
+              title={t("importPage.suggestedRemovalTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
-              <ShieldAlert size={11} /> Suggested removal
+              <ShieldAlert size={11} /> {t("importPage.suggestedRemoval")}
             </span>
           ) : null}
           {crossSourceVerified ? (
             <span
-              title="This exact transaction (same side, date and share count) was read from two different document types — independently confirmed by two documents."
+              title={t("importPage.crossSourceVerifiedTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
             >
-              <ShieldCheck size={11} /> Two documents agree
+              <ShieldCheck size={11} /> {t("importPage.twoDocumentsAgree")}
             </span>
           ) : null}
           {orderConfirmed ? (
             <span
-              title="A fulfilled order with this exact side, share count and a near-identical price appears on the broker's own Orders history screenshot — this transaction is confirmed by the broker."
+              title={t("importPage.orderConfirmedTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
             >
-              <History size={11} /> Matches Orders history
+              <History size={11} /> {t("importPage.matchesOrdersHistory")}
             </span>
           ) : !added && noMatchingOrder ? (
             <span
-              title="This ticker's Orders history was uploaded, but no fulfilled order matches this row's side/shares/price — it's the likely extra, misread, or misfiled row behind the mismatch."
+              title={t("importPage.noMatchingOrderTitle")}
               className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
             >
-              <History size={11} /> No matching order
+              <History size={11} /> {t("importPage.noMatchingOrder")}
             </span>
           ) : null}
         </div>
         {added ? (
           <span className="flex items-center gap-1 text-xs text-emerald-400">
-            <CheckCircle2 size={14} /> Added
+            <CheckCircle2 size={14} /> {t("importPage.added")}
           </span>
         ) : (
           <span className="flex items-center gap-1.5">
@@ -2215,8 +2210,8 @@ export function CandidateRow({
               onClick={onDiscardPending}
               title={
                 canDiscard
-                  ? "Discard this duplicate row — it was never committed, so there's nothing to refund"
-                  : "Remove this row from the pending list — nothing was committed, so there's nothing to refund. Useful when you suspect this specific row is the extra/wrong one behind a Mismatch."
+                  ? t("importPage.discardDuplicateTitle")
+                  : t("importPage.discardGenericTitle")
               }
               className={`rounded p-1 hover:bg-rose-500/10 ${canDiscard ? "text-rose-300" : "text-slate-500 hover:text-rose-400"}`}
             >

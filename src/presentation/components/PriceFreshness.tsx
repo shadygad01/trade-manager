@@ -2,6 +2,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { Clock, AlertTriangle } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { formatDateTime, formatMarketCloseDateTime } from "@presentation/lib/format";
+import { useT } from "@presentation/i18n/translations";
 
 /**
  * EGX trades Sun-Thu, so a snapshot can legitimately be up to ~3 calendar
@@ -20,14 +21,14 @@ const STALE_AFTER_DAYS = 4;
  * normal quiet stretch.
  */
 export function PriceFreshness() {
+  const t = useT();
   const info = useLiveQuery(() => repos.prices.getSnapshotInfo(), []);
   if (info === undefined) return null;
   if (info === null) {
     return (
       <p className="mb-4 flex items-center gap-1.5 text-xs text-amber-300">
         <AlertTriangle size={12} />
-        No market prices loaded yet — current prices and unrealized P/L fall back to cost basis until the price feed
-        publishes its first snapshot.
+        {t("priceFreshness.none")}
       </p>
     );
   }
@@ -42,16 +43,14 @@ export function PriceFreshness() {
     return (
       <p className="mb-4 flex items-center gap-1.5 text-xs text-amber-300">
         <AlertTriangle size={12} />
-        Prices are from {displayTime} — the feed hasn't updated since, so current prices and unrealized
-        P/L below are outdated.
+        {t("priceFreshness.stale", { time: displayTime })}
       </p>
     );
   }
   return (
     <p className="mb-4 flex items-center gap-1.5 text-xs text-slate-500">
       <Clock size={12} />
-      Prices as of {displayTime}{usingQuoteTime ? " (last market close)" : ""} — current prices and
-      unrealized P/L reflect this snapshot.
+      {t("priceFreshness.fresh", { time: displayTime, quoteSuffix: usingQuoteTime ? t("priceFreshness.lastMarketClose") : "" })}
     </p>
   );
 }

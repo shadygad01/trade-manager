@@ -31,6 +31,7 @@ import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatMoney, formatPercent, signClass } from "@presentation/lib/format";
 import { CATEGORICAL, categoricalColor, CHART_AXIS, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
+import { useT } from "@presentation/i18n/translations";
 
 const MAX_COMPARED_PORTFOLIOS = CATEGORICAL.length;
 
@@ -88,6 +89,7 @@ export function mergeMonthlyPerformance(series: PerformancePeriod[][]): { period
 }
 
 export function DashboardPage() {
+  const t = useT();
   const dashboard = useLiveQuery(async () => {
     const portfolios = await repos.portfolios.getAll();
     const priceMap = await repos.prices.getAllPrices();
@@ -177,8 +179,8 @@ export function DashboardPage() {
   if (!dashboard || !totals) {
     return (
       <div>
-        <PageHeader title="Dashboard" description="Portfolio-wide overview across every portfolio." />
-        <p className="text-sm text-slate-500">Loading…</p>
+        <PageHeader title={t("dashboard.title")} description={t("dashboard.description")} />
+        <p className="text-sm text-slate-500">{t("common.loading")}</p>
       </div>
     );
   }
@@ -186,13 +188,13 @@ export function DashboardPage() {
   if (dashboard.length === 0) {
     return (
       <div>
-        <PageHeader title="Dashboard" description="Portfolio-wide overview across every portfolio." />
+        <PageHeader title={t("dashboard.title")} description={t("dashboard.description")} />
         <EmptyState
-          title="No portfolios yet"
-          description="Create your first portfolio to start tracking trades and performance."
+          title={t("dashboard.noPortfoliosTitle")}
+          description={t("dashboard.noPortfoliosDescription")}
           action={
             <Link href="/portfolios" className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950">
-              Create a portfolio
+              {t("dashboard.createPortfolio")}
             </Link>
           }
         />
@@ -207,61 +209,61 @@ export function DashboardPage() {
 
   return (
     <div>
-      <PageHeader title="Dashboard" description="Portfolio-wide overview across every portfolio." />
+      <PageHeader title={t("dashboard.title")} description={t("dashboard.description")} />
       <PriceFreshness />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
-          label="Total Portfolio Value"
+          label={t("dashboard.totalPortfolioValue")}
           value={formatMoney(totals.totalMarketValue)}
-          sublabel={`Cost basis ${formatMoney(totals.totalCostBasis)}`}
+          sublabel={t("dashboard.costBasisSub", { value: formatMoney(totals.totalCostBasis) })}
           icon={<Wallet size={16} />}
         />
         <StatTile
-          label="Total Return"
+          label={t("dashboard.totalReturn")}
           value={formatPercent(totals.totalValueWeightedReturn)}
           valueClassName={signClass(totals.totalValueWeightedReturn)}
-          sublabel="Value-weighted, incl. unrealized"
+          sublabel={t("dashboard.totalReturnSub")}
           icon={totals.totalValueWeightedReturn >= 0 ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
         />
         <StatTile
-          label="Realized P/L"
+          label={t("dashboard.realizedPnl")}
           value={formatMoney(totals.totalRealizedPnl)}
           valueClassName={signClass(totals.totalRealizedPnl)}
-          sublabel="From closed lots"
+          sublabel={t("dashboard.realizedPnlSub")}
         />
         <StatTile
-          label="Unrealized P/L"
+          label={t("dashboard.unrealizedPnl")}
           value={formatMoney(totals.totalUnrealizedPnl)}
           valueClassName={signClass(totals.totalUnrealizedPnl)}
-          sublabel="Mark-to-market on open positions"
+          sublabel={t("dashboard.unrealizedPnlSub")}
         />
         <StatTile
-          label="Total Dividends"
+          label={t("dashboard.totalDividends")}
           value={formatMoney(totals.totalDividends)}
-          sublabel="Cash received across all portfolios"
+          sublabel={t("dashboard.totalDividendsSub")}
           icon={<CircleDollarSign size={16} />}
         />
         <StatTile
-          label="Cash Allocation"
+          label={t("dashboard.cashAllocation")}
           value={formatPercent(totals.totalAssets > 0 ? (totals.totalCash / totals.totalAssets) * 100 : 0, 1)}
           sublabel={formatMoney(totals.totalCash)}
           icon={<Layers size={16} />}
         />
         <StatTile
-          label="Capital Deployment"
+          label={t("dashboard.capitalDeployment")}
           value={formatPercent(totals.capitalDeployment, 1)}
-          sublabel="Average share of capital deployed"
+          sublabel={t("dashboard.capitalDeploymentSub")}
         />
         <StatTile
-          label="Best Portfolio"
-          value={totals.best ? totals.best.portfolio.name : "—"}
+          label={t("dashboard.bestPortfolio")}
+          value={totals.best ? totals.best.portfolio.name : t("common.dash")}
           valueClassName={totals.best ? signClass(totals.best.analytics.totalReturnPct) : undefined}
           sublabel={totals.best ? formatPercent(totals.best.analytics.totalReturnPct) : undefined}
         />
         <StatTile
-          label="Worst Portfolio"
-          value={totals.worst ? totals.worst.portfolio.name : "—"}
+          label={t("dashboard.worstPortfolio")}
+          value={totals.worst ? totals.worst.portfolio.name : t("common.dash")}
           valueClassName={totals.worst ? signClass(totals.worst.analytics.totalReturnPct) : undefined}
           sublabel={totals.worst ? formatPercent(totals.worst.analytics.totalReturnPct) : undefined}
         />
@@ -270,7 +272,7 @@ export function DashboardPage() {
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         {totals.comparedPortfolios.length > 1 ? (
           <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <h3 className="mb-3 text-sm font-semibold text-slate-200">Portfolio Comparison</h3>
+            <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("dashboard.portfolioComparison")}</h3>
             <ResponsiveContainer width="100%" height={260}>
               <LineChart data={totals.comparisonData}>
                 <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
@@ -302,19 +304,15 @@ export function DashboardPage() {
               </LineChart>
             </ResponsiveContainer>
             <p className="mt-2 text-[11px] text-slate-500">
-              Each portfolio&apos;s realized + dividend return, as % of its own cost basis invested — directly
-              comparable across portfolios of any size without indexing. Deliberately excludes unrealized P/L (a
-              day-by-day mark-to-market curve would need a different, growing denominator each day, unlike this
-              one); see Total Return/Best/Worst Portfolio above or Monthly Performance below for figures that
-              include it.
-              {dashboard.length > MAX_COMPARED_PORTFOLIOS ? ` Showing the first ${MAX_COMPARED_PORTFOLIOS} portfolios.` : ""}
+              {t("dashboard.portfolioComparisonCaption")}
+              {dashboard.length > MAX_COMPARED_PORTFOLIOS ? t("dashboard.showingFirstN", { n: MAX_COMPARED_PORTFOLIOS }) : ""}
             </p>
           </div>
         ) : null}
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
           <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-200">
-            <PieChartIcon size={14} /> Portfolio Allocation
+            <PieChartIcon size={14} /> {t("dashboard.portfolioAllocation")}
           </h3>
           {allocationData.some((d) => d.value > 0) ? (
             <ResponsiveContainer width="100%" height={260}>
@@ -339,14 +337,14 @@ export function DashboardPage() {
               </PieChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyState title="No value yet" description="Fund a portfolio and record trades to see allocation." />
+            <EmptyState title={t("dashboard.noValueYetTitle")} description={t("dashboard.noValueYetDescription")} />
           )}
         </div>
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-200">Monthly Performance</h3>
+          <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("dashboard.monthlyPerformance")}</h3>
           {totals.monthlyReturn.length > 0 ? (
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={totals.monthlyReturn}>
@@ -371,17 +369,15 @@ export function DashboardPage() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyState title="No monthly data yet" description="Populates from each portfolio's first trade onward." />
+            <EmptyState title={t("dashboard.noMonthlyDataTitle")} description={t("dashboard.noMonthlyDataDescription")} />
           )}
           <p className="mt-2 text-[11px] text-slate-500">
-            Simple average of each portfolio&apos;s own realized + dividend + unrealized return % (not money-weighted
-            across portfolios), each against its own cost basis invested; unrealized swings use each month&apos;s own
-            historical closing price, never today&apos;s.
+            {t("dashboard.monthlyPerformanceCaption")}
           </p>
         </div>
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <h3 className="mb-3 text-sm font-semibold text-slate-200">Sector Allocation</h3>
+          <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("dashboard.sectorAllocation")}</h3>
           {totals.sectorSlices.length > 0 ? (
             <ResponsiveContainer width="100%" height={260}>
               <PieChart>
@@ -411,13 +407,13 @@ export function DashboardPage() {
             </ResponsiveContainer>
           ) : (
             <EmptyState
-              title="No open positions yet"
-              description="Sector allocation fills in once a portfolio holds open positions."
+              title={t("dashboard.noOpenPositionsTitle")}
+              description={t("dashboard.noOpenPositionsDescription")}
             />
           )}
           {totals.sectorSlices.some((s) => s.sector === UNCLASSIFIED_SECTOR) ? (
             <p className="mt-2 text-[11px] text-slate-500">
-              &ldquo;Unclassified&rdquo; covers tickers outside the known-sector map — never guessed at.
+              {t("dashboard.unclassifiedCaption")}
             </p>
           ) : null}
         </div>

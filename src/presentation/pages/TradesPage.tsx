@@ -17,8 +17,10 @@ import { Modal } from "@presentation/components/Modal";
 import { SellAllocationForm } from "@presentation/components/SellAllocationForm";
 import { BuyZoneChart } from "@presentation/components/BuyZoneChart";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
+import { useT } from "@presentation/i18n/translations";
 
 export function TradesPage() {
+  const t = useT();
   const { id: portfolioId } = useParams<{ id: string }>();
   const [buyOpen, setBuyOpen] = useState(false);
   const [sellOpen, setSellOpen] = useState(false);
@@ -35,14 +37,14 @@ export function TradesPage() {
       setDateError(null);
       setEditingDate(null);
     } catch (e) {
-      setDateError({ tradeId: editingDate.tradeId, message: e instanceof Error ? e.message : "Failed to correct the date." });
+      setDateError({ tradeId: editingDate.tradeId, message: e instanceof Error ? e.message : t("trades.correctDateFailed") });
     }
   }
 
   async function handleDeleteTrade(trade: Trade) {
     if (
       !confirm(
-        `Delete this ${trade.ticker} lot (${formatShares(trade.shares)} sh @ ${formatMoney(trade.entryPrice)})? Its cost is refunded to cash and its timeline entry is removed. This can't be undone.`,
+        t("trades.deleteTradeConfirm", { ticker: trade.ticker, shares: formatShares(trade.shares), price: formatMoney(trade.entryPrice) }),
       )
     ) {
       return;
@@ -51,7 +53,7 @@ export function TradesPage() {
       await deleteTrade(repos, trade.id);
       setDateError(null);
     } catch (e) {
-      setDateError({ tradeId: trade.id, message: e instanceof Error ? e.message : "Failed to delete the trade." });
+      setDateError({ tradeId: trade.id, message: e instanceof Error ? e.message : t("trades.deleteTradeFailed") });
     }
   }
 
@@ -104,22 +106,22 @@ export function TradesPage() {
   return (
     <div>
       <PageHeader
-        title={portfolio ? `${portfolio.name} — Trades` : "Trades"}
-        description="Every buy execution and the specific lots each sell closed."
+        title={portfolio ? t("trades.titleWithPortfolio", { name: portfolio.name }) : t("trades.title")}
+        description={t("trades.description")}
         actions={
           <>
             <button
               onClick={() => setBuyOpen(true)}
               className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400"
             >
-              <Plus size={16} /> Record Buy
+              <Plus size={16} /> {t("trades.recordBuy")}
             </button>
             <button
               onClick={() => setSellOpen(true)}
               disabled={openTickers.length === 0}
               className="flex items-center gap-1.5 rounded-md bg-rose-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <ArrowLeftRight size={16} /> Record Sell
+              <ArrowLeftRight size={16} /> {t("trades.recordSell")}
             </button>
           </>
         }
@@ -129,9 +131,9 @@ export function TradesPage() {
       {allTickers.length > 0 ? (
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold text-slate-200">Buy Zone &amp; Sell Map</h3>
+            <h3 className="text-sm font-semibold text-slate-200">{t("trades.buyZoneTitle")}</h3>
             <label className="flex items-center gap-2">
-              <span className="text-xs font-medium text-slate-400">Ticker</span>
+              <span className="text-xs font-medium text-slate-400">{t("trades.tickerLabel")}</span>
               <div className="relative">
                 <select
                   value={activeBuyZoneTicker}
@@ -154,11 +156,11 @@ export function TradesPage() {
 
       {sorted.length === 0 ? (
         <EmptyState
-          title="No trades yet"
-          description="Record your first buy to start building positions."
+          title={t("trades.noTradesTitle")}
+          description={t("trades.noTradesDescription")}
           action={
             <button onClick={() => setBuyOpen(true)} className="rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950">
-              Record Buy
+              {t("trades.recordBuy")}
             </button>
           }
         />
@@ -168,13 +170,13 @@ export function TradesPage() {
             <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="w-8 px-4 py-2"></th>
-                <th className="px-4 py-2">Ticker</th>
-                <th className="px-4 py-2">Executed</th>
-                <th className="px-4 py-2 text-right">Shares</th>
-                <th className="px-4 py-2 text-right">Remaining</th>
-                <th className="px-4 py-2 text-right">Entry Price</th>
-                <th className="px-4 py-2 text-right">Fees</th>
-                <th className="px-4 py-2">Status</th>
+                <th className="px-4 py-2">{t("trades.colTicker")}</th>
+                <th className="px-4 py-2">{t("trades.colExecuted")}</th>
+                <th className="px-4 py-2 text-right">{t("trades.colShares")}</th>
+                <th className="px-4 py-2 text-right">{t("trades.colRemaining")}</th>
+                <th className="px-4 py-2 text-right">{t("trades.colEntryPrice")}</th>
+                <th className="px-4 py-2 text-right">{t("trades.colFees")}</th>
+                <th className="px-4 py-2">{t("trades.colStatus")}</th>
                 <th className="w-8 px-4 py-2"></th>
               </tr>
             </thead>
@@ -218,7 +220,7 @@ export function TradesPage() {
                             />
                             <button
                               onClick={() => void saveCorrectedDate()}
-                              title="Save the corrected date"
+                              title={t("trades.saveDateTitle")}
                               className="rounded p-1 text-emerald-400 hover:bg-emerald-500/10"
                             >
                               <Check size={13} />
@@ -238,10 +240,10 @@ export function TradesPage() {
                             {formatDate(trade.executionDate)}
                             {trade.notes?.startsWith("Opening balance") ? (
                               <span
-                                title="Not a real dated purchase — this lot was booked from a broker position screenshot only. Delete it (trash icon on the right) and import this ticker's real buy invoices/statement so the lots land with their true dates."
+                                title={t("trades.placeholderTitle")}
                                 className="inline-flex items-center rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
                               >
-                                Placeholder — replace with real buys
+                                {t("trades.placeholderBadge")}
                               </span>
                             ) : null}
                             <button
@@ -249,7 +251,7 @@ export function TradesPage() {
                                 setDateError(null);
                                 setEditingDate({ tradeId: trade.id, value: trade.executionDate });
                               }}
-                              title="Correct this execution date — only the date changes; shares, price and sell history stay untouched."
+                              title={t("trades.correctDateTitle")}
                               className="rounded p-1 text-slate-600 hover:bg-slate-800 hover:text-slate-300"
                             >
                               <Pencil size={12} />
@@ -274,7 +276,7 @@ export function TradesPage() {
                                 : "bg-slate-700/40 text-slate-400"
                           }`}
                         >
-                          {status === "open" ? "Open" : status === "partial" ? "Partial" : "Closed"}
+                          {status === "open" ? t("trades.statusOpen") : status === "partial" ? t("trades.statusPartial") : t("trades.statusClosed")}
                         </span>
                       </td>
                       <td className="px-4 py-2.5 text-right">
@@ -285,7 +287,7 @@ export function TradesPage() {
                                 e.stopPropagation();
                                 setMoveTradeTarget(trade);
                               }}
-                              title="Move to another portfolio"
+                              title={t("trades.moveToAnotherPortfolio")}
                               className="rounded-md p-1 text-slate-500 hover:bg-slate-800 hover:text-slate-200"
                             >
                               <FolderSymlink size={14} />
@@ -297,7 +299,7 @@ export function TradesPage() {
                                 e.stopPropagation();
                                 void handleDeleteTrade(trade);
                               }}
-                              title="Delete this lot — its cost is refunded to cash. Only available while no sell has closed shares from it."
+                              title={t("trades.deleteLotTitle")}
                               className="rounded-md p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
                             >
                               <Trash2 size={14} />
@@ -310,16 +312,16 @@ export function TradesPage() {
                       <tr>
                         <td colSpan={9} className="bg-slate-950/40 px-4 py-3">
                           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Sells closing this lot
+                            {t("trades.sellsClosingLot")}
                           </p>
                           <table className="w-full text-xs">
                             <thead className="text-left text-slate-500">
                               <tr>
-                                <th className="py-1 pr-3">Date</th>
-                                <th className="py-1 pr-3 text-right">Shares Closed</th>
-                                <th className="py-1 pr-3 text-right">Exit Price</th>
-                                <th className="py-1 pr-3 text-right">Fees</th>
-                                <th className="py-1 pr-3">Reason</th>
+                                <th className="py-1 pr-3">{t("trades.colDate")}</th>
+                                <th className="py-1 pr-3 text-right">{t("trades.colSharesClosed")}</th>
+                                <th className="py-1 pr-3 text-right">{t("trades.colExitPrice")}</th>
+                                <th className="py-1 pr-3 text-right">{t("trades.colFees")}</th>
+                                <th className="py-1 pr-3">{t("trades.colReason")}</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -370,6 +372,7 @@ function MoveTradeModal({
   otherPortfolios: { id: string; name: string }[];
   onClose: () => void;
 }) {
+  const t = useT();
   const [targetPortfolioId, setTargetPortfolioId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -383,31 +386,25 @@ function MoveTradeModal({
     try {
       const result = await moveTrade(repos, trade.id, activeTarget);
       if (result.movedTradeIds.length > 1) {
-        alert(
-          `${result.movedTradeIds.length} lots moved together — this trade was sold in the same transaction as ${
-            result.movedTradeIds.length - 1
-          } other lot(s), so they moved as one unit.`
-        );
+        alert(t("trades.movedTogetherAlert", { count: result.movedTradeIds.length, others: result.movedTradeIds.length - 1 }));
       }
       setTargetPortfolioId("");
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to move trade.");
+      setError(e instanceof Error ? e.message : t("trades.moveFailed"));
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <Modal title={`Move ${trade?.ticker ?? ""} to another portfolio`} open={trade !== null} onClose={onClose}>
+    <Modal title={t("trades.moveModalTitle", { ticker: trade?.ticker ?? "" })} open={trade !== null} onClose={onClose}>
       <div className="space-y-3">
         <p className="text-xs text-slate-400">
-          Moves this buy — and any sell that closed it together with another lot — to a different portfolio. Cash
-          moves with it: the original cost is refunded here and charged there, and any sale proceeds follow the
-          same way.
+          {t("portfolioDetail.moveModalDescription")}
         </p>
         <label className="block text-xs text-slate-400 space-y-1">
-          Target portfolio
+          {t("trades.targetPortfolio")}
           <select
             value={activeTarget}
             onChange={(e) => setTargetPortfolioId(e.target.value)}
@@ -423,14 +420,14 @@ function MoveTradeModal({
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={() => void handleMove()}
             disabled={submitting || !activeTarget}
             className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
           >
-            {submitting ? "Moving…" : "Move"}
+            {submitting ? t("trades.moving") : t("trades.move")}
           </button>
         </div>
       </div>
@@ -439,6 +436,7 @@ function MoveTradeModal({
 }
 
 export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; open: boolean; onClose: () => void }) {
+  const t = useT();
   const [ticker, setTicker] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [sector, setSector] = useState("");
@@ -471,15 +469,15 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
     const sharesN = Number.parseFloat(shares);
     const priceN = Number.parseFloat(entryPrice);
     if (!normalizedTicker) {
-      setError("Enter a ticker.");
+      setError(t("trades.enterTicker"));
       return;
     }
     if (!Number.isFinite(sharesN) || sharesN <= 0) {
-      setError("Shares must be a positive number.");
+      setError(t("trades.sharesPositive"));
       return;
     }
     if (!Number.isFinite(priceN) || priceN <= 0) {
-      setError("Entry price must be a positive number.");
+      setError(t("trades.entryPricePositive"));
       return;
     }
     setSubmitting(true);
@@ -507,7 +505,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
       reset();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to record buy.");
+      setError(e instanceof Error ? e.message : t("trades.recordBuyFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -515,7 +513,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
 
   return (
     <Modal
-      title="Record Buy"
+      title={t("trades.recordBuyModalTitle")}
       open={open}
       onClose={() => {
         reset();
@@ -525,7 +523,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
       <div className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs text-slate-400 space-y-1">
-            Ticker
+            {t("trades.tickerLabel")}
             <input
               value={ticker}
               onChange={(e) => {
@@ -543,7 +541,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
-            Company (optional)
+            {t("trades.companyOptional")}
             <input
               value={companyName}
               onChange={(e) => setCompanyName(e.target.value)}
@@ -552,7 +550,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
-            Sector (optional)
+            {t("trades.sectorOptional")}
             <input
               value={sector}
               onChange={(e) => setSector(e.target.value)}
@@ -561,7 +559,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
-            Shares
+            {t("trades.colShares")}
             <input
               type="number"
               value={shares}
@@ -570,7 +568,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
-            Entry price
+            {t("trades.entryPrice")}
             <input
               type="number"
               value={entryPrice}
@@ -579,7 +577,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
-            Fees
+            {t("trades.colFees")}
             <input
               type="number"
               value={fees}
@@ -588,7 +586,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
-            Taxes
+            {t("trades.taxes")}
             <input
               type="number"
               value={taxes}
@@ -597,7 +595,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
-            Execution date
+            {t("trades.executionDate")}
             <input
               type="date"
               min={TRACKING_START_DATE}
@@ -607,7 +605,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             />
           </label>
           <label className="text-xs text-slate-400 space-y-1">
-            Execution time
+            {t("trades.executionTime")}
             <input
               type="time"
               value={executionTime}
@@ -617,7 +615,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
           </label>
         </div>
         <label className="block text-xs text-slate-400 space-y-1">
-          Strategy tags (comma separated)
+          {t("trades.strategyTagsLabel")}
           <input
             value={strategyTags}
             onChange={(e) => setStrategyTags(e.target.value)}
@@ -626,7 +624,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
           />
         </label>
         <label className="block text-xs text-slate-400 space-y-1">
-          Notes
+          {t("trades.notesLabel")}
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -637,14 +635,14 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={handleSubmit}
             disabled={submitting}
             className="rounded-md bg-emerald-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
           >
-            {submitting ? "Saving…" : "Record Buy"}
+            {submitting ? t("common.saving") : t("trades.recordBuy")}
           </button>
         </div>
       </div>
@@ -663,13 +661,14 @@ function RecordSellModal({
   open: boolean;
   onClose: () => void;
 }) {
+  const t = useT();
   const [ticker, setTicker] = useState<string | undefined>(undefined);
 
   const activeTicker = ticker ?? openTickers[0];
 
   return (
     <Modal
-      title="Record Sell"
+      title={t("trades.recordSellModalTitle")}
       open={open}
       onClose={() => {
         setTicker(undefined);
@@ -679,7 +678,7 @@ function RecordSellModal({
     >
       <div className="space-y-4">
         <label className="block text-xs text-slate-400 space-y-1">
-          Ticker
+          {t("trades.tickerLabel")}
           <select
             value={activeTicker}
             onChange={(e) => setTicker(e.target.value)}
