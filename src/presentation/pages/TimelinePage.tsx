@@ -179,7 +179,7 @@ export function TimelinePage() {
                             ) : null}
                           </span>
                         </div>
-                        {event.notes ? <p className="mt-1 text-xs text-slate-500">{event.notes}</p> : null}
+                        {event.notes ? <p className="mt-1 break-words text-xs text-slate-500">{event.notes}</p> : null}
                         {deleteError && deleteError.eventId === event.id ? (
                           <p className="mt-1 text-xs text-rose-400">{deleteError.message}</p>
                         ) : null}
