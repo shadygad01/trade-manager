@@ -72,15 +72,47 @@ export function PortfolioDetailPage() {
       // Read the trade before deleting so we know its ticker/portfolio
       const trade = await repos.trades.getById(tradeId);
       await deleteTrade(repos, tradeId);
-      // Deleting a buy changes the position — any broker verification for
-      // this ticker is now stale (verified unit count no longer matches the
-      // ledger). Clear it so the app never shows a false "verified" badge.
+      // Deleting a trade only invalidates a broker verification when the
+      // deleted trade was part of the verified snapshot AND its removal
+      // breaks the match between the ledger and the verified unit count.
+      // A verification is kept when:
+      //  - the deleted trade was executed after the verification was
+      //    captured (the snapshot never included it), or
+      //  - after deletion the ledger as of the capture time still equals
+      //    the verified units (e.g. a duplicate import was removed — the
+      //    verification is accurate again, not corrupted).
       if (trade) {
-        const verifs = await repos.verifications.getByPortfolio(trade.portfolioId);
-        const stale = verifs.filter(
-          (v) => normalizeTicker(v.ticker) === normalizeTicker(trade.ticker)
-        );
-        await Promise.all(stale.map((v) => repos.verifications.delete(v.id)));
+        const ticker = normalizeTicker(trade.ticker);
+        const tradeTs = `${trade.executionDate}T${trade.executionTime}`;
+        const [verifs, remainingTrades, allocations] = await Promise.all([
+          repos.verifications.getByPortfolio(trade.portfolioId),
+          repos.trades.getByPortfolio(trade.portfolioId),
+          repos.allocations.getByPortfolio(trade.portfolioId),
+        ]);
+        const corrupted = verifs.filter((v) => {
+          if (normalizeTicker(v.ticker) !== ticker) return false;
+          // Trade executed after the snapshot was captured — snapshot never
+          // included it, so deleting it cannot corrupt the verification.
+          if (tradeTs > v.capturedAt) return false;
+          // Recompute ledger shares as of the capture time (post-deletion).
+          const boughtByCapture = remainingTrades
+            .filter(
+              (t) =>
+                normalizeTicker(t.ticker) === ticker &&
+                `${t.executionDate}T${t.executionTime}` <= v.capturedAt
+            )
+            .reduce((sum, t) => sum + t.shares, 0);
+          const soldByCapture = allocations
+            .filter(
+              (a) =>
+                normalizeTicker(a.ticker) === ticker &&
+                `${a.executionDate}T${a.executionTime}` <= v.capturedAt
+            )
+            .reduce((sum, a) => sum + a.sharesClosed, 0);
+          // Still matches the broker's verified count — verification intact.
+          return boughtByCapture - soldByCapture !== v.units;
+        });
+        await Promise.all(corrupted.map((v) => repos.verifications.delete(v.id)));
       }
       setRefreshKey((k) => k + 1);
     } catch (e) {
