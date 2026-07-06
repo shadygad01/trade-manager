@@ -123,6 +123,61 @@ export function needsBackfill(existingHistory: Record<string, number> | undefine
   return days < MIN_BACKFILLED_HISTORY_DAYS;
 }
 
+/** Columns requested from TradingView's scanner for `estimateHistoryFromPerformance` — order matches that function's destructuring. */
+const PERFORMANCE_HISTORY_COLUMNS = ["close", "Perf.W", "Perf.1M", "Perf.3M", "Perf.6M", "Perf.Y", "Perf.YTD"];
+
+/**
+ * Back-calculates a handful of real (not fabricated) historical anchor
+ * prices from TradingView's scanner performance-percentage columns — e.g.
+ * `close / (1 + Perf.1M / 100)` is the real closing price one month ago,
+ * derived from TradingView's own reported %, the same provider already
+ * trusted for the live quote (it "actively covers the EGX" — see
+ * `fetchFromTradingView`). Used only as a fallback when Yahoo's bulk daily
+ * history is unavailable/frozen for a ticker: far sparser than a real daily
+ * backfill (a handful of week/month/year-ago points instead of ~490 days),
+ * but still real market data rather than the alternative of no history at
+ * all for that ticker. `row` is a `tradingViewScan(ticker,
+ * PERFORMANCE_HISTORY_COLUMNS)` result; a missing/non-numeric `close` or
+ * individual `Perf.*` value drops that anchor (or all of them) rather than
+ * guessing.
+ */
+export function estimateHistoryFromPerformance(
+  row: (number | null)[],
+  today: string = new Date().toISOString().slice(0, 10)
+): Record<string, number> {
+  const [close, perfW, perf1M, perf3M, perf6M, perfY, perfYTD] = row;
+  if (typeof close !== "number") return {};
+  const todayDate = new Date(`${today}T00:00:00.000Z`);
+  const history: Record<string, number> = {};
+  const anchors: [number | null | undefined, number][] = [
+    [perfW, 7],
+    [perf1M, 30],
+    [perf3M, 91],
+    [perf6M, 182],
+    [perfY, 365],
+  ];
+  for (const [perf, daysAgo] of anchors) {
+    if (typeof perf !== "number") continue;
+    const anchorDate = new Date(todayDate);
+    anchorDate.setUTCDate(anchorDate.getUTCDate() - daysAgo);
+    history[historyDateKey(anchorDate.toISOString())] = Number((close / (1 + perf / 100)).toFixed(2));
+  }
+  if (typeof perfYTD === "number") {
+    history[`${today.slice(0, 4)}-01-01`] = Number((close / (1 + perfYTD / 100)).toFixed(2));
+  }
+  return history;
+}
+
+/** Network wrapper around `estimateHistoryFromPerformance` — throws when TradingView has nothing usable, same contract as `fetchYahooHistory`. */
+async function fetchTradingViewPerformanceHistory(ticker: string): Promise<Record<string, number>> {
+  const row = await tradingViewScan(ticker, PERFORMANCE_HISTORY_COLUMNS);
+  const history = estimateHistoryFromPerformance(row);
+  if (Object.keys(history).length === 0) {
+    throw new Error(`TradingView returned no usable performance data for ${ticker}`);
+  }
+  return history;
+}
+
 async function fetchYahooHistory(ticker: string, range: string): Promise<Record<string, number>> {
   const response = await fetch(`${YAHOO_CHART_URL(ticker)}?range=${range}&interval=1d`, {
     headers: { "User-Agent": "Mozilla/5.0" },
@@ -251,16 +306,37 @@ async function main(): Promise<void> {
     // source) — this is what actually self-heals a ticker whose backfill
     // once failed, rather than getting stuck forever on a few real
     // day-by-day entries that looked "good enough" to skip retrying.
+    //
+    // Some tickers (ORAS, in production) keep coming back frozen from Yahoo
+    // specifically — a persistent upstream data-quality gap, not a transient
+    // one, so retrying Yahoo alone never recovers them. When Yahoo fails,
+    // TradingView's scanner performance columns (already the live-quote
+    // provider, and already confirmed to actively cover the EGX) give a
+    // second, genuinely different real-data path: sparser (a handful of
+    // week/month/year-ago anchor points instead of ~490 daily closes) but
+    // still real, not fabricated — see `estimateHistoryFromPerformance`.
     const existingHistory = history[ticker];
     if (needsBackfill(existingHistory)) {
       try {
         history[ticker] = await fetchYahooHistory(ticker, BACKFILL_RANGE);
-      } catch (error) {
-        console.warn(`[fetch-prices] Could not backfill history for ${ticker}: ${(error as Error).message}`);
-        // Never keep a known-corrupt stored series around just because the
-        // retry also failed — no history (0%, never fabricated) is safer
-        // than a frozen fake price feeding every calculation downstream.
-        history[ticker] = existingHistory && !isFrozenHistory(existingHistory) ? existingHistory : {};
+      } catch (yahooError) {
+        console.warn(`[fetch-prices] Could not backfill history for ${ticker} from Yahoo: ${(yahooError as Error).message}`);
+        try {
+          const estimated = await fetchTradingViewPerformanceHistory(ticker);
+          console.warn(
+            `[fetch-prices] Falling back to TradingView performance-derived estimate for ${ticker} (${Object.keys(estimated).length} anchor points)`
+          );
+          history[ticker] = { ...(existingHistory && !isFrozenHistory(existingHistory) ? existingHistory : {}), ...estimated };
+        } catch (tradingViewError) {
+          console.warn(
+            `[fetch-prices] Could not estimate history for ${ticker} from TradingView either: ${(tradingViewError as Error).message}`
+          );
+          // Never keep a known-corrupt stored series around just because
+          // every retry also failed — no history (0%, never fabricated) is
+          // safer than a frozen fake price feeding every calculation
+          // downstream.
+          history[ticker] = existingHistory && !isFrozenHistory(existingHistory) ? existingHistory : {};
+        }
       }
     }
     if (quote !== undefined) {
