@@ -130,17 +130,23 @@ export function TradesPage() {
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
           <div className="mb-3 flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-slate-200">Buy Zone &amp; Sell Map</h3>
-            <select
-              value={activeBuyZoneTicker}
-              onChange={(e) => setBuyZoneTicker(e.target.value)}
-              className="rounded border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
-            >
-              {allTickers.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+            <label className="flex items-center gap-2">
+              <span className="text-xs font-medium text-slate-400">Ticker</span>
+              <div className="relative">
+                <select
+                  value={activeBuyZoneTicker}
+                  onChange={(e) => setBuyZoneTicker(e.target.value)}
+                  className="appearance-none rounded-md border border-cyan-500/50 bg-slate-800 py-1.5 pl-3 pr-8 text-sm font-semibold text-cyan-300 hover:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                >
+                  {allTickers.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-cyan-400" />
+              </div>
+            </label>
           </div>
           <BuyZoneChart trades={buyZoneTrades} currentPrice={priceMap?.[activeBuyZoneTicker ?? ""]} />
         </div>

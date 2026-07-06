@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
-import { BookOpen, Image as ImageIcon, Paperclip, X, Lightbulb } from "lucide-react";
+import { BookOpen, Image as ImageIcon, Paperclip, X, Lightbulb, Download } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { createJournalEntry, type JournalEntry } from "@domain/entities/JournalEntry";
 import { generateId } from "@domain/value-objects/id";
@@ -319,13 +319,26 @@ function JournalEditor({ portfolioId, trade }: { portfolioId: string; trade: Tra
             <div className="grid grid-cols-3 gap-2">
               {images.map((src, i) => (
                 <div key={i} className="group relative overflow-hidden rounded-md border border-slate-800">
-                  <img src={src} alt="Journal attachment" className="h-20 w-full object-cover" />
-                  <button
-                    onClick={() => setImages((prev) => prev.filter((_, idx) => idx !== i))}
-                    className="absolute right-1 top-1 rounded-full bg-slate-950/80 p-0.5 text-slate-300 opacity-0 group-hover:opacity-100"
-                  >
-                    <X size={12} />
-                  </button>
+                  <a href={src} target="_blank" rel="noopener noreferrer" title="Open full size">
+                    <img src={src} alt="Journal attachment" className="h-20 w-full cursor-pointer object-cover" />
+                  </a>
+                  <div className="absolute right-1 top-1 flex gap-1 opacity-0 group-hover:opacity-100">
+                    <a
+                      href={src}
+                      download={`journal-image-${i + 1}.png`}
+                      title="Save to device"
+                      className="rounded-full bg-slate-950/80 p-0.5 text-slate-300 hover:text-cyan-400"
+                    >
+                      <Download size={12} />
+                    </a>
+                    <button
+                      onClick={() => setImages((prev) => prev.filter((_, idx) => idx !== i))}
+                      title="Remove"
+                      className="rounded-full bg-slate-950/80 p-0.5 text-slate-300 hover:text-rose-400"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -355,16 +368,27 @@ function JournalEditor({ portfolioId, trade }: { portfolioId: string; trade: Tra
           ) : (
             <ul className="space-y-1">
               {attachments.map((entry, i) => {
-                const [name] = entry.split("::");
+                const sep = entry.indexOf("::");
+                const name = entry.slice(0, sep);
+                const dataUrl = entry.slice(sep + 2);
                 return (
                   <li
                     key={i}
                     className="flex items-center justify-between rounded-md border border-slate-800 px-2 py-1 text-xs text-slate-300"
                   >
-                    <span className="truncate">{name}</span>
+                    <a
+                      href={dataUrl}
+                      download={name}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="Open / save to device"
+                      className="flex-1 truncate hover:text-cyan-400"
+                    >
+                      {name}
+                    </a>
                     <button
                       onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
-                      className="text-slate-500 hover:text-rose-400"
+                      className="ml-2 shrink-0 text-slate-500 hover:text-rose-400"
                     >
                       <X size={12} />
                     </button>

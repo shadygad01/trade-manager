@@ -1,6 +1,6 @@
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ReferenceLine } from "recharts";
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ReferenceLine, LabelList } from "recharts";
 import { getTradeStatus, type Trade, type TradeStatus } from "@domain/entities/Trade";
-import { STATUS, CATEGORICAL, CHART_GRID, CHART_TEXT_MUTED, CHART_AXIS, CHART_SURFACE } from "@presentation/lib/chartColors";
+import { STATUS, CATEGORICAL, CHART_GRID, CHART_TEXT_MUTED, CHART_TEXT_SECONDARY, CHART_AXIS, CHART_SURFACE } from "@presentation/lib/chartColors";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
 
 // STATUS.good is the only status color that passes the dataviz skill's
@@ -71,7 +71,7 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
         ))}
       </div>
       <ResponsiveContainer width="100%" height={Math.max(140, data.length * 34)}>
-        <BarChart data={data} layout="vertical" margin={{ left: 8, right: 24, top: 4, bottom: 4 }}>
+        <BarChart data={data} layout="vertical" margin={{ left: 8, right: 56, top: 22, bottom: 4 }}>
           <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" horizontal={false} />
           <XAxis
             type="number"
@@ -100,14 +100,29 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
             <ReferenceLine
               x={currentPrice}
               stroke={CATEGORICAL[0]}
+              strokeWidth={2}
               strokeDasharray="4 4"
-              label={{ value: `Current ${formatMoney(currentPrice)}`, position: "insideTopRight", fill: CHART_TEXT_MUTED, fontSize: 11 }}
+              label={{
+                value: `Current ${formatMoney(currentPrice)}`,
+                position: "top",
+                fill: CATEGORICAL[0],
+                fontSize: 13,
+                fontWeight: 700,
+              }}
             />
           ) : null}
           <Bar dataKey="price" radius={[0, 3, 3, 0]}>
             {data.map((d, i) => (
               <Cell key={i} fill={STATUS_COLOR[d.status]} fillOpacity={STATUS_OPACITY[d.status]} />
             ))}
+            <LabelList
+              dataKey="price"
+              position="right"
+              formatter={(v: number) => formatMoney(v)}
+              fill={CHART_TEXT_SECONDARY}
+              fontSize={12}
+              fontWeight={700}
+            />
           </Bar>
         </BarChart>
       </ResponsiveContainer>
