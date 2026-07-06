@@ -3,10 +3,12 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
 
+import { cloudflare } from "@cloudflare/vite-plugin";
+
 // Served from https://shadygad01.github.io/trade-manager/ — base must match the repo name.
 export default defineConfig({
   base: "/trade-manager/",
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), cloudflare()],
   resolve: {
     alias: {
       "@domain": path.resolve(__dirname, "src/domain"),
