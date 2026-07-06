@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { historyDateKey, parseYahooHistory, isFrozenHistory, needsBackfill } from "./index";
+import { historyDateKey, parseYahooHistory, isFrozenHistory, needsBackfill, estimateHistoryFromPerformance } from "./index";
 
 describe("historyDateKey", () => {
   it("extracts the UTC calendar day from an ISO timestamp", () => {
@@ -93,5 +93,32 @@ describe("needsBackfill", () => {
     // appended on the last couple of runs — real prices, but nowhere near a
     // real backfill, so it must not be treated as "good enough" forever.
     expect(needsBackfill({ "2026-07-05": 700, "2026-07-06": 702 })).toBe(true);
+  });
+});
+
+describe("estimateHistoryFromPerformance", () => {
+  it("back-calculates a real anchor price from each performance percentage", () => {
+    // close=110, up 10% over the past week => a week ago it was 100.
+    const row = [110, 10, null, null, null, null, null];
+    const history = estimateHistoryFromPerformance(row, "2026-07-06");
+    expect(history["2026-06-29"]).toBeCloseTo(100, 2);
+  });
+
+  it("derives all five rolling anchors plus a year-start YTD anchor when every column is present", () => {
+    const row = [200, 5, 10, 15, 20, 25, 8];
+    const history = estimateHistoryFromPerformance(row, "2026-07-06");
+    expect(Object.keys(history).sort()).toEqual(
+      ["2025-07-06", "2026-01-01", "2026-01-05", "2026-04-06", "2026-06-06", "2026-06-29"].sort()
+    );
+  });
+
+  it("skips an anchor whose performance value is missing rather than guessing", () => {
+    const row = [150, null, 12, null, null, null, null];
+    const history = estimateHistoryFromPerformance(row, "2026-07-06");
+    expect(Object.keys(history)).toEqual(["2026-06-06"]);
+  });
+
+  it("returns no history at all when close itself is missing", () => {
+    expect(estimateHistoryFromPerformance([null, 10, 10, 10, 10, 10, 10], "2026-07-06")).toEqual({});
   });
 });
