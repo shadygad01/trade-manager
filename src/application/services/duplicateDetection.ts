@@ -9,10 +9,26 @@ export type DuplicateMatchType = "exact" | "possible";
 export interface DuplicateMatch {
   matchType: DuplicateMatchType;
   matchedId: string;
+  /** The already-recorded price this candidate matched against — lets callers judge how far apart a "possible" match's prices really are (see pricesWithinOcrNoise). */
+  matchedPrice: number;
 }
 
 function round4(n: number): number {
   return Math.round(n * 10_000) / 10_000;
+}
+
+/**
+ * Two reads of the same real execution rarely carry bit-identical prices:
+ * one document derives price from total value (commission-inclusive), the
+ * other prints the raw execution price, or OCR drops a trailing decimal.
+ * Both reads still land within a hair of each other — while two genuinely
+ * different same-day trades of the same share count would normally differ
+ * more. 1% relative tolerance is the discriminator the wrong-ticker check
+ * already trusts at 10%; kept much tighter here because this one gates
+ * silent auto-skips, not just a badge.
+ */
+export function pricesWithinOcrNoise(a: number, b: number): boolean {
+  return Math.abs(a - b) <= Math.max(a, b) * 0.01;
 }
 
 /**
@@ -36,9 +52,16 @@ function findMatch(
   if (looseMatches.length === 0) return undefined;
 
   const exact = looseMatches.find((e) => round4(e.price) === round4(candidatePrice));
-  if (exact) return { matchType: "exact", matchedId: exact.id };
+  if (exact) return { matchType: "exact", matchedId: exact.id, matchedPrice: exact.price };
 
-  return { matchType: "possible", matchedId: looseMatches[0].id };
+  // Report the closest-priced loose match, not whichever row happens to come
+  // first — callers judge "same real trade?" by how far the prices sit apart
+  // (pricesWithinOcrNoise), so the decision must be deterministic and made
+  // against the best candidate, independent of DB row order.
+  const closest = [...looseMatches].sort(
+    (a, b) => Math.abs(a.price - candidatePrice) - Math.abs(b.price - candidatePrice)
+  )[0];
+  return { matchType: "possible", matchedId: closest.id, matchedPrice: closest.price };
 }
 
 export function findDuplicateBuyMatch(candidate: ParsedTradeCandidate, existingTrades: Trade[]): DuplicateMatch | undefined {
@@ -82,9 +105,13 @@ export function findDuplicateSellMatch(
   if (matching.length === 0) return undefined;
 
   const exact = matching.find((g) => round4(g.price) === round4(candidate.price));
-  if (exact) return { matchType: "exact", matchedId: exact.id };
+  if (exact) return { matchType: "exact", matchedId: exact.id, matchedPrice: exact.price };
 
-  return { matchType: "possible", matchedId: matching[0].id };
+  // Closest-priced sell order, for the same reason as findMatch above.
+  const closest = [...matching].sort(
+    (a, b) => Math.abs(a.price - candidate.price) - Math.abs(b.price - candidate.price)
+  )[0];
+  return { matchType: "possible", matchedId: closest.id, matchedPrice: closest.price };
 }
 
 /**

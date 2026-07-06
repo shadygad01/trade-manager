@@ -3,6 +3,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { recordSell } from "@application/services/TradeService";
 import { repos } from "@presentation/lib/data";
 import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
+import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { RecordSellInput } from "@presentation/lib/types";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
 import { useT } from "@presentation/i18n/translations";
@@ -30,12 +31,33 @@ interface SellAllocationFormProps {
  */
 export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, initial }: SellAllocationFormProps) {
   const t = useT();
+  const normalizedTicker = normalizeTicker(ticker);
   const openTrades = useLiveQuery(async () => {
     const trades = await repos.trades.getByPortfolio(portfolioId);
     return trades
-      .filter((t) => t.ticker === ticker && t.remainingShares > 0)
+      .filter((t) => normalizeTicker(t.ticker) === normalizedTicker && t.remainingShares > 0)
       .sort((a, b) => a.executionDate.localeCompare(b.executionDate));
-  }, [portfolioId, ticker]);
+  }, [portfolioId, normalizedTicker]);
+
+  /**
+   * "No open lots" is a dead end unless the user knows WHERE the lots
+   * actually are — the most common cause is the ticker's buys living in a
+   * different portfolio than the one this form was opened for (a re-import
+   * distributed into another portfolio, or the trades were moved). Name the
+   * portfolios that do hold open lots so the fix is one portfolio switch
+   * away instead of a mystery.
+   */
+  const openLotsElsewhere = useLiveQuery(async () => {
+    const [allTrades, portfolios] = await Promise.all([repos.trades.getAll(), repos.portfolios.getAll()]);
+    const portfolioNames = new Map(portfolios.map((p) => [p.id, p.name]));
+    const names = new Set<string>();
+    for (const t of allTrades) {
+      if (t.portfolioId === portfolioId) continue;
+      if (normalizeTicker(t.ticker) !== normalizedTicker || t.remainingShares <= 0) continue;
+      names.add(portfolioNames.get(t.portfolioId) ?? t.portfolioId);
+    }
+    return [...names];
+  }, [portfolioId, normalizedTicker]);
 
   const [selected, setSelected] = useState<Record<string, string>>({});
   const [exitPrice, setExitPrice] = useState(initial?.exitPrice !== undefined ? String(initial.exitPrice) : "");
@@ -143,7 +165,16 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
   }
 
   if (openTrades && openTrades.length === 0) {
-    return <p className="text-sm text-slate-400">{t("sellForm.noOpenLots", { ticker })}</p>;
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-slate-400">{t("sellForm.noOpenLots", { ticker })}</p>
+        {openLotsElsewhere && openLotsElsewhere.length > 0 ? (
+          <p className="text-sm text-amber-300">
+            {t("sellForm.openLotsElsewhere", { ticker, portfolios: openLotsElsewhere.join("، ") })}
+          </p>
+        ) : null}
+      </div>
+    );
   }
 
   return (

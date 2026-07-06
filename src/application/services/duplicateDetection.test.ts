@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   findDuplicateBuyMatch,
   findDuplicateSellMatch,
+  pricesWithinOcrNoise,
   buildExistingDividendKeys,
   isDividendAlreadyRecorded,
   suggestDuplicateDividendIdsToDelete,
@@ -43,7 +44,7 @@ describe("findDuplicateBuyMatch", () => {
       executionTime: "10:00",
     });
     const match = findDuplicateBuyMatch(buyCandidate(), [trade]);
-    expect(match).toEqual({ matchType: "exact", matchedId: "t1" });
+    expect(match).toEqual({ matchType: "exact", matchedId: "t1", matchedPrice: 50 });
   });
 
   it("flags a possible match when price differs but ticker/date/shares match (commission-inclusive vs not)", () => {
@@ -57,7 +58,24 @@ describe("findDuplicateBuyMatch", () => {
       executionTime: "10:00",
     });
     const match = findDuplicateBuyMatch(buyCandidate({ price: 50 }), [trade]);
-    expect(match).toEqual({ matchType: "possible", matchedId: "t1" });
+    expect(match).toEqual({ matchType: "possible", matchedId: "t1", matchedPrice: 50.75 });
+  });
+
+  it("reports the closest-priced loose match, independent of row order", () => {
+    const mk = (id: string, entryPrice: number) =>
+      createTrade({ id, portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice, executionDate: "2026-06-01", executionTime: "10:00" });
+    const far = mk("far", 55);
+    const near = mk("near", 50.2);
+    expect(findDuplicateBuyMatch(buyCandidate({ price: 50 }), [far, near])).toEqual({
+      matchType: "possible",
+      matchedId: "near",
+      matchedPrice: 50.2,
+    });
+    expect(findDuplicateBuyMatch(buyCandidate({ price: 50 }), [near, far])).toEqual({
+      matchType: "possible",
+      matchedId: "near",
+      matchedPrice: 50.2,
+    });
   });
 
   it("is not fooled by a different date or share count", () => {
@@ -71,6 +89,19 @@ describe("findDuplicateBuyMatch", () => {
       executionTime: "10:00",
     });
     expect(findDuplicateBuyMatch(buyCandidate(), [trade])).toBeUndefined();
+  });
+});
+
+describe("pricesWithinOcrNoise", () => {
+  it("accepts price gaps at or under 1% (commission-inclusive vs raw execution price)", () => {
+    expect(pricesWithinOcrNoise(50, 50.5)).toBe(true); // exactly 1% of 50.5-max
+    expect(pricesWithinOcrNoise(24.9, 24.9)).toBe(true);
+    expect(pricesWithinOcrNoise(27.6, 27.85)).toBe(true); // ~0.9%
+  });
+
+  it("rejects price gaps over 1% (plausibly a different real trade)", () => {
+    expect(pricesWithinOcrNoise(50, 50.75)).toBe(false); // 1.48%
+    expect(pricesWithinOcrNoise(27.6, 28.2)).toBe(false); // ~2.1%
   });
 });
 
@@ -88,7 +119,7 @@ describe("findDuplicateSellMatch", () => {
       executionTime: "11:00",
     });
     const candidate = buyCandidate({ side: "SELL", shares: 40, price: 55, date: "2026-06-10" });
-    expect(findDuplicateSellMatch(candidate, [allocation])).toEqual({ matchType: "exact", matchedId: "a1" });
+    expect(findDuplicateSellMatch(candidate, [allocation])).toEqual({ matchType: "exact", matchedId: "a1", matchedPrice: 55 });
   });
 
   it("matches one sell order split across multiple buy lots (shared sellGroupId) by its total shares", () => {
@@ -105,7 +136,7 @@ describe("findDuplicateSellMatch", () => {
       createTradeAllocation({ ...base, id: "a2", tradeId: "t2", sharesClosed: 15 }),
     ];
     const candidate = buyCandidate({ ticker: "HRHO", side: "SELL", shares: 45, price: 27.6, date: "2026-02-02" });
-    expect(findDuplicateSellMatch(candidate, allocations)).toEqual({ matchType: "exact", matchedId: "a1" });
+    expect(findDuplicateSellMatch(candidate, allocations)).toEqual({ matchType: "exact", matchedId: "a1", matchedPrice: 27.6 });
   });
 
   it("never merges two distinct sell orders (different sellGroupIds) into a false duplicate, even at the same date and price", () => {
@@ -138,7 +169,7 @@ describe("findDuplicateSellMatch", () => {
       createTradeAllocation({ ...base, id: "a2", tradeId: "t2", sharesClosed: 15 }),
     ];
     const candidate = buyCandidate({ ticker: "HRHO", side: "SELL", shares: 45, price: 27.75, date: "2026-02-02" });
-    expect(findDuplicateSellMatch(candidate, allocations)).toEqual({ matchType: "possible", matchedId: "a1" });
+    expect(findDuplicateSellMatch(candidate, allocations)).toEqual({ matchType: "possible", matchedId: "a1", matchedPrice: 27.6 });
   });
 });
 

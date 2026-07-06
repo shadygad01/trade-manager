@@ -8,6 +8,7 @@ import { recordDividend } from "@application/services/PortfolioService";
 import {
   findDuplicateBuyMatch,
   findDuplicateSellMatch,
+  pricesWithinOcrNoise,
   dividendContentKey,
   buildExistingDividendKeys,
   suggestDuplicatePendingCandidateKeysToDelete,
@@ -227,7 +228,10 @@ export function ImportPage() {
           !state.addedKeys.includes(e.key) &&
           !state.skippedKeys.includes(e.key) &&
           !state.dismissedKeys.includes(e.key) &&
-          duplicateMatch(e.candidate, undefined, ownAllocs[e.key])?.matchType === "exact",
+          (() => {
+            const m = duplicateMatch(e.candidate, undefined, ownAllocs[e.key]);
+            return m !== undefined && (m.matchType === "exact" || pricesWithinOcrNoise(m.matchedPrice, e.candidate.price));
+          })(),
       )
       .map((e) => e.key);
     if (keysToSkip.length === 0) return;
@@ -530,8 +534,14 @@ export function ImportPage() {
       inFlightKeys.add(entry.key);
       try {
         const match = duplicateMatch(entry.candidate);
-        if (match?.matchType === "exact") {
-          importSession.update((prev) => ({ ...prev, skippedKeys: [...prev.skippedKeys, entry.key] }));
+        // "exact" is the same read re-imported; a "possible" match whose price
+        // sits within OCR/commission noise of the recorded one is the same
+        // real trade parsed from a different document format (value-derived
+        // vs raw execution price) — committing it would double-count real
+        // shares and break the ticker's verification. Only a possible match
+        // with a genuinely different price (>1%) still commits, badge intact.
+        if (match && (match.matchType === "exact" || pricesWithinOcrNoise(match.matchedPrice, entry.candidate.price))) {
+          importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, entry.key])] }));
           continue;
         }
         await addBuyCandidate(entry, ticker);
