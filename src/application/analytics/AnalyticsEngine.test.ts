@@ -23,7 +23,9 @@ describe("computeAnalytics", () => {
     expect(result.unrealizedReturnPct).toBe(0);
     expect(result.portfolioReturn).toBe(0);
     expect(result.totalReturnPct).toBe(0);
-    expect(result.performanceCurve).toEqual([{ date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 }]);
+    expect(result.performanceCurve).toEqual([
+      { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+    ]);
     expect(result.closedTradeCount).toBe(0);
     expect(result.openPositionStats.positionCount).toBe(0);
   });

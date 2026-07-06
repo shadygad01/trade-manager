@@ -9,19 +9,19 @@ function dividendEvent(timestamp: string, amount: number): TimelineEvent {
 
 describe("performanceCurve", () => {
   it("returns a single today point at 0% when there's no history at all", () => {
-    const curve = performanceCurve([], [], [], "2026-06-01");
-    expect(curve).toEqual([{ date: "2026-06-01", realizedReturnPct: 0, dividendReturnPct: 0 }]);
+    const curve = performanceCurve([], [], [], {}, "2026-06-01");
+    expect(curve).toEqual([{ date: "2026-06-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 }]);
   });
 
   it("computes realized return % against cost basis invested so far, never against raw cash", () => {
     const trade = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-01" }); // 1000 cost basis
     const allocation = makeAllocation({ tradeId: "t1", sharesClosed: 10, exitPrice: 15, executionDate: "2026-02-01", executionTime: "10:00" });
 
-    const curve = performanceCurve([trade], [allocation], [], "2026-02-01");
+    const curve = performanceCurve([trade], [allocation], [], {}, "2026-02-01");
 
     expect(curve).toEqual([
-      { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 },
-      { date: "2026-02-01", realizedReturnPct: 5, dividendReturnPct: 0 }, // 50 profit / 1000 invested = 5%
+      { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { date: "2026-02-01", realizedReturnPct: 5, dividendReturnPct: 0, unrealizedReturnPct: 0 }, // 50 profit / 1000 invested = 5%
     ]);
   });
 
@@ -29,15 +29,15 @@ describe("performanceCurve", () => {
     const trade = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-05" }); // 1000 cost basis
     const allocation = makeAllocation({ tradeId: "t1", sharesClosed: 100, exitPrice: 15, executionDate: "2026-01-05", executionTime: "16:00" }); // +500, same day
 
-    const curve = performanceCurve([trade], [allocation], [], "2026-01-05");
+    const curve = performanceCurve([trade], [allocation], [], {}, "2026-01-05");
     expect(curve[curve.length - 1].realizedReturnPct).toBe(50); // 500/1000
   });
 
   it("tracks dividend return % separately from realized return %, against the same invested-cost-basis denominator", () => {
     const trade = makeTrade({ id: "t1", entryPrice: 20, shares: 100, executionDate: "2026-01-01" }); // 2000 cost basis
     const events = [dividendEvent("2026-03-01T09:00", 100)];
-    const curve = performanceCurve([trade], [], events, "2026-03-01");
-    expect(curve[curve.length - 1]).toEqual({ date: "2026-03-01", realizedReturnPct: 0, dividendReturnPct: 5 }); // 100/2000
+    const curve = performanceCurve([trade], [], events, {}, "2026-03-01");
+    expect(curve[curve.length - 1]).toEqual({ date: "2026-03-01", realizedReturnPct: 0, dividendReturnPct: 5, unrealizedReturnPct: 0 }); // 100/2000
   });
 
   it("divides by peak capital deployed, so recycling the same money through several round-trips never shrinks the %", () => {
@@ -48,7 +48,7 @@ describe("performanceCurve", () => {
     const t2 = makeTrade({ id: "t2", entryPrice: 10, shares: 100, executionDate: "2026-03-01" });
     const a2 = makeAllocation({ tradeId: "t2", sharesClosed: 100, exitPrice: 10.5, executionDate: "2026-04-01", executionTime: "10:00" }); // +50
 
-    const curve = performanceCurve([t1, t2], [a1, a2], [], "2026-04-01");
+    const curve = performanceCurve([t1, t2], [a1, a2], [], {}, "2026-04-01");
     expect(curve[curve.length - 1].realizedReturnPct).toBe(10); // 100/1000, not 100/2000
   });
 
@@ -59,14 +59,23 @@ describe("performanceCurve", () => {
     const a1 = makeAllocation({ tradeId: "t1", sharesClosed: 100, exitPrice: 11, executionDate: "2026-02-01", executionTime: "10:00" }); // +100
     const t2 = makeTrade({ id: "t2", entryPrice: 10, shares: 100, executionDate: "2026-02-01", executionTime: "10:00" });
 
-    const curve = performanceCurve([t1, t2], [a1], [], "2026-02-01");
+    const curve = performanceCurve([t1, t2], [a1], [], {}, "2026-02-01");
     expect(curve[curve.length - 1].realizedReturnPct).toBe(10); // 100/1000, not 100/2000
   });
 
   it("does not append a duplicate point when a real event already lands on today", () => {
     const trade = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
-    const curve = performanceCurve([trade], [], [], "2026-01-01");
-    expect(curve).toEqual([{ date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 }]);
+    const curve = performanceCurve([trade], [], [], {}, "2026-01-01");
+    expect(curve).toEqual([{ date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 }]);
+  });
+
+  it("computes unrealizedReturnPct against the same peak-capital denominator as realized/dividend, from priceHistory", () => {
+    const trade = makeTrade({ id: "t1", ticker: "COMI", entryPrice: 10, shares: 100, executionDate: "2026-01-01" }); // 1000 cost basis
+    const priceHistory = { COMI: { "2026-02-01": 12 } };
+
+    const curve = performanceCurve([trade], [], [], priceHistory, "2026-02-01");
+    // (12-10)*100 = 200 unrealized over 1000 peak capital = 20%
+    expect(curve[curve.length - 1].unrealizedReturnPct).toBe(20);
   });
 });
 
@@ -175,19 +184,19 @@ describe("bucketPerformance", () => {
 describe("performanceDrawdown", () => {
   it("is 0 for a curve that only ever rises", () => {
     const curve = [
-      { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 },
-      { date: "2026-02-01", realizedReturnPct: 5, dividendReturnPct: 1 },
-      { date: "2026-03-01", realizedReturnPct: 10, dividendReturnPct: 2 },
+      { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { date: "2026-02-01", realizedReturnPct: 5, dividendReturnPct: 1, unrealizedReturnPct: 0 },
+      { date: "2026-03-01", realizedReturnPct: 10, dividendReturnPct: 2, unrealizedReturnPct: 0 },
     ];
     expect(performanceDrawdown(curve)).toBe(0);
   });
 
   it("reports the max peak-to-trough decline in percentage points, never blowing out from a cash-flow artifact", () => {
     const curve = [
-      { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 },
-      { date: "2026-02-01", realizedReturnPct: 20, dividendReturnPct: 0 },
-      { date: "2026-03-01", realizedReturnPct: 5, dividendReturnPct: 0 }, // -15 points off the 20 peak
-      { date: "2026-04-01", realizedReturnPct: 12, dividendReturnPct: 0 },
+      { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { date: "2026-02-01", realizedReturnPct: 20, dividendReturnPct: 0, unrealizedReturnPct: 0 },
+      { date: "2026-03-01", realizedReturnPct: 5, dividendReturnPct: 0, unrealizedReturnPct: 0 }, // -15 points off the 20 peak
+      { date: "2026-04-01", realizedReturnPct: 12, dividendReturnPct: 0, unrealizedReturnPct: 0 },
     ];
     expect(performanceDrawdown(curve)).toBe(15);
   });
