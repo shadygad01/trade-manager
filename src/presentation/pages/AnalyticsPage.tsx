@@ -61,6 +61,8 @@ export function AnalyticsPage() {
 
   const latestMonthly = analytics.monthlyPerformance.at(-1);
   const latestAnnual = analytics.annualPerformance.at(-1);
+  const hasClosedTrades = analytics.closedTradeCount > 0;
+  const noClosedTradesSublabel = "No closed trades yet";
 
   return (
     <div>
@@ -68,11 +70,33 @@ export function AnalyticsPage() {
       <PriceFreshness />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile label="Win Rate" value={formatPercent(analytics.winRate, 1)} />
-        <StatTile label="Profit Factor" value={analytics.profitFactor.toFixed(2)} />
-        <StatTile label="Avg Winner" value={formatMoney(analytics.avgWinner)} valueClassName="text-emerald-400" />
-        <StatTile label="Avg Loser" value={formatMoney(analytics.avgLoser)} valueClassName="text-rose-400" />
-        <StatTile label="Avg Holding Time" value={`${analytics.holdingTime.toFixed(1)}d`} />
+        <StatTile
+          label="Win Rate"
+          value={hasClosedTrades ? formatPercent(analytics.winRate, 1) : "—"}
+          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+        />
+        <StatTile
+          label="Profit Factor"
+          value={hasClosedTrades ? analytics.profitFactor.toFixed(2) : "—"}
+          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+        />
+        <StatTile
+          label="Avg Winner"
+          value={hasClosedTrades ? formatMoney(analytics.avgWinner) : "—"}
+          valueClassName="text-emerald-400"
+          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+        />
+        <StatTile
+          label="Avg Loser"
+          value={hasClosedTrades ? formatMoney(analytics.avgLoser) : "—"}
+          valueClassName="text-rose-400"
+          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+        />
+        <StatTile
+          label="Avg Holding Time"
+          value={hasClosedTrades ? `${analytics.holdingTime.toFixed(1)}d` : "—"}
+          sublabel={hasClosedTrades ? undefined : noClosedTradesSublabel}
+        />
         <StatTile label="Exposure" value={formatPercent(analytics.exposure, 1)} />
         <StatTile label="Cash Ratio" value={formatPercent(analytics.cashRatio, 1)} />
         <StatTile label="Max Drawdown" value={formatPercent(-analytics.drawdown, 1)} valueClassName="text-rose-400" />
@@ -169,9 +193,9 @@ export function AnalyticsPage() {
           <StatTile label="Open Trades" value={String(analytics.portfolioHealth.openTradeCount)} />
           <StatTile
             label="Largest Winner / Loser"
-            value={formatMoney(analytics.portfolioHealth.largestWinner)}
+            value={hasClosedTrades ? formatMoney(analytics.portfolioHealth.largestWinner) : "—"}
             valueClassName="text-emerald-400"
-            sublabel={formatMoney(analytics.portfolioHealth.largestLoser)}
+            sublabel={hasClosedTrades ? formatMoney(analytics.portfolioHealth.largestLoser) : noClosedTradesSublabel}
           />
         </div>
       </div>
@@ -197,9 +221,11 @@ export function AnalyticsPage() {
                   <tr key={s.tag}>
                     <td className="px-4 py-2.5 font-medium text-slate-100">{s.tag}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{s.tradeCount}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{formatPercent(s.winRate, 0)}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
-                      {Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞"}
+                      {s.closedAllocationCount > 0 ? formatPercent(s.winRate, 0) : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
+                      {s.closedAllocationCount === 0 ? "—" : Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞"}
                     </td>
                     <td className={`px-4 py-2.5 text-right tabular-nums ${signClass(s.totalRealizedPnl)}`}>
                       {formatMoney(s.totalRealizedPnl)}

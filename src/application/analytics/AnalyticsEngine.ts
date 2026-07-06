@@ -86,6 +86,8 @@ export interface AnalyticsResult {
   unrealizedReturnPct: number;
   portfolioHealth: PortfolioHealth;
   strategyAttribution: StrategyAttribution[];
+  /** Number of sell allocations recorded so far — winRate/profitFactor/avgWinner/avgLoser/holdingTime and largestWinner/largestLoser are all 0 by construction until this is > 0 (nothing has been sold yet, not underperformance). */
+  closedTradeCount: number;
 }
 
 export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
@@ -118,5 +120,6 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
     unrealizedReturnPct: costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0,
     portfolioHealth: portfolioHealth(trades, allocations, priceMap, cash),
     strategyAttribution: strategyAttribution(trades, allocations, input.journalEntries ?? []),
+    closedTradeCount: allocations.length,
   };
 }
