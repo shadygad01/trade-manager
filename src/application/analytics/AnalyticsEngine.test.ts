@@ -22,6 +22,7 @@ describe("computeAnalytics", () => {
     expect(result.dividendReturnPct).toBe(0);
     expect(result.unrealizedReturnPct).toBe(0);
     expect(result.portfolioReturn).toBe(0);
+    expect(result.totalReturnPct).toBe(0);
     expect(result.performanceCurve).toEqual([{ date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 }]);
     expect(result.closedTradeCount).toBe(0);
     expect(result.openPositionStats.positionCount).toBe(0);
@@ -73,6 +74,8 @@ describe("computeAnalytics", () => {
     expect(result.exposure).toBeGreaterThan(0);
     expect(result.realizedReturnPct).toBe(12.5); // (25-20)*50 = 250 profit over 2000 invested (both trades' cost basis)
     expect(result.portfolioReturn).toBe(12.5); // realizedReturnPct + dividendReturnPct (0 here)
+    expect(result.unrealizedReturnPct).toBe(50); // (15-10)*100 = 500 unrealized over 1000 open-position cost basis
+    expect(result.totalReturnPct).toBe(62.5); // portfolioReturn + unrealizedReturnPct
     expect(result.performanceCurve[result.performanceCurve.length - 1].date).toBe("2026-03-01");
   });
 
