@@ -5,6 +5,7 @@ import { repos } from "@presentation/lib/data";
 import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
 import type { RecordSellInput } from "@presentation/lib/types";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
+import { useT } from "@presentation/i18n/translations";
 
 interface SellAllocationFormProps {
   portfolioId: string;
@@ -28,6 +29,7 @@ interface SellAllocationFormProps {
  * per-trade choice, per TradeAllocation's design contract.
  */
 export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, initial }: SellAllocationFormProps) {
+  const t = useT();
   const openTrades = useLiveQuery(async () => {
     const trades = await repos.trades.getByPortfolio(portfolioId);
     return trades
@@ -80,11 +82,11 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
     setError(null);
     const price = Number.parseFloat(exitPrice);
     if (!Number.isFinite(price) || price <= 0) {
-      setError("Enter a valid exit price.");
+      setError(t("sellForm.enterValidExitPrice"));
       return;
     }
     if (totalSelected <= 0) {
-      setError("Select at least one lot and a share amount to close.");
+      setError(t("sellForm.selectAtLeastOneLot"));
       return;
     }
     for (const trade of openTrades ?? []) {
@@ -92,7 +94,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
       if (raw === undefined) continue;
       const n = Number.parseFloat(raw);
       if (!Number.isFinite(n) || n <= 0 || n > trade.remainingShares) {
-        setError(`Shares closed for the ${formatDate(trade.executionDate)} lot must be between 0 and ${trade.remainingShares}.`);
+        setError(t("sellForm.sharesRangeError", { date: formatDate(trade.executionDate), max: trade.remainingShares }));
         return;
       }
     }
@@ -134,27 +136,27 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
       const result = await recordSell(repos, input);
       onDone({ allocationIds: result.allocations.map((a) => a.id) });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to record sell.");
+      setError(e instanceof Error ? e.message : t("sellForm.recordSellFailed"));
     } finally {
       setSubmitting(false);
     }
   }
 
   if (openTrades && openTrades.length === 0) {
-    return <p className="text-sm text-slate-400">No open lots for {ticker} in this portfolio.</p>;
+    return <p className="text-sm text-slate-400">{t("sellForm.noOpenLots", { ticker })}</p>;
   }
 
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-slate-800 overflow-hidden">
         <table className="w-full text-sm">
-          <thead className="bg-slate-900/80 text-left text-xs uppercase tracking-wide text-slate-500">
+          <thead className="bg-slate-900/80 text-start text-xs uppercase tracking-wide text-slate-500">
             <tr>
               <th className="px-3 py-2 w-8"></th>
-              <th className="px-3 py-2">Executed</th>
-              <th className="px-3 py-2 text-right">Entry Price</th>
-              <th className="px-3 py-2 text-right">Remaining</th>
-              <th className="px-3 py-2 text-right">Close Shares</th>
+              <th className="px-3 py-2">{t("sellForm.colExecuted")}</th>
+              <th className="px-3 py-2 text-end">{t("sellForm.colEntryPrice")}</th>
+              <th className="px-3 py-2 text-end">{t("sellForm.colRemaining")}</th>
+              <th className="px-3 py-2 text-end">{t("sellForm.colCloseShares")}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
@@ -171,9 +173,9 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
                     />
                   </td>
                   <td className="px-3 py-2 text-slate-300">{formatDate(trade.executionDate)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-300">{formatMoney(trade.entryPrice)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums text-slate-300">{formatShares(trade.remainingShares)}</td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-end tabular-nums text-slate-300">{formatMoney(trade.entryPrice)}</td>
+                  <td className="px-3 py-2 text-end tabular-nums text-slate-300">{formatShares(trade.remainingShares)}</td>
+                  <td className="px-3 py-2 text-end">
                     <input
                       type="number"
                       disabled={!isChecked}
@@ -181,7 +183,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
                       max={trade.remainingShares}
                       value={selected[trade.id] ?? ""}
                       onChange={(e) => setShares(trade.id, e.target.value)}
-                      className="w-24 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-right tabular-nums text-slate-100 disabled:opacity-40"
+                      className="w-24 rounded border border-slate-700 bg-slate-800 px-2 py-1 text-end tabular-nums text-slate-100 disabled:opacity-40"
                     />
                   </td>
                 </tr>
@@ -192,12 +194,12 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
       </div>
 
       <p className="text-xs text-slate-500">
-        Selected {formatShares(totalSelected)} of {formatShares(totalOpenShares)} open shares.
+        {t("sellForm.selectedOf", { selected: formatShares(totalSelected), total: formatShares(totalOpenShares) })}
       </p>
 
       <div className="grid grid-cols-2 gap-3">
         <label className="text-xs text-slate-400 space-y-1">
-          Exit price
+          {t("sellForm.exitPrice")}
           <input
             type="number"
             value={exitPrice}
@@ -206,7 +208,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
           />
         </label>
         <label className="text-xs text-slate-400 space-y-1">
-          Fees
+          {t("sellForm.fees")}
           <input
             type="number"
             value={fees}
@@ -215,7 +217,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
           />
         </label>
         <label className="text-xs text-slate-400 space-y-1">
-          Taxes
+          {t("sellForm.taxes")}
           <input
             type="number"
             value={taxes}
@@ -224,7 +226,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
           />
         </label>
         <label className="text-xs text-slate-400 space-y-1">
-          Execution date
+          {t("sellForm.executionDate")}
           <input
             type="date"
             min={TRACKING_START_DATE}
@@ -234,7 +236,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
           />
         </label>
         <label className="text-xs text-slate-400 space-y-1">
-          Execution time
+          {t("sellForm.executionTime")}
           <input
             type="time"
             value={executionTime}
@@ -243,17 +245,17 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
           />
         </label>
         <label className="col-span-2 text-xs text-slate-400 space-y-1">
-          Exit reason
+          {t("sellForm.exitReason")}
           <input
             type="text"
             value={exitReason}
             onChange={(e) => setExitReason(e.target.value)}
-            placeholder="e.g. target hit, stop loss, thesis changed"
+            placeholder={t("sellForm.exitReasonPlaceholder")}
             className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
           />
         </label>
         <label className="col-span-2 text-xs text-slate-400 space-y-1">
-          Notes
+          {t("sellForm.notes")}
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -271,7 +273,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
             onClick={onCancel}
             className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
           >
-            Cancel
+            {t("sellForm.cancel")}
           </button>
         ) : null}
         <button
@@ -279,7 +281,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
           disabled={submitting}
           className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
         >
-          {submitting ? "Recording…" : "Record Sell"}
+          {submitting ? t("sellForm.recording") : t("sellForm.recordSell")}
         </button>
       </div>
     </div>

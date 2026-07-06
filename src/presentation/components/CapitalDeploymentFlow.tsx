@@ -2,6 +2,7 @@ import { ChevronRight } from "lucide-react";
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 import { TIMELINE_ICONS, TIMELINE_COLORS } from "@presentation/lib/timelineIcons";
 import { formatDate, formatMoney } from "@presentation/lib/format";
+import { useT } from "@presentation/i18n/translations";
 
 const FLOW_EVENT_TYPES = new Set(["Buy", "Sell", "PartialSell", "Deposit", "Withdrawal", "Dividend", "CashAdjustment"]);
 
@@ -20,12 +21,13 @@ function chipLabel(event: TimelineEvent): string {
  * for visual consistency and to avoid introducing any new palette.
  */
 export function CapitalDeploymentFlow({ events }: { events: TimelineEvent[] }) {
+  const t = useT();
   const relevant = [...events]
     .filter((e) => FLOW_EVENT_TYPES.has(e.type))
     .sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
   if (relevant.length === 0) {
-    return <p className="text-sm text-slate-500">No capital movement recorded yet.</p>;
+    return <p className="text-sm text-slate-500">{t("capitalFlow.noMovement")}</p>;
   }
 
   return (

@@ -20,11 +20,13 @@ import { StatTile } from "@presentation/components/StatTile";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatPercent, signClass } from "@presentation/lib/format";
 import { CATEGORICAL, CHART_GRID, CHART_SURFACE, CHART_TEXT_MUTED } from "@presentation/lib/chartColors";
+import { useT } from "@presentation/i18n/translations";
 
 export function AnalyticsPage() {
+  const t = useT();
   const { id: portfolioId } = useParams<{ id: string }>();
   const portfolio = useLiveQuery(() => repos.portfolios.getById(portfolioId), [portfolioId]);
-  const pageTitle = portfolio ? `${portfolio.name} — Analytics` : "Analytics";
+  const pageTitle = portfolio ? t("analytics.titleWithPortfolio", { name: portfolio.name }) : t("analytics.title");
 
   const analytics = useLiveQuery(async () => {
     const [portfolio, trades, allocations, timelineEvents, priceMap, journalEntries] = await Promise.all([
@@ -46,8 +48,8 @@ export function AnalyticsPage() {
   if (analytics === undefined) {
     return (
       <div>
-        <PageHeader title={pageTitle} description="Performance, risk and behavioral stats for this portfolio." />
-        <p className="text-sm text-slate-500">Loading…</p>
+        <PageHeader title={pageTitle} description={t("analytics.description")} />
+        <p className="text-sm text-slate-500">{t("common.loading")}</p>
       </div>
     );
   }
@@ -55,8 +57,8 @@ export function AnalyticsPage() {
   if (!analytics) {
     return (
       <div>
-        <PageHeader title={pageTitle} description="Performance, risk and behavioral stats for this portfolio." />
-        <EmptyState title="Portfolio not found" description="It may have been deleted." />
+        <PageHeader title={pageTitle} description={t("analytics.description")} />
+        <EmptyState title={t("portfolioDetail.notFoundTitle")} description={t("portfolioDetail.notFoundDescription")} />
       </div>
     );
   }
@@ -65,87 +67,87 @@ export function AnalyticsPage() {
   const latestAnnual = analytics.annualPerformance.at(-1);
   const hasClosedTrades = analytics.closedTradeCount > 0;
   const hasOpenPositions = analytics.openPositionStats.positionCount > 0;
-  const unrealizedSublabel = "Unrealized — positions not closed";
-  const noTradesSublabel = "No trades yet";
+  const unrealizedSublabel = t("analytics.unrealizedSublabel");
+  const noTradesSublabel = t("analytics.noTradesSublabel");
   const tradeStatsSublabel = hasClosedTrades ? undefined : hasOpenPositions ? unrealizedSublabel : noTradesSublabel;
 
   return (
     <div>
-      <PageHeader title={pageTitle} description="Performance, risk and behavioral stats for this portfolio." />
+      <PageHeader title={pageTitle} description={t("analytics.description")} />
       <PriceFreshness />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatTile
-          label="Win Rate"
+          label={t("analytics.winRate")}
           value={formatPercent(hasClosedTrades ? analytics.winRate : analytics.openPositionStats.winRate, 1)}
           sublabel={tradeStatsSublabel}
         />
         <StatTile
-          label="Profit Factor"
+          label={t("analytics.profitFactor")}
           value={(hasClosedTrades ? analytics.profitFactor : analytics.openPositionStats.profitFactor).toFixed(2)}
           sublabel={tradeStatsSublabel}
         />
         <StatTile
-          label="Avg Winner"
+          label={t("analytics.avgWinner")}
           value={formatPercent(hasClosedTrades ? analytics.avgWinner : analytics.openPositionStats.avgWinner, 1)}
           valueClassName="text-emerald-400"
           sublabel={tradeStatsSublabel}
         />
         <StatTile
-          label="Avg Loser"
+          label={t("analytics.avgLoser")}
           value={formatPercent(hasClosedTrades ? analytics.avgLoser : analytics.openPositionStats.avgLoser, 1)}
           valueClassName="text-rose-400"
           sublabel={tradeStatsSublabel}
         />
         <StatTile
-          label="Avg Holding Time"
+          label={t("analytics.avgHoldingTime")}
           value={`${(hasClosedTrades ? analytics.holdingTime : analytics.openPositionStats.avgHoldingDays).toFixed(1)}d`}
           sublabel={tradeStatsSublabel}
         />
-        <StatTile label="Exposure" value={formatPercent(analytics.exposure, 1)} />
-        <StatTile label="Cash Ratio" value={formatPercent(analytics.cashRatio, 1)} />
-        <StatTile label="Max Drawdown" value={formatPercent(-analytics.drawdown, 1)} valueClassName="text-rose-400" />
-        <StatTile label="Capital Deployment" value={formatPercent(analytics.capitalDeployment, 1)} />
+        <StatTile label={t("analytics.exposure")} value={formatPercent(analytics.exposure, 1)} />
+        <StatTile label={t("analytics.cashRatio")} value={formatPercent(analytics.cashRatio, 1)} />
+        <StatTile label={t("analytics.maxDrawdown")} value={formatPercent(-analytics.drawdown, 1)} valueClassName="text-rose-400" />
+        <StatTile label={t("analytics.capitalDeployment")} value={formatPercent(analytics.capitalDeployment, 1)} />
         <StatTile
-          label="Realized Return"
+          label={t("analytics.realizedReturn")}
           value={formatPercent(analytics.realizedReturnPct)}
           valueClassName={signClass(analytics.realizedReturnPct)}
-          sublabel="Cumulative, % of cost basis invested"
+          sublabel={t("analytics.cumulativeSub")}
         />
         <StatTile
-          label="Unrealized Return"
+          label={t("analytics.unrealizedReturn")}
           value={formatPercent(analytics.unrealizedReturnPct)}
           valueClassName={signClass(analytics.unrealizedReturnPct)}
-          sublabel="Open positions, today's price only"
+          sublabel={t("analytics.unrealizedReturnSub")}
         />
         <StatTile
-          label="Dividend Return"
+          label={t("analytics.dividendReturn")}
           value={formatPercent(analytics.dividendReturnPct)}
           valueClassName={signClass(analytics.dividendReturnPct)}
-          sublabel="Cumulative, % of cost basis invested"
+          sublabel={t("analytics.cumulativeSub")}
         />
         <StatTile
-          label="Monthly Return (latest)"
+          label={t("analytics.monthlyReturnLatest")}
           value={formatPercent((latestMonthly?.realizedReturnPct ?? 0) + (latestMonthly?.dividendReturnPct ?? 0))}
           valueClassName={signClass((latestMonthly?.realizedReturnPct ?? 0) + (latestMonthly?.dividendReturnPct ?? 0))}
           sublabel={latestMonthly?.period}
         />
         <StatTile
-          label="Annual Return (latest)"
+          label={t("analytics.annualReturnLatest")}
           value={formatPercent((latestAnnual?.realizedReturnPct ?? 0) + (latestAnnual?.dividendReturnPct ?? 0))}
           valueClassName={signClass((latestAnnual?.realizedReturnPct ?? 0) + (latestAnnual?.dividendReturnPct ?? 0))}
           sublabel={latestAnnual?.period}
         />
         <StatTile
-          label="Portfolio Return"
+          label={t("analytics.portfolioReturn")}
           value={formatPercent(analytics.portfolioReturn)}
           valueClassName={signClass(analytics.portfolioReturn)}
-          sublabel="Since inception: realized + dividend, % of cost basis invested"
+          sublabel={t("analytics.portfolioReturnSub")}
         />
       </div>
 
       <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-200">Realized + Dividend Return</h3>
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("analytics.performanceChartTitle")}</h3>
         {analytics.performanceCurve.length > 1 ? (
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={analytics.performanceCurve}>
@@ -168,36 +170,33 @@ export function AnalyticsPage() {
             </LineChart>
           </ResponsiveContainer>
         ) : (
-          <EmptyState title="Not enough history yet" description="This fills in as sells close and dividends are recorded." />
+          <EmptyState title={t("analytics.notEnoughHistoryTitle")} description={t("analytics.notEnoughHistoryDescription")} />
         )}
         <p className="mt-2 text-[11px] text-slate-500">
-          Both lines are % of cost basis invested (money actually spent buying, never a deposit or withdrawal) — never
-          raw cash. Unrealized P/L on still-open positions isn&apos;t part of this cumulative curve; see the
-          Unrealized Return stat above for today&apos;s snapshot, or the Monthly Return chart below for its
-          month-by-month history.
+          {t("analytics.performanceChartCaption")}
         </p>
       </div>
 
       <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-200">Portfolio Health</h3>
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("analytics.portfolioHealth")}</h3>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatTile
-            label="Health Score"
+            label={t("analytics.healthScore")}
             value={analytics.portfolioHealth.healthScore.toFixed(0)}
-            sublabel="0-100, higher is better"
+            sublabel={t("analytics.healthScoreSub")}
           />
           <StatTile
-            label="Diversification"
+            label={t("analytics.diversification")}
             value={formatPercent(analytics.portfolioHealth.diversificationScore, 0)}
             sublabel={
               analytics.portfolioHealth.largestPositionTicker
-                ? `Largest: ${analytics.portfolioHealth.largestPositionTicker} (${formatPercent(analytics.portfolioHealth.largestPositionPct, 0)})`
-                : "No open positions"
+                ? t("analytics.largestPositionSub", { ticker: analytics.portfolioHealth.largestPositionTicker, pct: formatPercent(analytics.portfolioHealth.largestPositionPct, 0) })
+                : t("analytics.noOpenPositions")
             }
           />
-          <StatTile label="Open Trades" value={String(analytics.portfolioHealth.openTradeCount)} />
+          <StatTile label={t("analytics.openTrades")} value={String(analytics.portfolioHealth.openTradeCount)} />
           <StatTile
-            label="Largest Winner / Loser"
+            label={t("analytics.largestWinnerLoser")}
             value={formatPercent(
               hasClosedTrades ? analytics.portfolioHealth.largestWinner : analytics.openPositionStats.largestWinner,
               1
@@ -217,31 +216,31 @@ export function AnalyticsPage() {
       {analytics.strategyAttribution.length > 0 ? (
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60">
           <div className="border-b border-slate-800 px-4 py-3">
-            <h3 className="text-sm font-semibold text-slate-200">Strategy Attribution</h3>
+            <h3 className="text-sm font-semibold text-slate-200">{t("analytics.strategyAttribution")}</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="text-left text-xs uppercase tracking-wide text-slate-500">
+              <thead className="text-start text-xs uppercase tracking-wide text-slate-500">
                 <tr>
-                  <th className="px-4 py-2">Strategy</th>
-                  <th className="px-4 py-2 text-right">Trades</th>
-                  <th className="px-4 py-2 text-right">Win Rate</th>
-                  <th className="px-4 py-2 text-right">Profit Factor</th>
-                  <th className="px-4 py-2 text-right">Total Realized Return</th>
+                  <th className="px-4 py-2">{t("analytics.colStrategy")}</th>
+                  <th className="px-4 py-2 text-end">{t("analytics.colTrades")}</th>
+                  <th className="px-4 py-2 text-end">{t("analytics.colWinRate")}</th>
+                  <th className="px-4 py-2 text-end">{t("analytics.colProfitFactor")}</th>
+                  <th className="px-4 py-2 text-end">{t("analytics.colTotalRealizedReturn")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
                 {analytics.strategyAttribution.map((s) => (
                   <tr key={s.tag}>
                     <td className="px-4 py-2.5 font-medium text-slate-100">{s.tag}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">{s.tradeCount}</td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{s.tradeCount}</td>
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">
                       {s.closedAllocationCount > 0 ? formatPercent(s.winRate, 0) : "—"}
                     </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-slate-300">
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">
                       {s.closedAllocationCount === 0 ? "—" : Number.isFinite(s.profitFactor) ? s.profitFactor.toFixed(2) : "∞"}
                     </td>
-                    <td className={`px-4 py-2.5 text-right tabular-nums ${signClass(s.totalRealizedReturnPct)}`}>
+                    <td className={`px-4 py-2.5 text-end tabular-nums ${signClass(s.totalRealizedReturnPct)}`}>
                       {s.closedAllocationCount === 0 ? "—" : formatPercent(s.totalRealizedReturnPct, 1)}
                     </td>
                   </tr>
@@ -253,7 +252,7 @@ export function AnalyticsPage() {
       ) : null}
 
       <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-200">Monthly Return</h3>
+        <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("analytics.monthlyReturn")}</h3>
         {analytics.monthlyPerformance.length > 0 ? (
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={analytics.monthlyPerformance}>
@@ -277,11 +276,10 @@ export function AnalyticsPage() {
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <EmptyState title="No monthly data yet" description="Populates from the portfolio's first trade onward." />
+          <EmptyState title={t("analytics.noMonthlyDataTitle")} description={t("analytics.noMonthlyDataDescription")} />
         )}
         <p className="mt-2 text-[11px] text-slate-500">
-          Every calendar month is shown, including months with no closed trade — an open position still moves the
-          Unrealized bar using that month's own historical closing price, never today's price blended in.
+          {t("analytics.monthlyReturnCaption")}
         </p>
       </div>
     </div>

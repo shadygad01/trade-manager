@@ -2,6 +2,7 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Toolti
 import { getTradeStatus, type Trade, type TradeStatus } from "@domain/entities/Trade";
 import { STATUS, CATEGORICAL, CHART_GRID, CHART_TEXT_MUTED, CHART_TEXT_SECONDARY, CHART_AXIS, CHART_SURFACE } from "@presentation/lib/chartColors";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
+import { useT } from "@presentation/i18n/translations";
 
 // STATUS.good is the only status color that passes the dataviz skill's
 // validator on this dark surface (STATUS.warning fails the lightness-band
@@ -21,12 +22,6 @@ const STATUS_OPACITY: Record<TradeStatus, number> = {
   closed: 1,
 };
 
-const STATUS_LABEL: Record<TradeStatus, string> = {
-  open: "Open",
-  partial: "Partial",
-  closed: "Closed",
-};
-
 interface BuyZoneChartProps {
   /** All trades for one ticker, any status — this doubles as the "Sell Map": each lot's status is shown by color and counted in the legend. */
   trades: Trade[];
@@ -41,6 +36,12 @@ interface BuyZoneChartProps {
  * map" needs to convey.
  */
 export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
+  const t = useT();
+  const STATUS_LABEL: Record<TradeStatus, string> = {
+    open: t("trades.statusOpen"),
+    partial: t("trades.statusPartial"),
+    closed: t("trades.statusClosed"),
+  };
   const sorted = [...trades].sort((a, b) => a.executionDate.localeCompare(b.executionDate));
   const data = sorted.map((t) => ({
     label: formatDate(t.executionDate),
@@ -54,7 +55,7 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
   for (const t of sorted) counts[getTradeStatus(t)] += 1;
 
   if (data.length === 0) {
-    return <p className="text-sm text-slate-500">No trades recorded for this ticker yet.</p>;
+    return <p className="text-sm text-slate-500">{t("buyZoneChart.noTrades")}</p>;
   }
 
   return (
@@ -94,7 +95,7 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
             itemStyle={{ color: CHART_TEXT_SECONDARY }}
             formatter={(value: number, _name, entry) => [
               formatMoney(value),
-              `Entry price · ${formatShares(entry.payload.remainingShares)}/${formatShares(entry.payload.shares)} shares remaining`,
+              t("buyZoneChart.tooltipLabel", { remaining: formatShares(entry.payload.remainingShares), total: formatShares(entry.payload.shares) }),
             ]}
           />
           {currentPrice !== undefined ? (
@@ -105,7 +106,7 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
               strokeDasharray="4 4"
               ifOverflow="extendDomain"
               label={{
-                value: `Current ${formatMoney(currentPrice)}`,
+                value: t("buyZoneChart.current", { price: formatMoney(currentPrice) }),
                 position: "top",
                 fill: CATEGORICAL[0],
                 fontSize: 13,

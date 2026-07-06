@@ -10,37 +10,44 @@ import { EmptyState } from "@presentation/components/EmptyState";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
 import { TIMELINE_ICONS, TIMELINE_COLORS } from "@presentation/lib/timelineIcons";
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
+import { useT, type TFunction } from "@presentation/i18n/translations";
 
-function describe(event: TimelineEvent): string {
+function describe(event: TimelineEvent, t: TFunction): string {
   switch (event.type) {
     case "Buy":
-      return `Bought ${formatShares(event.shares)} ${event.ticker ?? ""} @ ${formatMoney(
-        event.shares ? (event.amount ?? 0) / event.shares : undefined,
-      )}`.trim();
+      return t("timeline.bought", {
+        shares: formatShares(event.shares),
+        ticker: event.ticker ?? "",
+        price: formatMoney(event.shares ? (event.amount ?? 0) / event.shares : undefined),
+      }).trim();
     case "Sell":
-      return `Sold ${formatShares(event.shares)} ${event.ticker ?? ""}`;
+      return t("timeline.sold", { shares: formatShares(event.shares), ticker: event.ticker ?? "" });
     case "PartialSell":
-      return `Partially sold ${formatShares(event.shares)} ${event.ticker ?? ""}`;
+      return t("timeline.partiallySold", { shares: formatShares(event.shares), ticker: event.ticker ?? "" });
     case "Deposit":
-      return `Deposited ${formatMoney(event.amount)}`;
+      return t("timeline.deposited", { amount: formatMoney(event.amount) });
     case "Withdrawal":
-      return `Withdrew ${formatMoney(event.amount)}`;
+      return t("timeline.withdrew", { amount: formatMoney(event.amount) });
     case "Dividend":
-      return `Dividend ${formatMoney(event.amount)}${event.ticker ? ` from ${event.ticker}` : ""}`;
+      return t("timeline.dividendEvent", {
+        amount: formatMoney(event.amount),
+        tickerSuffix: event.ticker ? t("timeline.fromTickerSuffix", { ticker: event.ticker }) : "",
+      });
     case "Split":
-      return `Stock split${event.ticker ? ` on ${event.ticker}` : ""}`;
+      return t("timeline.stockSplit", { tickerSuffix: event.ticker ? t("timeline.onTickerSuffix", { ticker: event.ticker }) : "" });
     case "RightsIssue":
-      return `Rights issue${event.ticker ? ` on ${event.ticker}` : ""}`;
+      return t("timeline.rightsIssueEvent", { tickerSuffix: event.ticker ? t("timeline.onTickerSuffix", { ticker: event.ticker }) : "" });
     case "CashAdjustment":
-      return `Cash adjustment ${formatMoney(event.amount)}`;
+      return t("timeline.cashAdjustmentEvent", { amount: formatMoney(event.amount) });
     case "Note":
-      return event.notes ?? "Note";
+      return event.notes ?? t("timeline.note");
     default:
       return event.type;
   }
 }
 
 export function TimelinePage() {
+  const t = useT();
   const { id: portfolioId } = useParams<{ id: string }>();
   const portfolio = useLiveQuery(() => repos.portfolios.getById(portfolioId), [portfolioId]);
   const events = useLiveQuery(() => repos.timeline.getByPortfolio(portfolioId), [portfolioId]);
@@ -52,7 +59,7 @@ export function TimelinePage() {
   const duplicateDividendIds = useMemo(() => new Set(suggestDuplicateDividendIdsToDelete(events ?? [])), [events]);
 
   async function handleDeleteDividend(event: TimelineEvent) {
-    if (!confirm("Delete this dividend? Its amount will be reversed out of the portfolio's cash balance. This can't be undone.")) {
+    if (!confirm(t("timeline.deleteDividendConfirm"))) {
       return;
     }
     setDeleteError(null);
@@ -60,7 +67,7 @@ export function TimelinePage() {
     try {
       await deleteDividend(repos, event);
     } catch (e) {
-      setDeleteError({ eventId: event.id, message: e instanceof Error ? e.message : "Failed to delete dividend." });
+      setDeleteError({ eventId: event.id, message: e instanceof Error ? e.message : t("timeline.deleteDividendFailed") });
     } finally {
       setDeletingId(null);
     }
@@ -69,11 +76,7 @@ export function TimelinePage() {
   async function handleClearDuplicateDividends() {
     const ids = [...duplicateDividendIds];
     if (ids.length === 0) return;
-    if (
-      !confirm(
-        `Delete ${ids.length} duplicate dividend${ids.length === 1 ? "" : "s"}? Each one's amount will be reversed out of cash. This can't be undone.`
-      )
-    ) {
+    if (!confirm(t("timeline.clearDuplicatesConfirm", { n: ids.length }))) {
       return;
     }
     setClearAllError(null);
@@ -86,12 +89,12 @@ export function TimelinePage() {
       try {
         await deleteDividend(repos, event);
       } catch (e) {
-        failures.push(e instanceof Error ? e.message : "Failed to delete a dividend.");
+        failures.push(e instanceof Error ? e.message : t("timeline.deleteDividendGenericFailed"));
       }
     }
     setClearingAll(false);
     if (failures.length > 0) {
-      setClearAllError(`${failures.length} of ${ids.length} deletions failed: ${failures.join("; ")}`);
+      setClearAllError(t("timeline.clearAllFailedSummary", { failed: failures.length, total: ids.length, messages: failures.join("; ") }));
     }
   }
 
@@ -110,8 +113,8 @@ export function TimelinePage() {
   return (
     <div>
       <PageHeader
-        title={portfolio ? `${portfolio.name} — Timeline` : "Timeline"}
-        description="Every buy, sell, deposit and cash event, in order."
+        title={portfolio ? t("timeline.titleWithPortfolio", { name: portfolio.name }) : t("timeline.title")}
+        description={t("timeline.description")}
         actions={
           duplicateDividendIds.size > 0 ? (
             <button
@@ -120,7 +123,7 @@ export function TimelinePage() {
               className="flex items-center gap-1.5 rounded-md border border-rose-500/40 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
             >
               <Eraser size={14} />
-              {clearingAll ? "Clearing…" : `Clear duplicate dividends (${duplicateDividendIds.size})`}
+              {clearingAll ? t("timeline.clearing") : t("timeline.clearDuplicateDividends", { n: duplicateDividendIds.size })}
             </button>
           ) : undefined
         }
@@ -129,7 +132,7 @@ export function TimelinePage() {
       {clearAllError ? <p className="mb-4 text-sm text-rose-400">{clearAllError}</p> : null}
 
       {grouped.length === 0 ? (
-        <EmptyState title="No activity yet" description="Trades and cash movements will appear here as they happen." />
+        <EmptyState title={t("timeline.noActivityTitle")} description={t("timeline.noActivityDescription")} />
       ) : (
         <div className="space-y-6">
           {grouped.map(([day, dayEvents]) => (
@@ -153,10 +156,10 @@ export function TimelinePage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="flex flex-wrap items-center gap-2">
-                            <p className="text-sm text-slate-100">{describe(event)}</p>
+                            <p className="text-sm text-slate-100">{describe(event, t)}</p>
                             {suspectedDuplicate ? (
                               <span className="flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300">
-                                <ShieldAlert size={11} /> Suspected duplicate
+                                <ShieldAlert size={11} /> {t("timeline.suspectedDuplicate")}
                               </span>
                             ) : null}
                           </span>
@@ -168,7 +171,7 @@ export function TimelinePage() {
                               <button
                                 onClick={() => void handleDeleteDividend(event)}
                                 disabled={deletingId === event.id}
-                                title="Delete this dividend and reverse its amount out of cash"
+                                title={t("timeline.deleteDividendTitle")}
                                 className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400 disabled:opacity-50"
                               >
                                 <Trash2 size={13} />

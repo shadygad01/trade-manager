@@ -19,10 +19,12 @@ import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
 import { formatMoney, formatShares } from "@presentation/lib/format";
+import { useT } from "@presentation/i18n/translations";
 
 const KINDS: PortfolioKind[] = ["Investment", "Trading", "Swing", "Experiments", "Retirement", "Education", "Custom"];
 
 export function PortfoliosPage() {
+  const t = useT();
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []);
   const [modalOpen, setModalOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -61,14 +63,14 @@ export function PortfoliosPage() {
   return (
     <div>
       <PageHeader
-        title="Portfolios"
-        description="Every book you track, from long-term investing to short-term swing trades."
+        title={t("portfolios.title")}
+        description={t("portfolios.description")}
         actions={
           <button
             onClick={() => setModalOpen(true)}
             className="flex items-center gap-1.5 rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400"
           >
-            <Plus size={16} /> New Portfolio
+            <Plus size={16} /> {t("portfolios.newPortfolio")}
           </button>
         }
       />
@@ -85,25 +87,25 @@ export function PortfoliosPage() {
       {portfolios && active.length === 0 && archived.length === 0 ? (
         <EmptyState
           icon={<Briefcase size={28} />}
-          title="No portfolios yet"
-          description="Create a portfolio to start recording trades, cash movements and analytics."
+          title={t("portfolios.noPortfoliosTitle")}
+          description={t("portfolios.noPortfoliosDescription")}
           action={
             <button
               onClick={() => setModalOpen(true)}
               className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950"
             >
-              Create your first portfolio
+              {t("portfolios.createFirstPortfolio")}
             </button>
           }
         />
       ) : portfolios && active.length === 0 ? (
         <EmptyState
           icon={<Archive size={28} />}
-          title="No active portfolios"
-          description={`All ${archived.length} portfolio${archived.length === 1 ? " is" : "s are"} archived.`}
+          title={t("portfolios.noActiveTitle")}
+          description={t("portfolios.allArchivedDescription", { n: archived.length })}
           action={
             <button onClick={() => setShowArchived(true)} className="rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950">
-              Show archived
+              {t("portfolios.showArchived")}
             </button>
           }
         />
@@ -122,7 +124,7 @@ export function PortfoliosPage() {
             className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-slate-200"
           >
             {showArchived ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            Archived ({archived.length})
+            {t("portfolios.archivedCount", { n: archived.length })}
           </button>
           {showArchived ? (
             <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -146,6 +148,7 @@ function SplitTickersBanner({
   splitTickers: SplitTickerEntry[];
   portfolios: Portfolio[];
 }) {
+  const t = useT();
   const portfolioName = (id: string) => portfolios.find((p) => p.id === id)?.name ?? "?";
   const [targetByTicker, setTargetByTicker] = useState<Record<string, string>>({});
   const [consolidating, setConsolidating] = useState<string | null>(null);
@@ -156,11 +159,7 @@ function SplitTickersBanner({
     // smaller holding(s) are more likely the accidental one to fold in.
     const defaultTarget = [...entry.portfolios].sort((a, b) => b.shares - a.shares)[0].portfolioId;
     const target = targetByTicker[entry.ticker] ?? defaultTarget;
-    if (
-      !confirm(
-        `Move every ${entry.ticker} trade (and any broker verification for it) from every other portfolio into "${portfolioName(target)}"? Cash moves with each trade. This can't be undone.`
-      )
-    ) {
+    if (!confirm(t("portfolios.consolidateConfirm", { ticker: entry.ticker, target: portfolioName(target) }))) {
       return;
     }
     setError(null);
@@ -168,7 +167,7 @@ function SplitTickersBanner({
     try {
       await consolidateTicker(repos, entry.ticker, target);
     } catch (e) {
-      setError({ ticker: entry.ticker, message: e instanceof Error ? e.message : "Consolidation failed." });
+      setError({ ticker: entry.ticker, message: e instanceof Error ? e.message : t("portfolios.consolidationFailed") });
     } finally {
       setConsolidating(null);
     }
@@ -177,12 +176,10 @@ function SplitTickersBanner({
   return (
     <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
       <p className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-400">
-        <ShieldAlert size={16} /> Stocks split across portfolios
+        <ShieldAlert size={16} /> {t("portfolios.splitBannerTitle")}
       </p>
       <p className="mb-3 text-xs text-amber-300/70">
-        Each of these is held in more than one portfolio — usually a mistake, since a broker account is one real
-        position regardless of which portfolio a buy landed in. Consolidating moves every trade for that ticker (and
-        any broker verification) into one portfolio.
+        {t("portfolios.splitBannerDescription")}
       </p>
       <ul className="space-y-2">
         {splitTickers.map((entry) => {
@@ -204,7 +201,7 @@ function SplitTickersBanner({
                 >
                   {entry.portfolios.map((p) => (
                     <option key={p.portfolioId} value={p.portfolioId}>
-                      Consolidate into {portfolioName(p.portfolioId)}
+                      {t("portfolios.consolidateInto", { name: portfolioName(p.portfolioId) })}
                     </option>
                   ))}
                 </select>
@@ -214,7 +211,7 @@ function SplitTickersBanner({
                   className="flex items-center gap-1.5 rounded-md border border-amber-400/40 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
                 >
                   <FolderSymlink size={12} />
-                  {consolidating === entry.ticker ? "Consolidating…" : "Consolidate"}
+                  {consolidating === entry.ticker ? t("portfolios.consolidating") : t("portfolios.consolidate")}
                 </button>
               </span>
               {error && error.ticker === entry.ticker ? <p className="w-full text-[11px] text-rose-400">{error.message}</p> : null}
@@ -227,15 +224,12 @@ function SplitTickersBanner({
 }
 
 function MisnamedTickersBanner({ misnamedTickers }: { misnamedTickers: MisnamedTickerEntry[] }) {
+  const t = useT();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [error, setError] = useState<{ ticker: string; message: string } | null>(null);
 
   async function handleRename(entry: MisnamedTickerEntry) {
-    if (
-      !confirm(
-        `Rename every "${entry.wrongTicker}" trade to ${entry.realTicker}? This fixes the ticker identity everywhere (trades, sells, timeline, verifications) — nothing else about these rows changes.`
-      )
-    ) {
+    if (!confirm(t("portfolios.renameConfirm", { wrongTicker: entry.wrongTicker, realTicker: entry.realTicker }))) {
       return;
     }
     setError(null);
@@ -243,7 +237,7 @@ function MisnamedTickersBanner({ misnamedTickers }: { misnamedTickers: MisnamedT
     try {
       await renameTickerEverywhere(repos, entry.wrongTicker, entry.realTicker);
     } catch (e) {
-      setError({ ticker: entry.wrongTicker, message: e instanceof Error ? e.message : "Rename failed." });
+      setError({ ticker: entry.wrongTicker, message: e instanceof Error ? e.message : t("portfolios.renameFailed") });
     } finally {
       setRenaming(null);
     }
@@ -252,12 +246,10 @@ function MisnamedTickersBanner({ misnamedTickers }: { misnamedTickers: MisnamedT
   return (
     <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
       <p className="mb-2 flex items-center gap-2 text-sm font-medium text-amber-400">
-        <ShieldAlert size={16} /> Tickers filed under the wrong name
+        <ShieldAlert size={16} /> {t("portfolios.misnamedBannerTitle")}
       </p>
       <p className="mb-3 text-xs text-amber-300/70">
-        These are the same real stock as an already-known EGX ticker, but some trades were recorded under the raw
-        company name instead — usually from an import that predates that company being recognized. Renaming fixes
-        the identity everywhere (trades, sells, timeline, verifications); nothing about shares/prices/dates changes.
+        {t("portfolios.misnamedBannerDescription")}
       </p>
       <ul className="space-y-2">
         {misnamedTickers.map((entry) => (
@@ -268,7 +260,8 @@ function MisnamedTickersBanner({ misnamedTickers }: { misnamedTickers: MisnamedT
             <span className="text-slate-200">
               <span className="font-semibold">"{entry.wrongTicker}"</span>{" "}
               <span className="text-slate-400">
-                ({formatShares(entry.shares)} sh remaining) is really <span className="font-semibold text-slate-200">{entry.realTicker}</span>
+                {t("portfolios.remainingSharesPrefix", { shares: formatShares(entry.shares) })}{" "}
+                <span className="font-semibold text-slate-200">{entry.realTicker}</span>
               </span>
             </span>
             <button
@@ -277,7 +270,7 @@ function MisnamedTickersBanner({ misnamedTickers }: { misnamedTickers: MisnamedT
               className="flex items-center gap-1.5 rounded-md border border-amber-400/40 px-2.5 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
             >
               <FolderSymlink size={12} />
-              {renaming === entry.wrongTicker ? "Renaming…" : `Rename to ${entry.realTicker}`}
+              {renaming === entry.wrongTicker ? t("portfolios.renaming") : t("portfolios.renameTo", { ticker: entry.realTicker })}
             </button>
             {error && error.ticker === entry.wrongTicker ? <p className="w-full text-[11px] text-rose-400">{error.message}</p> : null}
           </li>
@@ -296,6 +289,7 @@ function PortfolioCard({
   marketValue: number;
   archived?: boolean;
 }) {
+  const t = useT();
   return (
     <div className={`group relative rounded-xl border border-slate-800 bg-slate-900/60 p-4 transition-colors hover:border-cyan-500/40 hover:bg-slate-900 ${archived ? "opacity-60" : ""}`}>
       <Link href={`/portfolios/${p.id}`} className="block">
@@ -303,18 +297,18 @@ function PortfolioCard({
           <div>
             <p className="text-sm font-semibold text-slate-50">{p.name}</p>
             <span className="mt-1 inline-block rounded-full bg-slate-800 px-2 py-0.5 text-[11px] text-slate-400">
-              {p.kind === "Custom" ? p.customKindLabel || "Custom" : p.kind}
+              {p.kind === "Custom" ? p.customKindLabel || t("portfolioKind.Custom") : t(`portfolioKind.${p.kind}`)}
             </span>
           </div>
           <ArrowRight size={16} className="text-slate-600 group-hover:text-cyan-400" />
         </div>
         <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
           <div>
-            <p className="text-[11px] uppercase tracking-wide text-slate-500">Cash</p>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">{t("portfolios.cash")}</p>
             <p className="tabular-nums text-slate-200">{formatMoney(p.cash)}</p>
           </div>
           <div>
-            <p className="text-[11px] uppercase tracking-wide text-slate-500">Invested</p>
+            <p className="text-[11px] uppercase tracking-wide text-slate-500">{t("portfolios.invested")}</p>
             <p className="tabular-nums text-slate-200">{formatMoney(marketValue)}</p>
           </div>
         </div>
@@ -328,7 +322,7 @@ function PortfolioCard({
           }}
           className="mt-3 flex items-center gap-1.5 rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800"
         >
-          <ArchiveRestore size={12} /> Unarchive
+          <ArchiveRestore size={12} /> {t("portfolios.unarchive")}
         </button>
       ) : null}
     </div>
@@ -336,6 +330,7 @@ function PortfolioCard({
 }
 
 function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT();
   const [name, setName] = useState("");
   const [kind, setKind] = useState<PortfolioKind>("Investment");
   const [customKindLabel, setCustomKindLabel] = useState("");
@@ -355,7 +350,7 @@ function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () =>
 
   async function handleSubmit() {
     if (!name.trim()) {
-      setError("Give the portfolio a name.");
+      setError(t("portfolios.nameRequired"));
       return;
     }
     setSubmitting(true);
@@ -371,7 +366,7 @@ function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () =>
       reset();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create portfolio.");
+      setError(e instanceof Error ? e.message : t("portfolios.createFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -379,7 +374,7 @@ function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () =>
 
   return (
     <Modal
-      title="Create Portfolio"
+      title={t("portfolios.createModalTitle")}
       open={open}
       onClose={() => {
         reset();
@@ -388,16 +383,16 @@ function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () =>
     >
       <div className="space-y-3">
         <label className="block text-xs text-slate-400 space-y-1">
-          Name
+          {t("portfolios.nameLabel")}
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
-            placeholder="e.g. Core Egyptian Equities"
+            placeholder={t("portfolios.namePlaceholder")}
           />
         </label>
         <label className="block text-xs text-slate-400 space-y-1">
-          Kind
+          {t("portfolios.kindLabel")}
           <select
             value={kind}
             onChange={(e) => setKind(e.target.value as PortfolioKind)}
@@ -405,14 +400,14 @@ function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () =>
           >
             {KINDS.map((k) => (
               <option key={k} value={k}>
-                {k}
+                {t(`portfolioKind.${k}`)}
               </option>
             ))}
           </select>
         </label>
         {kind === "Custom" ? (
           <label className="block text-xs text-slate-400 space-y-1">
-            Custom label
+            {t("portfolios.customLabelLabel")}
             <input
               value={customKindLabel}
               onChange={(e) => setCustomKindLabel(e.target.value)}
@@ -421,7 +416,7 @@ function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () =>
           </label>
         ) : null}
         <label className="block text-xs text-slate-400 space-y-1">
-          Initial cash (EGP)
+          {t("portfolios.initialCashLabel")}
           <input
             type="number"
             value={initialCash}
@@ -430,7 +425,7 @@ function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () =>
           />
         </label>
         <label className="block text-xs text-slate-400 space-y-1">
-          Notes
+          {t("portfolios.notesLabel")}
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -441,14 +436,14 @@ function CreatePortfolioModal({ open, onClose }: { open: boolean; onClose: () =>
         {error ? <p className="text-sm text-rose-400">{error}</p> : null}
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             onClick={handleSubmit}
             disabled={submitting}
             className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
           >
-            {submitting ? "Creating…" : "Create"}
+            {submitting ? t("common.creating") : t("common.create")}
           </button>
         </div>
       </div>

@@ -1,7 +1,9 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Route, Switch, Redirect, Router } from "wouter";
 import { Menu } from "lucide-react";
 import { Sidebar } from "@presentation/components/Sidebar";
+import { useT } from "@presentation/i18n/translations";
+import { useLanguage } from "@presentation/i18n/language";
 
 const DashboardPage = lazy(() => import("@presentation/pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const PortfoliosPage = lazy(() => import("@presentation/pages/PortfoliosPage").then((m) => ({ default: m.PortfoliosPage })));
@@ -29,7 +31,18 @@ const ROUTER_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
 // toggled by this hamburger bar, and reverts to the original always-visible
 // layout at `lg` and up (untouched desktop behavior).
 function AppShell() {
+  const t = useT();
+  const language = useLanguage();
   const [navOpen, setNavOpen] = useState(false);
+
+  // Arabic reads right-to-left — the document direction has to follow the
+  // chosen language so native text flow, form fields, and every directional
+  // (ms-/me-/start-/end-/text-start/text-end) Tailwind utility below mirror
+  // correctly, not just the translated strings themselves.
+  useEffect(() => {
+    document.documentElement.dir = language === "ar" ? "rtl" : "ltr";
+    document.documentElement.lang = language;
+  }, [language]);
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">
@@ -41,15 +54,15 @@ function AppShell() {
         <div className="flex items-center gap-3 border-b border-slate-800/80 bg-slate-950 px-4 py-3 lg:hidden">
           <button
             onClick={() => setNavOpen(true)}
-            aria-label="Open menu"
+            aria-label={t("app.openMenu")}
             className="rounded-md p-1.5 text-slate-300 hover:bg-slate-900"
           >
             <Menu size={20} />
           </button>
-          <p className="text-sm font-semibold text-slate-100">Portfolio OS</p>
+          <p className="text-sm font-semibold text-slate-100">{t("app.brand")}</p>
         </div>
         <main className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-10 lg:py-8">
-          <Suspense fallback={<p className="text-sm text-slate-500">Loading…</p>}>
+          <Suspense fallback={<p className="text-sm text-slate-500">{t("common.loading")}</p>}>
             <Switch>
               <Route path="/" component={DashboardPage} />
               <Route path="/portfolios" component={PortfoliosPage} />
