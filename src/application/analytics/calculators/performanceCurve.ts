@@ -5,9 +5,9 @@ import { realizedPnlMicros } from "@domain/entities/TradeAllocation";
 
 export interface PerformancePoint {
   date: string;
-  /** Cumulative realized P/L so far, as % of cost basis invested so far (see datedDeltas). */
+  /** Cumulative realized P/L so far, as % of peak capital deployed so far (see datedDeltas). */
   realizedReturnPct: number;
-  /** Cumulative dividends received so far, as % of cost basis invested so far. */
+  /** Cumulative dividends received so far, as % of peak capital deployed so far. */
   dividendReturnPct: number;
 }
 
@@ -24,19 +24,25 @@ interface DatedDelta {
   realizedPnl?: number;
   dividend?: number;
   investment?: number;
+  /** Cost basis freed back up when an allocation closes shares — shrinks the *open* capital, never the peak. */
+  costReleased?: number;
 }
 
 /**
  * Every dated, fully-known event this module cares about. `investment` grows
  * from each Trade's own cost basis at the moment it's bought (never a
  * Deposit/Withdrawal — there is deliberately no concept of "money put into
- * the portfolio" here, only "money spent buying something," by direct user
- * request: money that's sold and reinvested elsewhere counts again on the
- * next buy, so a return % here is against cumulative buying activity, not a
- * capital account — the user explicitly accepted this over the alternative
- * of tracking external deposits). `realizedPnl` isolates the one number
- * that's actually a gain/loss for a closed lot (never a Sell's raw cash-in,
- * which also returns the original cost).
+ * the portfolio" here, only "money spent buying something"). `costReleased`
+ * is the mirror image: when an allocation closes shares, their original cost
+ * basis is no longer deployed. Together they let callers track *open* cost
+ * basis over time and take its running peak — the most capital that was ever
+ * at work simultaneously. Return %s divide by that peak, so recycling the
+ * same money through several round-trips no longer shrinks the percentage
+ * (the old cumulative-buys denominator counted recycled capital once per
+ * round-trip, systematically understating returns for active traders).
+ * `realizedPnl` isolates the one number that's actually a gain/loss for a
+ * closed lot (never a Sell's raw cash-in, which also returns the original
+ * cost).
  */
 function datedDeltas(trades: Trade[], allocations: TradeAllocation[], timelineEvents: TimelineEvent[]): DatedDelta[] {
   const tradesById = new Map(trades.map((t) => [t.id, t]));
@@ -55,6 +61,7 @@ function datedDeltas(trades: Trade[], allocations: TradeAllocation[], timelineEv
     deltas.push({
       date: `${allocation.executionDate}T${allocation.executionTime}`,
       realizedPnl: realizedPnlMicros(allocation, trade) / 1_000_000,
+      costReleased: allocation.sharesClosed * (trade.entryPrice + (trade.fees + trade.taxes) / trade.shares),
     });
   }
 
@@ -64,14 +71,23 @@ function datedDeltas(trades: Trade[], allocations: TradeAllocation[], timelineEv
     }
   }
 
-  return deltas.sort((a, b) => a.date.localeCompare(b.date));
+  // On exact timestamp ties, process cost releases (sells) before investments
+  // (buys): a same-instant sell-then-buy is capital recycling, and counting the
+  // buy first would fabricate a moment where both positions were open at once,
+  // inflating the peak-capital denominator and understating return %s.
+  return deltas.sort(
+    (a, b) =>
+      a.date.localeCompare(b.date) ||
+      (a.costReleased !== undefined ? 0 : 1) - (b.costReleased !== undefined ? 0 : 1)
+  );
 }
 
 /**
  * A cumulative {date, realizedReturnPct, dividendReturnPct} series — the
- * equity-curve replacement. Both percentages are relative to cumulative cost
- * basis invested so far (see datedDeltas), so a sell's cash-in never reads as
- * a gain and a buy is never itself a loss. Extends to `today` with the
+ * equity-curve replacement. Both percentages are relative to the running
+ * *peak* of open cost basis (the most capital ever deployed at once, see
+ * datedDeltas), so a sell's cash-in never reads as a gain, a buy is never
+ * itself a loss, and recycling capital never dilutes the %. Extends to `today` with the
  * last-known cumulative values (never invents a new value for today — there's
  * nothing dated "today" to add unless a real event happened today).
  */
@@ -85,26 +101,29 @@ export function performanceCurve(
 
   let cumulativeRealized = 0;
   let cumulativeDividend = 0;
-  let invested = 0;
+  let openCost = 0;
+  let peakCost = 0;
   const points: PerformancePoint[] = [];
 
   for (const delta of deltas) {
     if (delta.realizedPnl !== undefined) cumulativeRealized += delta.realizedPnl;
     if (delta.dividend !== undefined) cumulativeDividend += delta.dividend;
-    if (delta.investment !== undefined) invested += delta.investment;
+    if (delta.investment !== undefined) openCost += delta.investment;
+    if (delta.costReleased !== undefined) openCost -= delta.costReleased;
+    peakCost = Math.max(peakCost, openCost);
 
     points.push({
       date: delta.date.slice(0, 10),
-      realizedReturnPct: invested > 0 ? (cumulativeRealized / invested) * 100 : 0,
-      dividendReturnPct: invested > 0 ? (cumulativeDividend / invested) * 100 : 0,
+      realizedReturnPct: peakCost > 0 ? (cumulativeRealized / peakCost) * 100 : 0,
+      dividendReturnPct: peakCost > 0 ? (cumulativeDividend / peakCost) * 100 : 0,
     });
   }
 
   if (points.length === 0 || points[points.length - 1].date !== today) {
     points.push({
       date: today,
-      realizedReturnPct: invested > 0 ? (cumulativeRealized / invested) * 100 : 0,
-      dividendReturnPct: invested > 0 ? (cumulativeDividend / invested) * 100 : 0,
+      realizedReturnPct: peakCost > 0 ? (cumulativeRealized / peakCost) * 100 : 0,
+      dividendReturnPct: peakCost > 0 ? (cumulativeDividend / peakCost) * 100 : 0,
     });
   }
   return points;
@@ -216,19 +235,21 @@ export function bucketPerformance(
     periods.push(cursor);
   }
 
-  const investments = deltas
-    .filter((d) => d.investment !== undefined)
-    .map((d) => ({ date: d.date.slice(0, 10), amount: d.investment! }))
+  const capitalFlows = deltas
+    .filter((d) => d.investment !== undefined || d.costReleased !== undefined)
+    .map((d) => ({ date: d.date.slice(0, 10), amount: (d.investment ?? 0) - (d.costReleased ?? 0) }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  /** Cumulative cost basis of everything bought on or before `date` — a trade bought mid-period already counts toward *that same period's* basis, since the money was spent the instant it was bought. */
+  /** Running peak of open cost basis through `date` — the most capital ever deployed at once up to then. A trade bought mid-period already counts toward *that same period's* basis, since the money was spent the instant it was bought; recycled capital never inflates it. */
   function investedThrough(date: string): number {
-    let sum = 0;
-    for (const inv of investments) {
-      if (inv.date > date) break;
-      sum += inv.amount;
+    let open = 0;
+    let peak = 0;
+    for (const flow of capitalFlows) {
+      if (flow.date > date) break;
+      open += flow.amount;
+      peak = Math.max(peak, open);
     }
-    return sum;
+    return peak;
   }
 
   const realizedByPeriod = new Map<string, number>();

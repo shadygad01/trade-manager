@@ -40,6 +40,29 @@ describe("performanceCurve", () => {
     expect(curve[curve.length - 1]).toEqual({ date: "2026-03-01", realizedReturnPct: 0, dividendReturnPct: 5 }); // 100/2000
   });
 
+  it("divides by peak capital deployed, so recycling the same money through several round-trips never shrinks the %", () => {
+    // Buy 1000, sell it all at +50, then buy 1000 again with the same money and sell at +50.
+    // Old cumulative denominator: 100/2000 = 5%. Peak capital actually at work: 1000 → 100/1000 = 10%.
+    const t1 = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
+    const a1 = makeAllocation({ tradeId: "t1", sharesClosed: 100, exitPrice: 10.5, executionDate: "2026-02-01", executionTime: "10:00" }); // +50
+    const t2 = makeTrade({ id: "t2", entryPrice: 10, shares: 100, executionDate: "2026-03-01" });
+    const a2 = makeAllocation({ tradeId: "t2", sharesClosed: 100, exitPrice: 10.5, executionDate: "2026-04-01", executionTime: "10:00" }); // +50
+
+    const curve = performanceCurve([t1, t2], [a1, a2], [], "2026-04-01");
+    expect(curve[curve.length - 1].realizedReturnPct).toBe(10); // 100/1000, not 100/2000
+  });
+
+  it("processes a same-timestamp sell before the buy, so instant capital recycling never fabricates a higher peak", () => {
+    // Sell t1 and buy t2 at the exact same timestamp — the money moved straight across,
+    // so peak deployed stays 1000 (not 2000 from a fabricated moment of overlap).
+    const t1 = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
+    const a1 = makeAllocation({ tradeId: "t1", sharesClosed: 100, exitPrice: 11, executionDate: "2026-02-01", executionTime: "10:00" }); // +100
+    const t2 = makeTrade({ id: "t2", entryPrice: 10, shares: 100, executionDate: "2026-02-01", executionTime: "10:00" });
+
+    const curve = performanceCurve([t1, t2], [a1], [], "2026-02-01");
+    expect(curve[curve.length - 1].realizedReturnPct).toBe(10); // 100/1000, not 100/2000
+  });
+
   it("does not append a duplicate point when a real event already lands on today", () => {
     const trade = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
     const curve = performanceCurve([trade], [], [], "2026-01-01");
@@ -130,6 +153,18 @@ describe("bucketPerformance", () => {
       { period: "2026-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
       { period: "2026-02", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 0 },
     ]);
+  });
+
+  it("uses peak capital deployed as each period's basis, so recycled capital never dilutes a later period's %", () => {
+    // Jan: buy 1000, fully sold in Jan. Feb: buy another 1000 with the same money, sell at +50.
+    // Old cumulative basis for Feb: 2000 → 2.5%. Peak deployed: 1000 → 5%.
+    const t1 = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-05" });
+    const a1 = makeAllocation({ tradeId: "t1", sharesClosed: 100, exitPrice: 10, executionDate: "2026-01-20", executionTime: "10:00" }); // flat exit
+    const t2 = makeTrade({ id: "t2", entryPrice: 10, shares: 100, executionDate: "2026-02-05" });
+    const a2 = makeAllocation({ tradeId: "t2", sharesClosed: 100, exitPrice: 10.5, executionDate: "2026-02-20", executionTime: "10:00" }); // +50
+
+    const periods = bucketPerformance([t1, t2], [a1, a2], [], 7, {}, "2026-02-28");
+    expect(periods[1]).toEqual({ period: "2026-02", realizedReturnPct: 5, dividendReturnPct: 0, unrealizedReturnPct: 0 }); // 50/1000
   });
 
   it("returns an empty array when there's no trade or event history at all", () => {

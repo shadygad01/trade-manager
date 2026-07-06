@@ -73,18 +73,18 @@ export interface AnalyticsResult {
   /** Max peak-to-trough decline (percentage points) of cumulative realized + dividend return — never a raw cash-flow ratio (see performanceDrawdown). */
   drawdown: number;
   capitalDeployment: number;
-  /** Cumulative {date, realizedReturnPct, dividendReturnPct} series — both against cumulative cost basis invested so far (see performanceCurve.ts). No historical price feed is needed for this curve. */
+  /** Cumulative {date, realizedReturnPct, dividendReturnPct} series — both against the running peak of open cost basis, i.e. the most capital ever deployed at once (see performanceCurve.ts). No historical price feed is needed for this curve. */
   performanceCurve: PerformancePoint[];
   /** Each period (real calendar month, not just months with activity) also carries unrealizedReturnPct — that period's own change in mark-to-market on still-open positions, from `priceHistory` — see performanceCurve.ts's bucketPerformance doc. */
   monthlyPerformance: PerformancePeriod[];
   annualPerformance: PerformancePeriod[];
   /** Since inception: cumulative realizedReturnPct + dividendReturnPct (the performance curve's last point). Deliberately excludes unrealizedReturnPct below, which uses a different denominator (cost basis of currently-open positions only, not all invested cost basis) — see totalReturnPct for the combined figure. */
   portfolioReturn: number;
-  /** Cumulative realized return %, as of `today` (the performance curve's last point), against cost basis invested so far. */
+  /** Cumulative realized return %, as of `today` (the performance curve's last point), against peak capital deployed. */
   realizedReturnPct: number;
-  /** Cumulative dividend return %, as of `today`, against cost basis invested so far. */
+  /** Cumulative dividend return %, as of `today`, against peak capital deployed. */
   dividendReturnPct: number;
-  /** Unrealized P/L on still-open positions as % of their cost basis, against today's price only — a snapshot, deliberately not the same figure as monthlyPerformance/annualPerformance's per-period unrealizedReturnPct (a different denominator: cost basis of open positions only here, vs. total cost basis ever invested there). */
+  /** Unrealized P/L on still-open positions as % of their cost basis, against today's price only — a snapshot, deliberately not the same figure as monthlyPerformance/annualPerformance's per-period unrealizedReturnPct (a different denominator: cost basis of open positions only here, vs. peak capital ever deployed there). */
   unrealizedReturnPct: number;
   /** portfolioReturn + unrealizedReturnPct — the "how is this portfolio doing right now, including what's still open" headline figure. Mixes two different denominators (see the two fields above), so it's an intuitive combined snapshot rather than a mathematically pure single ratio; use this for ranking/comparing portfolios (e.g. Dashboard's Best/Worst Portfolio) so an all-open, nothing-sold-yet portfolio doesn't read as a flat 0% just because portfolioReturn alone only sees realized/dividend activity. */
   totalReturnPct: number;
