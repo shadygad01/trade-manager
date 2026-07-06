@@ -1699,7 +1699,7 @@ export function TickerGroupCard({
       ) : null}
 
       <div className="divide-y divide-slate-800">
-        {group.buys.map((entry) => {
+        {group.buys.filter((entry) => !skippedKeys.has(entry.key)).map((entry) => {
           const match = duplicateMatch(entry.candidate, addedTradeIds[entry.key]);
           return (
             <AutoCommitRow
@@ -1724,7 +1724,7 @@ export function TickerGroupCard({
             />
           );
         })}
-        {group.sells.map((entry) => {
+        {group.sells.filter((entry) => !skippedKeys.has(entry.key)).map((entry) => {
           const match = duplicateMatch(entry.candidate, undefined, addedAllocationIds?.[entry.key]);
           const added = addedKeys.has(entry.key);
           const disabled = !matched || !portfolioResolved;
@@ -1756,6 +1756,15 @@ export function TickerGroupCard({
             />
           );
         })}
+        {(() => {
+          const skippedCount = [...group.buys, ...group.sells].filter((e) => skippedKeys.has(e.key)).length;
+          return skippedCount > 0 ? (
+            <div className="flex items-center gap-2 px-4 py-2 text-xs text-slate-500">
+              <CheckCircle2 size={13} className="text-slate-500" />
+              {t("importPage.duplicatesHidden", { count: skippedCount })}
+            </div>
+          ) : null;
+        })()}
         {group.verifications.map((entry) => (
           <div key={entry.key} className="px-4 py-2.5 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
