@@ -1,7 +1,7 @@
 import { useLiveQuery } from "dexie-react-hooks";
 import { Clock, AlertTriangle } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { formatDateTime } from "@presentation/lib/format";
+import { formatDateTime, formatMarketCloseDateTime } from "@presentation/lib/format";
 
 /**
  * EGX trades Sun-Thu, so a snapshot can legitimately be up to ~3 calendar
@@ -33,6 +33,8 @@ export function PriceFreshness() {
   }
 
   const timestamp = info.latestQuoteAt ?? info.asOf;
+  const usingQuoteTime = info.latestQuoteAt !== undefined;
+  const displayTime = usingQuoteTime ? formatMarketCloseDateTime(timestamp) : formatDateTime(timestamp);
   const ageDays = (Date.now() - new Date(timestamp).getTime()) / 86_400_000;
   const stale = ageDays > STALE_AFTER_DAYS;
 
@@ -40,7 +42,7 @@ export function PriceFreshness() {
     return (
       <p className="mb-4 flex items-center gap-1.5 text-xs text-amber-300">
         <AlertTriangle size={12} />
-        Prices are from {formatDateTime(timestamp)} — the feed hasn't updated since, so current prices and unrealized
+        Prices are from {displayTime} — the feed hasn't updated since, so current prices and unrealized
         P/L below are outdated.
       </p>
     );
@@ -48,7 +50,7 @@ export function PriceFreshness() {
   return (
     <p className="mb-4 flex items-center gap-1.5 text-xs text-slate-500">
       <Clock size={12} />
-      Prices as of {formatDateTime(timestamp)}{info.latestQuoteAt ? " (last market close)" : ""} — current prices and
+      Prices as of {displayTime}{usingQuoteTime ? " (last market close)" : ""} — current prices and
       unrealized P/L reflect this snapshot.
     </p>
   );

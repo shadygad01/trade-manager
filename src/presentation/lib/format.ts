@@ -32,6 +32,13 @@ const dateTimeFormatter = new Intl.DateTimeFormat("en-GB", {
   minute: "2-digit",
 });
 
+const cairoDateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+  timeZone: "Africa/Cairo",
+});
+
 export function formatMoney(value: number | undefined | null): string {
   if (value === undefined || value === null || Number.isNaN(value)) return "—";
   return moneyFormatter.format(value);
@@ -64,6 +71,19 @@ export function formatDateTime(value: string | undefined | null): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
   return dateTimeFormatter.format(d);
+}
+
+/**
+ * The upstream quote timestamp (TradingView's `time` field) marks the
+ * session, not the actual last-trade time — it's identical across every
+ * ticker in a snapshot. EGX's regular session always ends at 14:30 Cairo
+ * time, so that's what's shown rather than the raw (and misleading) hour.
+ */
+export function formatMarketCloseDateTime(value: string | undefined | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return `${cairoDateFormatter.format(d)}, 14:30`;
 }
 
 export function signClass(value: number | undefined | null): string {
