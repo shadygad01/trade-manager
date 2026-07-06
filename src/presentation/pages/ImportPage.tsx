@@ -1820,7 +1820,11 @@ export function TickerGroupCard({
             {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
           </div>
         ))}
-        {orderEvidences.map((entry) => (
+        {/* Cancelled orders are pure noise during manual review — a struck-through
+            BUY/SELL line still reads like a transaction at a glance and invites
+            recording something that never executed. They stay in the session data
+            (nothing here commits), but only fulfilled orders render. */}
+        {orderEvidences.filter((entry) => entry.evidence.status === "fulfilled").map((entry) => (
           <div key={entry.key} className="px-4 py-2 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs text-slate-400">
