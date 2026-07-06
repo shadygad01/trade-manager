@@ -151,14 +151,14 @@ function LessonsLearnedView({
           onClick={() => onOpenTrade(trade.id)}
           className="block w-full rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-start hover:border-slate-700"
         >
-          <div className="mb-1.5 flex items-center justify-between">
-            <span dir="ltr" className="inline-flex items-baseline gap-2 text-sm font-medium text-slate-100">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+            <span dir="ltr" className="inline-flex min-w-0 items-baseline gap-2 text-sm font-medium text-slate-100">
               <span>{trade.ticker}</span>
-              {trade.companyName ? <span className="text-xs font-normal text-slate-500">{trade.companyName}</span> : null}
+              {trade.companyName ? <span className="truncate text-xs font-normal text-slate-500">{trade.companyName}</span> : null}
             </span>
-            <span className="text-xs text-slate-500">{formatDate(trade.executionDate)}</span>
+            <span className="shrink-0 text-xs text-slate-500">{formatDate(trade.executionDate)}</span>
           </div>
-          <p className="text-sm text-slate-300">{entry.lessonsLearned}</p>
+          <p className="break-words text-sm text-slate-300">{entry.lessonsLearned}</p>
           {entry.strategyTags.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {entry.strategyTags.map((tag) => (
@@ -234,8 +234,8 @@ function JournalEditor({ portfolioId, trade }: { portfolioId: string; trade: Tra
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-100">
             {trade.ticker} · {formatShares(trade.shares)} @ {formatMoney(trade.entryPrice)}
           </p>
@@ -244,7 +244,7 @@ function JournalEditor({ portfolioId, trade }: { portfolioId: string; trade: Tra
         <button
           onClick={handleSave}
           disabled={saving}
-          className="rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
+          className="shrink-0 rounded-md bg-cyan-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:opacity-50"
         >
           {saving ? t("journal.saving") : t("journal.saveEntry")}
         </button>

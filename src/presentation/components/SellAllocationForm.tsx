@@ -149,6 +149,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-slate-800 overflow-hidden">
+        <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-slate-900/80 text-start text-xs uppercase tracking-wide text-slate-500">
             <tr>
@@ -191,6 +192,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
             })}
           </tbody>
         </table>
+        </div>
       </div>
 
       <p className="text-xs text-slate-500">

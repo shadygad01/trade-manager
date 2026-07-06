@@ -130,7 +130,7 @@ export function TradesPage() {
 
       {allTickers.length > 0 ? (
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-semibold text-slate-200">{t("trades.buyZoneTitle")}</h3>
             <label className="flex items-center gap-2">
               <span className="text-xs font-medium text-slate-400">{t("trades.tickerLabel")}</span>
@@ -166,6 +166,7 @@ export function TradesPage() {
         />
       ) : (
         <div className="rounded-xl border border-slate-800 bg-slate-900/60">
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-start text-xs uppercase tracking-wide text-slate-500">
               <tr>
@@ -316,6 +317,7 @@ export function TradesPage() {
                           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                             {t("trades.sellsClosingLot")}
                           </p>
+                          <div className="overflow-x-auto">
                           <table className="w-full text-xs">
                             <thead className="text-start text-slate-500">
                               <tr>
@@ -338,6 +340,7 @@ export function TradesPage() {
                               ))}
                             </tbody>
                           </table>
+                          </div>
                         </td>
                       </tr>
                     ) : null}
@@ -346,6 +349,7 @@ export function TradesPage() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
