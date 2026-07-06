@@ -9,8 +9,6 @@ export interface PerformancePoint {
   realizedReturnPct: number;
   /** Cumulative dividends received so far, as % of peak capital deployed so far. */
   dividendReturnPct: number;
-  /** Mark-to-market on positions still open as of this date, as % of the same peak-capital-deployed denominator as realizedReturnPct/dividendReturnPct — so it's directly stackable on the same chart. Requires `priceHistory`; 0 wherever a ticker/date isn't covered by it, never fabricated (see unrealizedPnlAsOf). */
-  unrealizedReturnPct: number;
 }
 
 export interface PerformancePeriod {
@@ -85,22 +83,18 @@ function datedDeltas(trades: Trade[], allocations: TradeAllocation[], timelineEv
 }
 
 /**
- * A cumulative {date, realizedReturnPct, dividendReturnPct, unrealizedReturnPct}
- * series — the equity-curve replacement. All three percentages are relative to
- * the running *peak* of open cost basis (the most capital ever deployed at
- * once, see datedDeltas), so a sell's cash-in never reads as a gain, a buy is
- * never itself a loss, and recycling capital never dilutes the %. Extends to
- * `today` with the last-known cumulative values (never invents a new value for
- * today — there's nothing dated "today" to add unless a real event happened
- * today). `unrealizedReturnPct` only moves at these same event dates (never a
- * fabricated daily grid) and is 0 wherever `priceHistory` doesn't cover a held
- * ticker/date.
+ * A cumulative {date, realizedReturnPct, dividendReturnPct} series — the
+ * equity-curve replacement. Both percentages are relative to the running
+ * *peak* of open cost basis (the most capital ever deployed at once, see
+ * datedDeltas), so a sell's cash-in never reads as a gain, a buy is never
+ * itself a loss, and recycling capital never dilutes the %. Extends to `today` with the
+ * last-known cumulative values (never invents a new value for today — there's
+ * nothing dated "today" to add unless a real event happened today).
  */
 export function performanceCurve(
   trades: Trade[],
   allocations: TradeAllocation[],
   timelineEvents: TimelineEvent[],
-  priceHistory: Record<string, Record<string, number>> = {},
   today: string = new Date().toISOString().slice(0, 10)
 ): PerformancePoint[] {
   const deltas = datedDeltas(trades, allocations, timelineEvents);
@@ -118,13 +112,10 @@ export function performanceCurve(
     if (delta.costReleased !== undefined) openCost -= delta.costReleased;
     peakCost = Math.max(peakCost, openCost);
 
-    const date = delta.date.slice(0, 10);
     points.push({
-      date,
+      date: delta.date.slice(0, 10),
       realizedReturnPct: peakCost > 0 ? (cumulativeRealized / peakCost) * 100 : 0,
       dividendReturnPct: peakCost > 0 ? (cumulativeDividend / peakCost) * 100 : 0,
-      unrealizedReturnPct:
-        peakCost > 0 ? (unrealizedPnlAsOf(trades, allocations, priceHistory, date) / peakCost) * 100 : 0,
     });
   }
 
@@ -133,8 +124,6 @@ export function performanceCurve(
       date: today,
       realizedReturnPct: peakCost > 0 ? (cumulativeRealized / peakCost) * 100 : 0,
       dividendReturnPct: peakCost > 0 ? (cumulativeDividend / peakCost) * 100 : 0,
-      unrealizedReturnPct:
-        peakCost > 0 ? (unrealizedPnlAsOf(trades, allocations, priceHistory, today) / peakCost) * 100 : 0,
     });
   }
   return points;

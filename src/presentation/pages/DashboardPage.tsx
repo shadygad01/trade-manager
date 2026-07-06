@@ -47,42 +47,28 @@ interface PortfolioSummary {
   dividends: number;
 }
 
-/** Data key for the comparison chart's aggregate unrealized line — distinct from any portfolio name (a user-controlled string). */
-export const UNREALIZED_AVG_KEY = "__unrealizedAvg";
-
 /**
  * One combined line per portfolio for the comparison chart: realized +
  * dividend return %, already a percentage against cost basis invested, so
  * unlike the old equity-curve approach nothing needs indexing/rebasing to
  * compare portfolios of very different sizes on one axis (see
- * performanceCurve.ts). Also merges a 4th, chart-wide line under
- * UNREALIZED_AVG_KEY: the simple (not money-weighted) average of each
- * portfolio's own unrealizedReturnPct at that date — same non-weighted
- * approach as mergeMonthlyPerformance below, kept as one extra line rather
- * than doubling every portfolio's series.
+ * performanceCurve.ts).
  */
 export function mergeComparisonCurves(portfolios: { name: string; curve: PerformancePoint[] }[]): Record<string, number | string>[] {
   const withCombined = portfolios.map((p) => ({
     name: p.name,
-    points: p.curve.map((pt) => ({ date: pt.date, value: pt.realizedReturnPct + pt.dividendReturnPct, unrealized: pt.unrealizedReturnPct })),
+    points: p.curve.map((pt) => ({ date: pt.date, value: pt.realizedReturnPct + pt.dividendReturnPct })),
   }));
   const allDates = Array.from(new Set(withCombined.flatMap((p) => p.points.map((pt) => pt.date)))).sort();
   return allDates.map((date) => {
     const row: Record<string, number | string> = { date };
-    const unrealizedValues: number[] = [];
     for (const p of withCombined) {
-      let last: { value: number; unrealized: number } | undefined;
+      let last: number | undefined;
       for (const pt of p.points) {
-        if (pt.date <= date) last = pt;
+        if (pt.date <= date) last = pt.value;
         else break;
       }
-      if (last !== undefined) {
-        row[p.name] = last.value;
-        unrealizedValues.push(last.unrealized);
-      }
-    }
-    if (unrealizedValues.length > 0) {
-      row[UNREALIZED_AVG_KEY] = unrealizedValues.reduce((a, b) => a + b, 0) / unrealizedValues.length;
+      if (last !== undefined) row[p.name] = last;
     }
     return row;
   });
@@ -324,16 +310,6 @@ export function DashboardPage() {
                     connectNulls
                   />
                 ))}
-                <Line
-                  type="monotone"
-                  dataKey={UNREALIZED_AVG_KEY}
-                  name={t("dashboard.portfolioComparisonUnrealizedLine")}
-                  stroke={CHART_TEXT_MUTED}
-                  strokeWidth={2}
-                  strokeDasharray="4 4"
-                  dot={false}
-                  connectNulls
-                />
               </LineChart>
             </ResponsiveContainer>
             <p className="mt-2 text-[11px] text-slate-500">

@@ -73,7 +73,7 @@ export interface AnalyticsResult {
   /** Max peak-to-trough decline (percentage points) of cumulative realized + dividend return — never a raw cash-flow ratio (see performanceDrawdown). */
   drawdown: number;
   capitalDeployment: number;
-  /** Cumulative {date, realizedReturnPct, dividendReturnPct, unrealizedReturnPct} series — all three against the running peak of open cost basis, i.e. the most capital ever deployed at once (see performanceCurve.ts). unrealizedReturnPct is 0 wherever `priceHistory` doesn't cover a held ticker/date. */
+  /** Cumulative {date, realizedReturnPct, dividendReturnPct} series — both against the running peak of open cost basis, i.e. the most capital ever deployed at once (see performanceCurve.ts). No historical price feed is needed for this curve. */
   performanceCurve: PerformancePoint[];
   /** Each period (real calendar month, not just months with activity) also carries unrealizedReturnPct — that period's own change in mark-to-market on still-open positions, from `priceHistory` — see performanceCurve.ts's bucketPerformance doc. */
   monthlyPerformance: PerformancePeriod[];
@@ -104,7 +104,7 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsResult {
   const totalEquity = cash + marketValue;
   const unrealizedPnl = marketValue - costBasis;
 
-  const curve = performanceCurve(trades, allocations, timelineEvents, priceHistory ?? {}, asOf);
+  const curve = performanceCurve(trades, allocations, timelineEvents, asOf);
   const lastPoint = curve[curve.length - 1];
   const portfolioReturn = (lastPoint?.realizedReturnPct ?? 0) + (lastPoint?.dividendReturnPct ?? 0);
   const unrealizedReturnPct = costBasis > 0 ? (unrealizedPnl / costBasis) * 100 : 0;

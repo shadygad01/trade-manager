@@ -33,7 +33,7 @@ vi.mock("@presentation/lib/data", () => ({
   },
 }));
 
-const { DashboardPage, mergeComparisonCurves, mergeMonthlyPerformance, UNREALIZED_AVG_KEY } = await import("./DashboardPage");
+const { DashboardPage, mergeComparisonCurves, mergeMonthlyPerformance } = await import("./DashboardPage");
 
 function renderPage() {
   return render(
@@ -68,19 +68,19 @@ describe("mergeComparisonCurves — Portfolio Comparison, without any equity-cur
       {
         name: "Old School",
         curve: [
-          { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0, unrealizedReturnPct: 3 },
-          { date: "2026-02-01", realizedReturnPct: 5, dividendReturnPct: 1, unrealizedReturnPct: 4 },
+          { date: "2026-01-01", realizedReturnPct: 0, dividendReturnPct: 0 },
+          { date: "2026-02-01", realizedReturnPct: 5, dividendReturnPct: 1 },
         ],
       },
       {
         name: "Long Positions",
-        curve: [{ date: "2026-01-15", realizedReturnPct: 2, dividendReturnPct: 0, unrealizedReturnPct: 1 }],
+        curve: [{ date: "2026-01-15", realizedReturnPct: 2, dividendReturnPct: 0 }],
       },
     ]);
     expect(data).toEqual([
-      { date: "2026-01-01", "Old School": 0, [UNREALIZED_AVG_KEY]: 3 },
-      { date: "2026-01-15", "Old School": 0, "Long Positions": 2, [UNREALIZED_AVG_KEY]: 2 },
-      { date: "2026-02-01", "Old School": 6, "Long Positions": 2, [UNREALIZED_AVG_KEY]: 2.5 },
+      { date: "2026-01-01", "Old School": 0 },
+      { date: "2026-01-15", "Old School": 0, "Long Positions": 2 },
+      { date: "2026-02-01", "Old School": 6, "Long Positions": 2 },
     ]);
   });
 });
