@@ -678,6 +678,15 @@ User-reported real bug, from a live screenshot: a buy-only ("long") portfolio's 
 - Manually purged ORAS's frozen entries from the committed `public/price-history.json` (kept only the one confirmed-real day) so the next scheduled price-fetch run re-backfills it cleanly under the new guard, rather than waiting for a ticker to naturally go through a zero-history state.
 - 4 new tests (417 total).
 
+### Post-sprint-8 fix — Win Rate/Profit Factor/etc. read as 0 on a buy-only ("long") portfolio, with no indication why
+
+User-reported real screenshot: a portfolio with 29 open trades and zero sells showed Win Rate +0.0%, Profit Factor 0.00, Avg Winner/Loser E£0.00, Avg Holding Time 0.0d, and Largest Winner/Loser E£0.00 — all indistinguishable from "you're breaking even," when the actual cause is that every one of those calculators (`winRate`, `profitFactor`, `avgWinner`, `avgLoser`, `holdingTime`, and `portfolioHealth`'s `largestWinner`/`largestLoser`) derives exclusively from `TradeAllocation`s (recorded sells) and returns `0` by construction when none exist yet — nothing had been sold, so there was nothing to be a bug.
+
+- **`AnalyticsResult.closedTradeCount`** (new, `AnalyticsEngine.ts`): `allocations.length`, exposed alongside the existing metrics so the UI can tell "genuinely zero" apart from "no closed trades yet" without re-deriving it.
+- **`AnalyticsPage`**: Win Rate, Profit Factor, Avg Winner, Avg Loser, Avg Holding Time, and the Portfolio Health "Largest Winner / Loser" tile now render `—` with a "No closed trades yet" sublabel when `closedTradeCount` is 0, instead of a misleading `0.0%`/`E£0.00`. The Strategy Attribution table's per-row Win Rate/Profit Factor cells do the same using the row's own `closedAllocationCount` (already computed by `strategyAttribution.ts`, just not read by the page before now).
+- Verified end-to-end against a real running build: a fresh portfolio with one open buy (no sell) shows `—`/"No closed trades yet" on every affected tile while Exposure, Cash Ratio, Realized Return (correctly 0.00%), and Unrealized Return still render normally; adding a sell on a second portfolio immediately replaced the placeholders with real figures (Win Rate 100%, Profit Factor Infinity, Largest Winner E£500.00).
+- 2 existing `computeAnalytics` tests extended to assert `closedTradeCount` (417 total, unchanged — no new test cases).
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.
