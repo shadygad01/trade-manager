@@ -101,10 +101,15 @@ export function BuyZoneChart({ trades, currentPrice }: BuyZoneChartProps) {
             // one) — that grows the date labels rightward off the SVG edge instead
             // of ending flush against the axis line. "end" is what orientation="left"
             // already defaults to, so pinning it explicitly keeps both sides correct.
-            tick={{ fill: CHART_TEXT_MUTED, fontSize: 11, textAnchor: "end" }}
+            tick={{ fill: CHART_TEXT_MUTED, fontSize: isRtl ? 10 : 11, textAnchor: "end" }}
             tickLine={false}
             axisLine={{ stroke: CHART_GRID }}
-            width={72}
+            // Arabic month names ("فبراير", "سبتمبر"...) run noticeably longer
+            // than English's 3-letter abbreviations ("Feb", "Sep"), so the same
+            // 72px column that fits "19 Feb 2026" on one line wraps Arabic's
+            // "19 فبراير 2026" onto two cramped lines with almost no breathing
+            // room — a smaller tick font plus a wider column fixes both at once.
+            width={isRtl ? 92 : 72}
           />
           <Tooltip
             contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
