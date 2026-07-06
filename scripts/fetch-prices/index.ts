@@ -19,6 +19,16 @@ const HISTORY_OUTPUT_PATH = path.resolve(
 /** How far back to backfill the very first time a ticker has no history yet. */
 const BACKFILL_RANGE = "2y";
 
+/**
+ * Below this many stored days, existing history is treated as an incomplete
+ * backfill rather than real data worth keeping — a full 2y backfill yields
+ * ~490 trading days, so anything drastically short of that is far more
+ * likely to be the day-by-day leftovers of a previous failed/frozen backfill
+ * attempt (see `needsBackfill`) than a stock that's only been trading a
+ * few weeks.
+ */
+const MIN_BACKFILLED_HISTORY_DAYS = 30;
+
 interface Quote {
   price: number;
   /** Market time of the quote (Yahoo's regularMarketTime) — after the EGX session this IS the official close time; during the session it's the live tick time. Absent when the provider doesn't report one. */
@@ -95,6 +105,22 @@ export function isFrozenHistory(history: Record<string, number>): boolean {
   for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
   const dominantCount = Math.max(...counts.values());
   return dominantCount / values.length >= 0.9;
+}
+
+/**
+ * True when stored history isn't worth keeping as-is and a fresh backfill
+ * should be attempted: missing, frozen, or suspiciously short (see
+ * `MIN_BACKFILLED_HISTORY_DAYS`) — the last case is what let a ticker whose
+ * 2y backfill once failed (or came back frozen) get permanently stuck on
+ * just its day-by-day appended quotes, since a handful of *real* recent
+ * entries used to count as "usable" and block every future retry.
+ */
+export function needsBackfill(existingHistory: Record<string, number> | undefined): boolean {
+  if (!existingHistory) return true;
+  const days = Object.keys(existingHistory).length;
+  if (days === 0) return true;
+  if (isFrozenHistory(existingHistory)) return true;
+  return days < MIN_BACKFILLED_HISTORY_DAYS;
 }
 
 async function fetchYahooHistory(ticker: string, range: string): Promise<Record<string, number>> {
@@ -219,15 +245,14 @@ async function main(): Promise<void> {
 
     // Day-by-day history accumulates going forward from each run (no extra
     // API calls — it reuses the quote already fetched above) and gets a
-    // one-time backfill the first time a ticker has no recorded history at
-    // all, via Yahoo's own range/interval bulk-history endpoint (same
-    // provider already used for current prices, not a new source). Also
-    // retried if the *stored* history itself turns out to be the frozen-data
-    // failure mode below — this self-heals a ticker that was corrupted by a
-    // previous run, without needing a manual one-off cleanup.
+    // backfill any time it's missing, frozen, or still suspiciously short
+    // (see `needsBackfill`) via Yahoo's own range/interval bulk-history
+    // endpoint (same provider already used for current prices, not a new
+    // source) — this is what actually self-heals a ticker whose backfill
+    // once failed, rather than getting stuck forever on a few real
+    // day-by-day entries that looked "good enough" to skip retrying.
     const existingHistory = history[ticker];
-    const existingIsUsable = existingHistory && Object.keys(existingHistory).length > 0 && !isFrozenHistory(existingHistory);
-    if (!existingIsUsable) {
+    if (needsBackfill(existingHistory)) {
       try {
         history[ticker] = await fetchYahooHistory(ticker, BACKFILL_RANGE);
       } catch (error) {

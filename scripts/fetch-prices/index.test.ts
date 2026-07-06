@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { historyDateKey, parseYahooHistory, isFrozenHistory } from "./index";
+import { historyDateKey, parseYahooHistory, isFrozenHistory, needsBackfill } from "./index";
 
 describe("historyDateKey", () => {
   it("extracts the UTC calendar day from an ISO timestamp", () => {
@@ -66,5 +66,32 @@ describe("isFrozenHistory", () => {
 
   it("does not flag a short history even if every point happens to match", () => {
     expect(isFrozenHistory({ a: 5, b: 5, c: 5 })).toBe(false);
+  });
+});
+
+describe("needsBackfill", () => {
+  it("flags a ticker with no stored history at all", () => {
+    expect(needsBackfill(undefined)).toBe(true);
+    expect(needsBackfill({})).toBe(true);
+  });
+
+  it("flags frozen history even if it has plenty of entries", () => {
+    const history = Object.fromEntries(Array.from({ length: 489 }, (_, i) => [`2024-07-${i}`, 71.05]));
+    expect(needsBackfill(history)).toBe(true);
+  });
+
+  it("flags a real full 2y backfill as usable and skips re-fetching", () => {
+    const history = Object.fromEntries(
+      Array.from({ length: 489 }, (_, i) => [`2024-07-${i}`, 71.05 + (i % 5)]),
+    );
+    expect(needsBackfill(history)).toBe(false);
+  });
+
+  it("flags a ticker stuck on only a couple of real day-by-day entries after a past backfill failure", () => {
+    // This is exactly ORAS's real observed state: the 2y backfill once came
+    // back frozen (or errored) and got discarded, leaving only the quotes
+    // appended on the last couple of runs — real prices, but nowhere near a
+    // real backfill, so it must not be treated as "good enough" forever.
+    expect(needsBackfill({ "2026-07-05": 700, "2026-07-06": 702 })).toBe(true);
   });
 });
