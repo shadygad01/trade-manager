@@ -5,12 +5,17 @@ import path from "node:path";
 
 import { cloudflare } from "@cloudflare/vite-plugin";
 
-// Served from https://shadygad01.github.io/trade-manager/ — base must match the repo name.
+// GitHub Pages serves this app from a /trade-manager/ subpath; Cloudflare
+// Workers serves it from the domain root (trade-manager.shady-gad-mb.workers.dev/).
+// GH_PAGES_BUILD is set explicitly by deploy-pages.yml's build step only —
+// every other build (local dev, `npm run build`, Cloudflare's own build
+// pipeline, this repo's CI smoke-test build) defaults to root, which is what
+// Cloudflare needs and is also the safe default for anything not GH Pages.
 // The Cloudflare plugin's configureServer hook assumes a real dev/build Vite
 // server and crashes inside Vitest's own Vite instance (process.env.VITEST is
 // Vitest's documented signal for guarding plugins like this).
 export default defineConfig({
-  base: "/trade-manager/",
+  base: process.env.GH_PAGES_BUILD ? "/trade-manager/" : "/",
   plugins: [react(), tailwindcss(), ...(process.env.VITEST ? [] : [cloudflare()])],
   resolve: {
     alias: {
