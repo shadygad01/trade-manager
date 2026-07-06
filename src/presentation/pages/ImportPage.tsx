@@ -264,7 +264,30 @@ export function ImportPage() {
 
         const result = await orchestrator.importFile(currentFile);
         const existingUpload = await repos.uploads.getByHash(result.fileHash);
-        const isDuplicateFile = Boolean(existingUpload);
+        let isDuplicateFile = Boolean(existingUpload);
+
+        // A file previously imported whose trades were later deleted should
+        // not remain permanently blocked by its hash. If any candidate from
+        // this file is no longer recorded in the ledger (e.g. a buy that was
+        // deleted), treat the file as new so those candidates can be
+        // re-imported. This fixes the case where deleting a trade and then
+        // re-uploading the original file shows everything as "skipped".
+        if (isDuplicateFile && result.candidates.length > 0) {
+          const [currentTrades, currentAllocations] = await Promise.all([
+            repos.trades.getAll(),
+            repos.allocations.getAll(),
+          ]);
+          const hasUnrecordedCandidate = result.candidates.some((candidate) => {
+            if (candidate.side === "BUY") {
+              return !findDuplicateBuyMatch(candidate, currentTrades);
+            }
+            return !findDuplicateSellMatch(candidate, currentAllocations);
+          });
+          if (hasUnrecordedCandidate) {
+            await repos.uploads.delete(existingUpload!.id);
+            isDuplicateFile = false;
+          }
+        }
 
         if (!isDuplicateFile) {
           const upload: Upload = {

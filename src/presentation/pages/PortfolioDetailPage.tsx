@@ -69,7 +69,19 @@ export function PortfolioDetailPage() {
     }
     setDeleteError(null);
     try {
+      // Read the trade before deleting so we know its ticker/portfolio
+      const trade = await repos.trades.getById(tradeId);
       await deleteTrade(repos, tradeId);
+      // Deleting a buy changes the position — any broker verification for
+      // this ticker is now stale (verified unit count no longer matches the
+      // ledger). Clear it so the app never shows a false "verified" badge.
+      if (trade) {
+        const verifs = await repos.verifications.getByPortfolio(trade.portfolioId);
+        const stale = verifs.filter(
+          (v) => normalizeTicker(v.ticker) === normalizeTicker(trade.ticker)
+        );
+        await Promise.all(stale.map((v) => repos.verifications.delete(v.id)));
+      }
       setRefreshKey((k) => k + 1);
     } catch (e) {
       setDeleteError({ tradeId, message: e instanceof Error ? e.message : t("portfolioDetail.deleteTradeFailed") });
