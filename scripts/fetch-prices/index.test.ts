@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { historyDateKey, parseYahooHistory } from "./index";
+import { historyDateKey, parseYahooHistory, isFrozenHistory } from "./index";
 
 describe("historyDateKey", () => {
   it("extracts the UTC calendar day from an ISO timestamp", () => {
@@ -41,5 +41,30 @@ describe("parseYahooHistory", () => {
   it("returns an empty map for a malformed or missing chart result", () => {
     expect(parseYahooHistory({})).toEqual({});
     expect(parseYahooHistory({ chart: { result: [] } })).toEqual({});
+  });
+});
+
+describe("isFrozenHistory", () => {
+  it("flags a two-year backfill that came back as a single repeated value", () => {
+    const history = Object.fromEntries(Array.from({ length: 489 }, (_, i) => [`2024-07-${i}`, 71.05]));
+    expect(isFrozenHistory(history)).toBe(true);
+  });
+
+  it("flags a stored history that's frozen except for one real recent day appended since", () => {
+    const history = Object.fromEntries(Array.from({ length: 489 }, (_, i) => [`2024-07-${i}`, 71.05]));
+    history["2026-07-05"] = 718.65;
+    expect(isFrozenHistory(history)).toBe(true);
+  });
+
+  it("does not flag a genuinely illiquid stock that repeats its price on many no-trade days", () => {
+    const history: Record<string, number> = {};
+    for (let i = 0; i < 500; i++) {
+      history[`day-${i}`] = i % 3 === 0 ? 0.67 : 0.6 + (i % 7) * 0.01;
+    }
+    expect(isFrozenHistory(history)).toBe(false);
+  });
+
+  it("does not flag a short history even if every point happens to match", () => {
+    expect(isFrozenHistory({ a: 5, b: 5, c: 5 })).toBe(false);
   });
 });

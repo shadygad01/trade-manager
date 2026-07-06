@@ -75,6 +75,28 @@ export function parseYahooHistory(data: unknown): Record<string, number> {
   return history;
 }
 
+/**
+ * Yahoo's chart endpoint can "succeed" (200 OK) while nearly every close in
+ * the range is the exact same frozen value — the same stale-provider failure
+ * mode already handled for the live quote via `isFresh`, just showing up in
+ * the bulk-history endpoint instead (observed for real: one ticker's entire
+ * two-year backfill came back as a single repeated price, with only the
+ * day's live-quote append afterward ever differing from it). A dominant
+ * value covering almost every point is never a real EGX trading history —
+ * even a thinly-traded stock moves at least a few times in two years — so
+ * this is treated as corrupt rather than persisted/kept as gospel. The
+ * threshold is well above the most flat-lined *real* ticker on record (~30%
+ * repeats for a genuinely illiquid stock) to avoid flagging real flatness.
+ */
+export function isFrozenHistory(history: Record<string, number>): boolean {
+  const values = Object.values(history);
+  if (values.length < 10) return false;
+  const counts = new Map<number, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  const dominantCount = Math.max(...counts.values());
+  return dominantCount / values.length >= 0.9;
+}
+
 async function fetchYahooHistory(ticker: string, range: string): Promise<Record<string, number>> {
   const response = await fetch(`${YAHOO_CHART_URL(ticker)}?range=${range}&interval=1d`, {
     headers: { "User-Agent": "Mozilla/5.0" },
@@ -82,7 +104,11 @@ async function fetchYahooHistory(ticker: string, range: string): Promise<Record<
   if (!response.ok) {
     throw new Error(`Yahoo responded ${response.status} for ${ticker} history`);
   }
-  return parseYahooHistory(await response.json());
+  const history = parseYahooHistory(await response.json());
+  if (isFrozenHistory(history)) {
+    throw new Error(`Yahoo returned a frozen (single-value) history for ${ticker} — discarding`);
+  }
+  return history;
 }
 
 async function tradingViewScan(ticker: string, columns: string[]): Promise<(number | null)[]> {
@@ -195,13 +221,21 @@ async function main(): Promise<void> {
     // API calls — it reuses the quote already fetched above) and gets a
     // one-time backfill the first time a ticker has no recorded history at
     // all, via Yahoo's own range/interval bulk-history endpoint (same
-    // provider already used for current prices, not a new source).
-    if (!history[ticker] || Object.keys(history[ticker]).length === 0) {
+    // provider already used for current prices, not a new source). Also
+    // retried if the *stored* history itself turns out to be the frozen-data
+    // failure mode below — this self-heals a ticker that was corrupted by a
+    // previous run, without needing a manual one-off cleanup.
+    const existingHistory = history[ticker];
+    const existingIsUsable = existingHistory && Object.keys(existingHistory).length > 0 && !isFrozenHistory(existingHistory);
+    if (!existingIsUsable) {
       try {
         history[ticker] = await fetchYahooHistory(ticker, BACKFILL_RANGE);
       } catch (error) {
         console.warn(`[fetch-prices] Could not backfill history for ${ticker}: ${(error as Error).message}`);
-        history[ticker] = history[ticker] ?? {};
+        // Never keep a known-corrupt stored series around just because the
+        // retry also failed — no history (0%, never fabricated) is safer
+        // than a frozen fake price feeding every calculation downstream.
+        history[ticker] = existingHistory && !isFrozenHistory(existingHistory) ? existingHistory : {};
       }
     }
     if (quote !== undefined) {
