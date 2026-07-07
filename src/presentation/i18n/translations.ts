@@ -565,6 +565,7 @@ export const en: Dict = {
     needsScreenshotBanner: 'No broker "My Position" screenshot uploaded for {{ticker}} yet — upload one in Step 1 so its share count can be verified before anything is allocated to a portfolio. Current net from the rows below: {{netShares}} shares — if this position is fully closed, that needs to reach exactly 0 to verify automatically, with no screenshot at all.{{suffix}}',
     needsScreenshotSuffixHasOrders: " (This ticker has Orders-history rows, but not every transaction below is matched by one — rows below flagged \"No matching order\" are the likely place a missing/misread/duplicate transaction is hiding; a position screenshot also settles it.)",
     needsScreenshotSuffixNoOrders: " An account-wide Orders history screenshot also works when it confirms every transaction below.",
+    lastBalancedHint: "Suggestion: every row through {{date}} already nets to exactly 0 — the gap starts in whatever's dated after that, so start your search there.",
     placeholderReplaceBanner:
       "{{ticker}}'s recorded position is an opening-balance placeholder with no real dates — and this batch carries its real dated transactions, adding up to the same {{verified}} the broker shows. Replace the placeholder with them? Its cost refunds to cash, then the rows below verify and confirm as usual.",
     replacePlaceholder: "Replace placeholder with real rows",
@@ -1171,6 +1172,7 @@ export const ar: Dict = {
     needsScreenshotBanner: 'لم تُرفع لقطة شاشة "مركزي" من الوسيط لـ {{ticker}} بعد — ارفع واحدة في الخطوة 1 حتى يمكن التحقق من عدد أسهمه قبل تخصيص أي شيء لمحفظة. الصافي الحالي من الصفوف أدناه: {{netShares}} سهم — لو هذا المركز مغلق بالكامل، لازم يصل هذا الرقم للصفر بالضبط عشان يتحقق تلقائيًا من غير أي لقطة شاشة خالص.{{suffix}}',
     needsScreenshotSuffixHasOrders: " (لهذا الرمز صفوف من سجل الأوامر، لكن ليست كل معاملة أدناه مطابقة بواحدة منها — الصفوف المعلَّمة \"لا يوجد أمر مطابق\" أدناه هي على الأرجح مكان المعاملة الناقصة أو المقروءة خطأً أو المكررة؛ لقطة شاشة المركز تحسم الأمر أيضًا.)",
     needsScreenshotSuffixNoOrders: " تعمل أيضًا لقطة شاشة سجل الأوامر على مستوى الحساب عندما تؤكد كل معاملة أدناه.",
+    lastBalancedHint: "اقتراح: كل الصفوف حتى {{date}} صافيها بالظبط صفر — الفجوة تبدأ فيما هو مؤرَّخ بعد ذلك، فابدأ البحث هناك.",
     placeholderReplaceBanner:
       "مركز {{ticker}} المسجّل هو بديل مؤقت لرصيد افتتاحي بدون تواريخ حقيقية — وهذه الدفعة تحمل معاملاته الحقيقية المؤرخة، والتي مجموعها {{verified}} كما يظهر عند الوسيط. استبدال البديل المؤقت بها؟ تُرد تكلفته إلى النقد، ثم تتحقق الصفوف أدناه وتؤكَّد كالمعتاد.",
     replacePlaceholder: "استبدال البديل المؤقت بصفوف حقيقية",

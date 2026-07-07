@@ -168,6 +168,47 @@ describe("TickerGroupCard — no-verification banner surfaces the current net sh
     );
     expect(screen.getByText(/Current net from the rows below: 236 shares/)).toBeInTheDocument();
   });
+
+  it("also suggests the last fully-balanced date, narrowing the search to whatever's dated after it (the real ISPH shape)", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number, date: string): CandidateEntry {
+      return { key, candidate: { ticker: "ISPH", side, shares, price: 2.5, date, confidence: "high" } };
+    }
+    render(
+      <TickerGroupCard
+        ticker="ISPH"
+        group={{
+          buys: [entry("b1", "BUY", 2000, "2023-01-05"), entry("b2", "BUY", 450, "2024-03-28")],
+          sells: [entry("s1", "SELL", 2000, "2023-01-09")],
+          verifications: [],
+          dividends: [],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: 450 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/Current net from the rows below: 450 shares/)).toBeInTheDocument();
+    expect(screen.getByText(/every row through .* already nets to exactly 0/)).toBeInTheDocument();
+  });
 });
 
 describe("TickerGroupCard — portfolio picker for a brand-new ticker in more than one portfolio", () => {

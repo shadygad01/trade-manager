@@ -22,6 +22,7 @@ import {
   findWrongTickerHintsFromOrders,
 } from "@application/services/orderEvidence";
 import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "@application/services/mismatchResolver";
+import { findLastBalancedDate } from "@application/services/netShareTimeline";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -1518,6 +1519,23 @@ export function TickerGroupCard({
   const tickerHasFulfilledOrders = orderEvidences.some((e) => e.evidence.status === "fulfilled");
   const highlightUnmatchedByOrders =
     tickerHasFulfilledOrders && (matchStatus?.reason === "mismatch" || matchStatus?.reason === "no-verification");
+  /**
+   * A "no-verification" ticker's gap is almost always confined to a
+   * specific stretch of dates, not spread evenly across the whole history
+   * (see findLastBalancedDate) — narrows "which transaction is wrong"
+   * beyond just badging every unconfirmed row, deterministically and
+   * without a combinatorial search.
+   */
+  const lastBalanced = useMemo(() => {
+    if (matchStatus?.reason !== "no-verification") return undefined;
+    const stillPendingRows = [...group.buys, ...group.sells].filter(
+      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    );
+    return findLastBalancedDate({
+      rows: stillPendingRows.map((e) => ({ key: e.key, side: e.candidate.side, shares: e.candidate.shares, date: e.candidate.date })),
+      existingRemainingShares: matchStatus.existingRemainingShares ?? 0,
+    });
+  }, [group.buys, group.sells, matchStatus, addedKeys, skippedKeys, dismissedKeys]);
   // Only meaningful for the "no-verification" shortfall banner below — a
   // pending Sell total that exceeds existing-ledger + pending-Buy shares
   // means the ledger is missing Buy history, not missing a screenshot.
@@ -1672,13 +1690,18 @@ export function TickerGroupCard({
         </div>
       ) : matchStatus?.reason === "no-verification" ? (
         <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
-          {t("importPage.needsScreenshotBanner", {
-            ticker,
-            netShares: formatShares(matchStatus.netShares),
-            suffix: tickerHasFulfilledOrders
-              ? t("importPage.needsScreenshotSuffixHasOrders")
-              : t("importPage.needsScreenshotSuffixNoOrders"),
-          })}
+          <p>
+            {t("importPage.needsScreenshotBanner", {
+              ticker,
+              netShares: formatShares(matchStatus.netShares),
+              suffix: tickerHasFulfilledOrders
+                ? t("importPage.needsScreenshotSuffixHasOrders")
+                : t("importPage.needsScreenshotSuffixNoOrders"),
+            })}
+          </p>
+          {lastBalanced ? (
+            <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
+          ) : null}
         </div>
       ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded && placeholderReplacement ? (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
