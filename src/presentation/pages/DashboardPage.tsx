@@ -30,7 +30,7 @@ import { PageHeader } from "@presentation/components/PageHeader";
 import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatMoney, formatPercent, signClass } from "@presentation/lib/format";
-import { CATEGORICAL, categoricalColor, CHART_AXIS, CHART_GRID, CHART_TEXT_MUTED, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
+import { CATEGORICAL, categoricalColor, CHART_AXIS, CHART_GRID, CHART_TEXT_MUTED, CHART_TEXT_SECONDARY, CHART_SURFACE, STATUS } from "@presentation/lib/chartColors";
 import { useT } from "@presentation/i18n/translations";
 import { useLanguage } from "@presentation/i18n/language";
 
@@ -295,10 +295,11 @@ export function DashboardPage() {
                 />
                 <Tooltip
                   contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
-                  labelStyle={{ color: "#c3c2b7" }}
+                  labelStyle={{ color: CHART_TEXT_SECONDARY }}
+                  itemStyle={{ color: CHART_TEXT_SECONDARY }}
                   formatter={(v: number) => formatPercent(v)}
                 />
-                <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+                <Legend wrapperStyle={{ fontSize: 12, color: CHART_TEXT_SECONDARY }} />
                 {totals.comparedPortfolios.map((d, i) => (
                   <Line
                     key={d.portfolio.id}
@@ -338,9 +339,11 @@ export function DashboardPage() {
                     <Cell key={entry.name} fill={CATEGORICAL[i % CATEGORICAL.length]} stroke={CHART_SURFACE} strokeWidth={2} />
                   ))}
                 </Pie>
-                <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+                <Legend wrapperStyle={{ fontSize: 12, color: CHART_TEXT_SECONDARY }} />
                 <Tooltip
                   contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
+                  labelStyle={{ color: CHART_TEXT_SECONDARY }}
+                  itemStyle={{ color: CHART_TEXT_SECONDARY }}
                   formatter={(v: number) => formatMoney(v)}
                 />
               </PieChart>
@@ -375,6 +378,8 @@ export function DashboardPage() {
                 />
                 <Tooltip
                   contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
+                  labelStyle={{ color: CHART_TEXT_SECONDARY }}
+                  itemStyle={{ color: CHART_TEXT_SECONDARY }}
                   formatter={(v: number) => formatPercent(v)}
                 />
                 <Bar dataKey="returnPct" name="Realized + Dividend %" radius={[3, 3, 0, 0]}>
@@ -414,9 +419,11 @@ export function DashboardPage() {
                     />
                   ))}
                 </Pie>
-                <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+                <Legend wrapperStyle={{ fontSize: 12, color: CHART_TEXT_SECONDARY }} />
                 <Tooltip
                   contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
+                  labelStyle={{ color: CHART_TEXT_SECONDARY }}
+                  itemStyle={{ color: CHART_TEXT_SECONDARY }}
                   formatter={(v: number) => formatMoney(v)}
                 />
               </PieChart>

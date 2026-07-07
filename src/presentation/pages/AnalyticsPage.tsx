@@ -19,7 +19,7 @@ import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { StatTile } from "@presentation/components/StatTile";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { formatPercent, signClass } from "@presentation/lib/format";
-import { CATEGORICAL, CHART_GRID, CHART_SURFACE, CHART_TEXT_MUTED } from "@presentation/lib/chartColors";
+import { CATEGORICAL, CHART_GRID, CHART_SURFACE, CHART_TEXT_MUTED, CHART_TEXT_SECONDARY } from "@presentation/lib/chartColors";
 import { useT } from "@presentation/i18n/translations";
 import { useLanguage } from "@presentation/i18n/language";
 
@@ -171,9 +171,11 @@ export function AnalyticsPage() {
               />
               <Tooltip
                 contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
+                labelStyle={{ color: CHART_TEXT_SECONDARY }}
+                itemStyle={{ color: CHART_TEXT_SECONDARY }}
                 formatter={(v: number) => formatPercent(v)}
               />
-              <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+              <Legend wrapperStyle={{ fontSize: 12, color: CHART_TEXT_SECONDARY }} />
               <Line type="monotone" dataKey="realizedReturnPct" stroke={CATEGORICAL[0]} strokeWidth={2} dot={false} name="Realized %" />
               <Line type="monotone" dataKey="dividendReturnPct" stroke={CATEGORICAL[1]} strokeWidth={2} dot={false} name="Dividend %" />
             </LineChart>
@@ -283,9 +285,11 @@ export function AnalyticsPage() {
               />
               <Tooltip
                 contentStyle={{ background: CHART_SURFACE, border: "1px solid #293548", borderRadius: 8 }}
+                labelStyle={{ color: CHART_TEXT_SECONDARY }}
+                itemStyle={{ color: CHART_TEXT_SECONDARY }}
                 formatter={(v: number) => formatPercent(v)}
               />
-              <Legend wrapperStyle={{ fontSize: 12, color: "#c3c2b7" }} />
+              <Legend wrapperStyle={{ fontSize: 12, color: CHART_TEXT_SECONDARY }} />
               <Bar dataKey="realizedReturnPct" name="Realized %" stackId="month" fill={CATEGORICAL[0]} radius={[3, 3, 0, 0]} />
               <Bar dataKey="dividendReturnPct" name="Dividend %" stackId="month" fill={CATEGORICAL[1]} radius={[3, 3, 0, 0]} />
               <Bar dataKey="unrealizedReturnPct" name="Unrealized %" stackId="month" fill={CATEGORICAL[2]} radius={[3, 3, 0, 0]} />
