@@ -16,7 +16,7 @@ import {
 } from "@application/services/PortfolioService";
 import { reconcilePositions, suggestDuplicateTradeIds } from "@application/services/reconciliation";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
-import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
+import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { PriceFreshness } from "@presentation/components/PriceFreshness";
@@ -32,6 +32,7 @@ type CorporateActionKind = "split" | "rightsIssue" | null;
 
 export function PortfolioDetailPage() {
   const t = useT();
+  const trackingStartDate = useTrackingStartDate();
   const { id } = useParams<{ id: string }>();
   const [cashModal, setCashModal] = useState<CashModalKind>(null);
   const [corporateActionOpen, setCorporateActionOpen] = useState(false);
@@ -441,7 +442,7 @@ export function PortfolioDetailPage() {
                       })}
                     </span>
                     <p className="text-[11px] text-amber-300/70">
-                      {t("portfolioDetail.verifiedNoTradesHint", { date: TRACKING_START_DATE })}
+                      {t("portfolioDetail.verifiedNoTradesHint", { date: trackingStartDate })}
                     </p>
                     {deleteError && deleteError.tradeId === r.verificationId ? (
                       <p className="mt-1 text-[11px] text-rose-400">{deleteError.message}</p>
@@ -562,6 +563,7 @@ function CashModal({
   onClose: () => void;
 }) {
   const t = useT();
+  const trackingStartDate = useTrackingStartDate();
   const [amount, setAmount] = useState("");
   const [ticker, setTicker] = useState("");
   const [date, setDate] = useState("");
@@ -655,7 +657,7 @@ function CashModal({
               {t("portfolioDetail.datePaidOptional")}
               <input
                 type="date"
-                min={TRACKING_START_DATE}
+                min={trackingStartDate}
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
                 className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"

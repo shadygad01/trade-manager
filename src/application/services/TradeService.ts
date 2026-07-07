@@ -6,7 +6,7 @@ import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { KNOWN_EGX_TICKERS, tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
-import { TRACKING_START_DATE, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
+import { getTrackingStartDate, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
 
 function companyNameForTicker(ticker: string): string | undefined {
@@ -15,7 +15,7 @@ function companyNameForTicker(ticker: string): string | undefined {
 
 function assertWithinTrackingRange(executionDate: string): void {
   if (isBeforeTrackingStart(executionDate)) {
-    throw new Error(`Transactions before ${TRACKING_START_DATE} are not tracked: got ${executionDate}`);
+    throw new Error(`Transactions before ${getTrackingStartDate()} are not tracked: got ${executionDate}`);
   }
 }
 

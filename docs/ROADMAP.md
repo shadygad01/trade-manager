@@ -737,6 +737,18 @@ User-reported follow-up, from a live screenshot: `PortfolioDetailPage`'s "Total 
 - No calculator/test changes needed (this was presentation-only); 425 tests still pass.
 - Verified end-to-end against a real running build: the portfolio detail page now shows exactly 3 stat tiles (Cash Balance, Invested (Market Value), Unrealized P/L) with no combined figure.
 
+### Post-Sprint-9 fix — the Import page's "ignore before 2026-01-01" filter is now a user-selectable start-year picker
+
+Direct user request: the OCR import cutoff was a fixed `TRACKING_START_DATE = "2026-01-01"` constant, silently dropping any real transaction from before it — a real problem for anyone with older broker history. Asked whether this should be an Import-page-only filter or a genuine app-wide change; user chose the latter (recommended, since the old constant also gated manual entry — a value the OCR filter alone couldn't have honored without failing at commit time).
+
+- **`trackingWindow.ts`** (domain): `TRACKING_START_DATE` constant replaced by a mutable module-level value with `getTrackingStartDate()`/`setTrackingStartDate()`, defaulting to the old `"2026-01-01"` so existing behavior is unchanged until a user actually picks a different year. `isBeforeTrackingStart()` now reads the live value.
+- **`trackingStartDateStore.ts`** (new, presentation): reactive `localStorage`-backed wrapper (`useTrackingStartDate()`, mirrors `language.ts`'s pattern) that calls the domain setter directly, so `TradeService`/`PortfolioService`'s validation (no React dependency) sees the change immediately too, not just the UI.
+- **`ImportPage`**: new "Import transactions starting from" year dropdown (2020 → current year) in the Step 1 box, defaulting to 2026; changing it re-filters the pending pool immediately (existing stale-candidate purge effect now also depends on the tracking start date) and takes effect on the next file parsed.
+- **`ThndrParser`/`CsvStatementParser`**: `trackedSince` constructor param is now an optional override (tests still pin exact dates); with no override, the cutoff resolves live via `defaultTrackedSince()` on every parse instead of being frozen at construction time — necessary because `ImportOrchestrator`'s parser instances are memoized as a singleton.
+- **`TradesPage`/`PortfolioDetailPage`/`SellAllocationForm`**: every manual-entry date input's `min` attribute now reads the live `useTrackingStartDate()` value instead of the old fixed constant.
+- 445 tests passing (no test changes needed — all existing parser tests already pinned explicit override dates); typecheck and `arch:check` clean.
+- Verified end-to-end against a real running build (English and Arabic): the dropdown lists 2026→2020, defaults to 2026, and picking 2021 updates the hint text ("Transactions before 2021-01-01 are ignored…") live with no console errors.
+
 ## Next recommended sprint
 
 1. **Split/Rights Issue automatic rebasing**: still deliberately out of scope (see `PortfolioService.recordSplit`/`recordRightsIssue`); revisit if a real user hits this.

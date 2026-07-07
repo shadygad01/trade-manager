@@ -113,14 +113,17 @@ const EMPTY_ROWS_RESULT: OrderRowsParseResult = {
 
 export class CsvStatementParser implements BrokerParser {
   readonly id = "csv-generic";
-  private readonly trackedSince: string;
+  // Left undefined by default so the cutoff is resolved fresh on every call
+  // (via defaultTrackedSince()) rather than frozen at construction time —
+  // see ThndrParser's identical trackedSinceOverride for why.
+  private readonly trackedSinceOverride?: string;
 
-  constructor(trackedSince: string = defaultTrackedSince()) {
-    this.trackedSince = trackedSince;
+  constructor(trackedSince?: string) {
+    this.trackedSinceOverride = trackedSince;
   }
 
   isWithinTrackedRange(dateIso: string): boolean {
-    return isWithinTrackedRange(dateIso, this.trackedSince);
+    return isWithinTrackedRange(dateIso, this.trackedSinceOverride ?? defaultTrackedSince());
   }
 
   looksLikeOwnDocument(text: string): boolean {
