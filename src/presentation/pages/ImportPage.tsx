@@ -27,6 +27,7 @@ import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
 import { isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
+import { useTrackingStartDate, trackingStartDateStore } from "@presentation/lib/trackingStartDateStore";
 import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
 import {
   importSession,
@@ -104,6 +105,7 @@ const inFlightKeys = new Set<string>();
  */
 export function ImportPage() {
   const t = useT();
+  const trackingStartDate = useTrackingStartDate();
   const [dragOver, setDragOver] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
   const [queueProgress, setQueueProgress] = useState<{ index: number; total: number; fileName: string } | null>(null);
@@ -118,15 +120,17 @@ export function ImportPage() {
 
   /**
    * Every extraction path already filters a Buy/Sell candidate dated before
-   * TRACKING_START_DATE at parse time (see trackedDateRange.ts) — but
-   * ThndrParser's dividend extraction didn't, until a real out-of-range
-   * dividend (a 2024 payout, tracking starts 2026-01-01) reached this pool,
-   * sat there looking normal, and only surfaced as a thrown error the
-   * moment the user tried to confirm it. Silently dropping any out-of-range
-   * candidate/dividend still sitting in the pool — regardless of which
-   * extraction path let it through, including ones already stuck in a
-   * session from before this fix — means there's never a row that can only
-   * ever fail to commit.
+   * the configured tracking start date at parse time (see
+   * trackedDateRange.ts) — but ThndrParser's dividend extraction didn't,
+   * until a real out-of-range dividend reached this pool, sat there looking
+   * normal, and only surfaced as a thrown error the moment the user tried to
+   * confirm it. Silently dropping any out-of-range candidate/dividend still
+   * sitting in the pool — regardless of which extraction path let it
+   * through, including ones already stuck in a session from before this fix
+   * — means there's never a row that can only ever fail to commit. Also
+   * re-runs whenever the user lowers/raises the start date on this page, so
+   * rows that fall outside the newly-picked range are dropped immediately
+   * rather than surviving until the next file is imported.
    */
   useEffect(() => {
     const hasStaleCandidates = pendingCandidates.some((e) => isBeforeTrackingStart(e.candidate.date));
@@ -137,7 +141,7 @@ export function ImportPage() {
       pendingCandidates: prev.pendingCandidates.filter((e) => !isBeforeTrackingStart(e.candidate.date)),
       pendingDividends: prev.pendingDividends.filter((e) => !isBeforeTrackingStart(e.dividend.date)),
     }));
-  }, [pendingCandidates, pendingDividends]);
+  }, [pendingCandidates, pendingDividends, trackingStartDate]);
 
   const addedKeys = useMemo(() => new Set(session.addedKeys), [session.addedKeys]);
   const acceptedKeys = useMemo(() => new Set(session.acceptedKeys), [session.acceptedKeys]);
@@ -1138,6 +1142,13 @@ export function ImportPage() {
 
   const totalPending = pendingCandidates.length + pendingVerifications.length + pendingDividends.length;
 
+  const currentYear = new Date().getFullYear();
+  const startYearOptions = useMemo(() => {
+    const years: number[] = [];
+    for (let y = currentYear; y >= 2020; y--) years.push(y);
+    return years;
+  }, [currentYear]);
+
   return (
     <div>
       <PageHeader
@@ -1171,6 +1182,26 @@ export function ImportPage() {
 
       <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
         <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("importPage.step1Title")}</h3>
+
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
+          <label htmlFor="import-start-year" className="font-medium text-slate-300">
+            {t("importPage.startDateLabel")}
+          </label>
+          <select
+            id="import-start-year"
+            value={trackingStartDate.slice(0, 4)}
+            onChange={(e) => trackingStartDateStore.set(`${e.target.value}-01-01`)}
+            className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-sm text-slate-100"
+          >
+            {startYearOptions.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+          </select>
+          <span>{t("importPage.startDateHint", { date: trackingStartDate })}</span>
+        </div>
+
         <div
           onDragOver={(e) => {
             e.preventDefault();

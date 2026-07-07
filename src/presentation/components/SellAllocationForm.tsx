@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { recordSell } from "@application/services/TradeService";
 import { repos } from "@presentation/lib/data";
-import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
+import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { RecordSellInput } from "@presentation/lib/types";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
@@ -31,6 +31,7 @@ interface SellAllocationFormProps {
  */
 export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, initial }: SellAllocationFormProps) {
   const t = useT();
+  const trackingStartDate = useTrackingStartDate();
   const normalizedTicker = normalizeTicker(ticker);
   const openTrades = useLiveQuery(async () => {
     const trades = await repos.trades.getByPortfolio(portfolioId);
@@ -289,7 +290,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
           {t("sellForm.executionDate")}
           <input
             type="date"
-            min={TRACKING_START_DATE}
+            min={trackingStartDate}
             value={executionDate}
             onChange={(e) => setExecutionDate(e.target.value)}
             className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"

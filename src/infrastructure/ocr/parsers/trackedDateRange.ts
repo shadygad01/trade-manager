@@ -1,8 +1,13 @@
-import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
+import { getTrackingStartDate } from "@domain/value-objects/trackingWindow";
 
-/** Shared tracked-date-range helper for BrokerParser implementations. */
+/**
+ * Shared tracked-date-range helper for BrokerParser implementations. Reads
+ * the current tracking start date live (not captured once) so a parser
+ * constructed without an explicit override always reflects the latest
+ * Import page selection, even for a parser instance created earlier.
+ */
 export function defaultTrackedSince(): string {
-  return TRACKING_START_DATE;
+  return getTrackingStartDate();
 }
 
 // A trade dated after "tomorrow" (a one-day grace window for timezone skew)

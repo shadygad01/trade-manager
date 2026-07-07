@@ -766,15 +766,19 @@ const looksLikePositionVerificationPattern = /my\s+current\s+position/i;
  */
 export class ThndrParser implements BrokerParser {
   readonly id = "thndr";
-  private readonly trackedSince: string;
+  // Left undefined by default so the cutoff is resolved fresh on every call
+  // (via defaultTrackedSince()) rather than frozen at construction time —
+  // the ImportOrchestrator's parser instances are memoized, and the tracking
+  // start date can change later from the Import page's start-date picker.
+  private readonly trackedSinceOverride?: string;
 
-  constructor(trackedSince: string = defaultTrackedSince()) {
-    this.trackedSince = trackedSince;
+  constructor(trackedSince?: string) {
+    this.trackedSinceOverride = trackedSince;
   }
 
   /** True for dates on/after the configured cutoff and not more than one day in the future. */
   isWithinTrackedRange(dateIso: string): boolean {
-    return isWithinTrackedRange(dateIso, this.trackedSince);
+    return isWithinTrackedRange(dateIso, this.trackedSinceOverride ?? defaultTrackedSince());
   }
 
   looksLikeOwnDocument(text: string): boolean {

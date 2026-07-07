@@ -3,7 +3,7 @@ import { createTimelineEvent, type TimelineEvent } from "@domain/entities/Timeli
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
-import { TRACKING_START_DATE, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
+import { getTrackingStartDate, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
 
 export interface CreatePortfolioInput {
@@ -93,7 +93,7 @@ export async function recordDividend(
     throw new Error("dividend amount must be positive");
   }
   if (input.date && isBeforeTrackingStart(input.date)) {
-    throw new Error(`Transactions before ${TRACKING_START_DATE} are not tracked: got ${input.date}`);
+    throw new Error(`Transactions before ${getTrackingStartDate()} are not tracked: got ${input.date}`);
   }
   const portfolio = await requirePortfolio(repos, portfolioId);
   const updated = { ...portfolio, cash: Money.from(portfolio.cash).add(Money.from(input.amount)).toNumber() };

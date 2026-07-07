@@ -7,7 +7,7 @@ import { recordBuy, moveTrade, deleteTrade, correctTradeExecutionDate } from "@a
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { getTradeStatus } from "@domain/entities/Trade";
-import { TRACKING_START_DATE } from "@domain/value-objects/trackingWindow";
+import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import { PageHeader } from "@presentation/components/PageHeader";
@@ -21,6 +21,7 @@ import { useT } from "@presentation/i18n/translations";
 
 export function TradesPage() {
   const t = useT();
+  const trackingStartDate = useTrackingStartDate();
   const { id: portfolioId } = useParams<{ id: string }>();
   const [buyOpen, setBuyOpen] = useState(false);
   const [sellOpen, setSellOpen] = useState(false);
@@ -212,7 +213,7 @@ export function TradesPage() {
                               type="date"
                               autoFocus
                               value={editingDate.value}
-                              min={TRACKING_START_DATE}
+                              min={trackingStartDate}
                               max={new Date().toISOString().slice(0, 10)}
                               onChange={(e) => setEditingDate({ tradeId: trade.id, value: e.target.value })}
                               onKeyDown={(e) => {
@@ -443,6 +444,7 @@ function MoveTradeModal({
 
 export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: string; open: boolean; onClose: () => void }) {
   const t = useT();
+  const trackingStartDate = useTrackingStartDate();
   const [ticker, setTicker] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [sector, setSector] = useState("");
@@ -604,7 +606,7 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
             {t("trades.executionDate")}
             <input
               type="date"
-              min={TRACKING_START_DATE}
+              min={trackingStartDate}
               value={executionDate}
               onChange={(e) => setExecutionDate(e.target.value)}
               className="block w-full rounded border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm text-slate-100"
