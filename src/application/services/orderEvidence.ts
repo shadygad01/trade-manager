@@ -98,6 +98,37 @@ export function findOrderConfirmedKeys(
 }
 
 /**
+ * The inverse of findOrderConfirmedKeys: returns fulfilled evidence rows that
+ * had NO matching pending candidate — grouped by normalized ticker. These are
+ * "orphaned" rows: the broker's history records a transaction that isn't
+ * represented by any candidate in the current batch. This can mean the trade
+ * was already on the ledger from a prior import, or it represents a
+ * historical buy that was later sold and is simply missing from the ledger.
+ * Either way the user should be told about it so they can decide whether to
+ * upload a Statement/Invoice to capture the full history.
+ */
+export function findOrphanedFulfilledEvidence(
+  pendingEntries: { key: string; candidate: ParsedTradeCandidate }[],
+  evidences: ParsedOrderEvidence[],
+): Map<string, ParsedOrderEvidence[]> {
+  const available = evidences.filter((e) => e.status === "fulfilled").map((e) => ({ evidence: e, used: false }));
+  for (const entry of pendingEntries) {
+    const match = available.find((a) => !a.used && evidenceMatchesCandidate(a.evidence, entry.candidate));
+    if (match) match.used = true;
+  }
+  const orphaned = new Map<string, ParsedOrderEvidence[]>();
+  for (const { evidence, used } of available) {
+    if (!used) {
+      const ticker = normalizeTicker(evidence.ticker);
+      const list = orphaned.get(ticker) ?? [];
+      list.push(evidence);
+      orphaned.set(ticker, list);
+    }
+  }
+  return orphaned;
+}
+
+/**
  * The wrong-ticker signal the timeline is uniquely positioned to give: its
  * rows print the REAL ticker code, so a pending candidate whose own ticker
  * has no matching fulfilled order, while exactly one OTHER ticker's

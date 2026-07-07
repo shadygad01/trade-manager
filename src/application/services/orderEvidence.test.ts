@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { ParsedOrderEvidence, ParsedTradeCandidate } from "@domain/entities/Upload";
-import { findOrderConfirmedKeys, findWrongTickerHintsFromOrders, orderEvidenceContentKey } from "./orderEvidence";
+import { findOrderConfirmedKeys, findOrphanedFulfilledEvidence, findWrongTickerHintsFromOrders, orderEvidenceContentKey } from "./orderEvidence";
 
 function evidence(overrides: Partial<ParsedOrderEvidence> = {}): ParsedOrderEvidence {
   return {
@@ -111,6 +111,44 @@ describe("findOrderConfirmedKeys — dated Transactions-list evidence", () => {
       [txnEvidence()],
     );
     expect(keys.size).toBe(0);
+  });
+});
+
+describe("findOrphanedFulfilledEvidence", () => {
+  it("returns fulfilled evidence with no matching pending candidate, grouped by normalized ticker", () => {
+    const orphaned = findOrphanedFulfilledEvidence(
+      [{ key: "a", candidate: candidate() }],
+      [evidence(), evidence({ ticker: "tmgh", side: "BUY", date: "2024-08-05", shares: undefined, price: undefined, totalValue: 603.55 })],
+    );
+    expect(orphaned.size).toBe(1);
+    expect(orphaned.get("TMGH")).toHaveLength(1);
+    expect(orphaned.has("SKPC")).toBe(false);
+  });
+
+  it("returns an empty map when every fulfilled row matches a candidate", () => {
+    const orphaned = findOrphanedFulfilledEvidence([{ key: "a", candidate: candidate() }], [evidence()]);
+    expect(orphaned.size).toBe(0);
+  });
+
+  it("ignores cancelled evidence rows entirely", () => {
+    const orphaned = findOrphanedFulfilledEvidence([], [evidence({ status: "cancelled" })]);
+    expect(orphaned.size).toBe(0);
+  });
+
+  it("consumes each evidence row at most once — two identical fulfilled rows against one candidate leaves one orphaned", () => {
+    const orphaned = findOrphanedFulfilledEvidence(
+      [{ key: "a", candidate: candidate() }],
+      [evidence(), evidence()],
+    );
+    expect(orphaned.get("SKPC")).toHaveLength(1);
+  });
+
+  it("treats dated Transactions-shape evidence as orphaned when the date doesn't match any candidate", () => {
+    const orphaned = findOrphanedFulfilledEvidence(
+      [{ key: "a", candidate: candidate({ ticker: "JUFO", side: "SELL", date: "2023-01-16", shares: 90, price: 8.2 }) }],
+      [{ ticker: "JUFO", side: "SELL", date: "2023-01-17", totalValue: 737.96, status: "fulfilled" }],
+    );
+    expect(orphaned.get("JUFO")).toHaveLength(1);
   });
 });
 

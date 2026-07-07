@@ -35,6 +35,18 @@ export interface TickerMatchStatus {
    * were recorded with a different date/shares split than this new read.
    */
   alreadyFullyRecorded?: boolean;
+  /**
+   * Which side of the transaction list is the likely source of the
+   * discrepancy — surfaced in the mismatch/no-verification banners so the
+   * user knows where to look first.
+   *
+   * "buy"  → net shares exceed the expected count, or buys outweigh sells
+   *          — look for a duplicate or misread buy transaction.
+   * "sell" → net shares fall short of the expected count, or sells outweigh
+   *          buys — look for a duplicate or misread sell transaction, or a
+   *          missing buy.
+   */
+  discrepancySide?: "buy" | "sell";
 }
 
 /**
@@ -117,12 +129,18 @@ export function checkTickerMatch(params: {
     if (params.allPendingOrderConfirmed) {
       return { matched: true, reason: "orders-verified", netShares, existingRemainingShares };
     }
-    return { matched: false, reason: "no-verification", netShares, existingRemainingShares };
+    // No broker screenshot and no alternative verification — indicate which
+    // side of the transaction list is heavier so the user knows where to look.
+    const discrepancySide: "buy" | "sell" = params.pendingBuyShares >= params.pendingSellShares ? "buy" : "sell";
+    return { matched: false, reason: "no-verification", netShares, existingRemainingShares, discrepancySide };
   }
   const matched = Math.abs(netShares - params.verifiedUnits) < 1e-6;
   if (matched) {
     return { matched: true, reason: "matched", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits };
   }
   const alreadyFullyRecorded = Math.abs(existingRemainingShares - params.verifiedUnits) < 1e-6;
-  return { matched: false, reason: "mismatch", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded };
+  // netShares > verifiedUnits → too many shares → excess likely on buy side.
+  // netShares < verifiedUnits → too few shares → shortage likely on sell side (extra sell or missing buy).
+  const discrepancySide: "buy" | "sell" = netShares > params.verifiedUnits ? "buy" : "sell";
+  return { matched: false, reason: "mismatch", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded, discrepancySide };
 }

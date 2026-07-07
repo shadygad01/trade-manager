@@ -19,6 +19,7 @@ import { checkTickerMatch, type TickerMatchStatus } from "@application/services/
 import {
   orderEvidenceContentKey,
   findOrderConfirmedKeys,
+  findOrphanedFulfilledEvidence,
   findWrongTickerHintsFromOrders,
 } from "@application/services/orderEvidence";
 import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "@application/services/mismatchResolver";
@@ -29,7 +30,7 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
 import { isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import { useTrackingStartDate, trackingStartDateStore } from "@presentation/lib/trackingStartDateStore";
-import type { ParsedTradeCandidate, Upload } from "@domain/entities/Upload";
+import type { ParsedTradeCandidate, ParsedOrderEvidence, Upload } from "@domain/entities/Upload";
 import {
   importSession,
   useImportSession,
@@ -305,6 +306,23 @@ export function ImportPage() {
         const result = await orchestrator.importFile(currentFile);
         const existingUpload = await repos.uploads.getByHash(result.fileHash);
         let isDuplicateFile = Boolean(existingUpload);
+
+        // A file whose earlier upload FAILED (e.g. the parser didn't know its
+        // format yet) must not stay permanently blocked by its hash — once the
+        // app can read it, re-uploading should work. Likewise, a file that
+        // yields no trade candidates (evidence/verification/dividend-only
+        // screenshots) is session-scoped: the session's own content-key dedup
+        // already drops true repeats, so the hash must not block it either.
+        if (
+          isDuplicateFile &&
+          result.status !== "failed" &&
+          (existingUpload!.status === "failed" ||
+            (result.candidates.length === 0 &&
+              (result.orderEvidences.length > 0 || result.verifications.length > 0 || result.dividends.length > 0)))
+        ) {
+          await repos.uploads.delete(existingUpload!.id);
+          isDuplicateFile = false;
+        }
 
         // A file previously imported whose trades were later deleted should
         // not remain permanently blocked by its hash. If any candidate from
@@ -717,6 +735,34 @@ export function ImportPage() {
     );
   }
 
+  /**
+   * Restores ALL dismissed, skipped, and discarded candidates for a specific
+   * ticker back to pending — the inverse of the individual trash/skip actions.
+   * Useful when a row was accidentally deleted: one tap brings back every
+   * hidden row for that ticker so the user can re-evaluate them.
+   */
+  function restoreTickerCandidates(ticker: string) {
+    importSession.update((prev) => {
+      const tickerDiscarded = prev.discardedCandidates.filter(
+        (e) => normalizeTicker(e.candidate.ticker) === ticker,
+      );
+      const tickerDiscardedKeys = new Set(tickerDiscarded.map((e) => e.key));
+      const tickerPendingKeys = new Set(
+        prev.pendingCandidates
+          .filter((e) => normalizeTicker(e.candidate.ticker) === ticker)
+          .map((e) => e.key),
+      );
+      const toRestore = new Set([...tickerDiscardedKeys, ...tickerPendingKeys]);
+      return {
+        ...prev,
+        pendingCandidates: [...prev.pendingCandidates, ...tickerDiscarded],
+        discardedCandidates: prev.discardedCandidates.filter((e) => !tickerDiscardedKeys.has(e.key)),
+        skippedKeys: prev.skippedKeys.filter((k) => !toRestore.has(k)),
+        dismissedKeys: prev.dismissedKeys.filter((k) => !toRestore.has(k)),
+      };
+    });
+  }
+
   async function addDividend(entry: DividendEntry, ticker: string) {
     try {
       const portfolioId = portfolioForTicker(ticker);
@@ -906,6 +952,24 @@ export function ImportPage() {
       (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
     );
     return findOrderConfirmedKeys(
+      stillPending,
+      pendingOrderEvidences.map((e) => e.evidence),
+    );
+  }, [pendingCandidates, pendingOrderEvidences, addedKeys, skippedKeys, dismissedKeys]);
+
+  /**
+   * Fulfilled evidence rows that had no matching pending candidate — grouped
+   * by ticker. A verified ticker with orphaned evidence has transaction
+   * history that isn't in the ledger yet (may be a historical buy that was
+   * sold, or simply missing from the current batch). Surfaced as a warning
+   * banner on the ticker card so the user knows to upload a Statement.
+   */
+  const orphanedEvidenceByTicker = useMemo(() => {
+    if (pendingOrderEvidences.length === 0) return new Map<string, ParsedOrderEvidence[]>();
+    const stillPending = pendingCandidates.filter(
+      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    );
+    return findOrphanedFulfilledEvidence(
       stillPending,
       pendingOrderEvidences.map((e) => e.evidence),
     );
@@ -1350,6 +1414,8 @@ export function ImportPage() {
                 onConfirmTicker={() => void confirmTicker(ticker)}
                 onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
                 onRenameTicker={(newTicker) => void renameTickerGroup(ticker, newTicker)}
+                onRestoreTicker={() => restoreTickerCandidates(ticker)}
+                orphanedOrderEvidence={orphanedEvidenceByTicker.get(ticker)}
                 existingPortfolioHint={
                   existingNames.length > 0 ? { multiple: existingNames.length > 1, names: existingNames } : undefined
                 }
@@ -1429,6 +1495,8 @@ export function TickerGroupCard({
   onConfirmTicker,
   onAllocateSell,
   onRenameTicker,
+  onRestoreTicker,
+  orphanedOrderEvidence,
   existingPortfolioHint,
   mergeSuggestion,
   knownTickerSuggestion,
@@ -1491,6 +1559,10 @@ export function TickerGroupCard({
   onConfirmTicker: () => void;
   onAllocateSell: (entry: CandidateEntry) => void;
   onRenameTicker: (newTicker: string) => void;
+  /** Restores all dismissed/skipped/discarded Buy/Sell rows for this ticker back to pending state. */
+  onRestoreTicker?: () => void;
+  /** Fulfilled order-evidence rows for this ticker that had no matching pending candidate — signals unrecorded historical trades. */
+  orphanedOrderEvidence?: ParsedOrderEvidence[];
   existingPortfolioHint: { multiple: boolean; names: string[] } | undefined;
   mergeSuggestion: string | undefined;
   /** The real EGX symbol this group's company-name-fallback "ticker" maps to (see tickerForCompanyNameFallback) — drives the one-click rename banner. */
@@ -1527,13 +1599,13 @@ export function TickerGroupCard({
    * without a combinatorial search.
    */
   const lastBalanced = useMemo(() => {
-    if (matchStatus?.reason !== "no-verification") return undefined;
+    if (matchStatus?.matched) return undefined;
     const stillPendingRows = [...group.buys, ...group.sells].filter(
       (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
     );
     return findLastBalancedDate({
       rows: stillPendingRows.map((e) => ({ key: e.key, side: e.candidate.side, shares: e.candidate.shares, date: e.candidate.date })),
-      existingRemainingShares: matchStatus.existingRemainingShares ?? 0,
+      existingRemainingShares: matchStatus?.existingRemainingShares ?? 0,
     });
   }, [group.buys, group.sells, matchStatus, addedKeys, skippedKeys, dismissedKeys]);
   // Only meaningful for the "no-verification" shortfall banner below — a
@@ -1619,17 +1691,28 @@ export function TickerGroupCard({
             </button>
           </div>
         ) : (
-          <button
-            onClick={() => {
-              setDraftTicker(ticker);
-              setRenaming(true);
-            }}
-            title={t("importPage.renameTitle")}
-            className="flex items-center gap-1.5 text-sm font-semibold text-slate-100 hover:text-cyan-400"
-          >
-            {ticker}
-            <Pencil size={12} className="text-slate-500" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setDraftTicker(ticker);
+                setRenaming(true);
+              }}
+              title={t("importPage.renameTitle")}
+              className="flex items-center gap-1.5 text-sm font-semibold text-slate-100 hover:text-cyan-400"
+            >
+              {ticker}
+              <Pencil size={12} className="text-slate-500" />
+            </button>
+            {!matchStatus?.matched ? (
+              <button
+                onClick={onRestoreTicker}
+                title={t("importPage.restoreTickerRows", { ticker })}
+                className="rounded p-0.5 text-slate-500 hover:text-amber-400 hover:bg-amber-500/10"
+              >
+                <RotateCcw size={12} />
+              </button>
+            ) : null}
+          </div>
         )}
         <div className="flex items-center gap-3">
           <MatchBadge status={matchStatus} />
@@ -1677,7 +1760,13 @@ export function TickerGroupCard({
             total: formatShares(matchStatus.verifiedUnits ?? matchStatus.netShares),
           })}
         </div>
-      ) : matchStatus?.reason === "no-verification" && matchStatus.netShares < -1e-6 ? (
+      ) : null}
+      {orphanedOrderEvidence && orphanedOrderEvidence.length > 0 && matchStatus?.reason === "matched" ? (
+        <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
+          {t("importPage.orphanedEvidenceBanner", { n: orphanedOrderEvidence.length })}
+        </div>
+      ) : null}
+      {matchStatus?.reason === "no-verification" && matchStatus.netShares < -1e-6 ? (
         <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
           {t("importPage.missingBuyHistoryBanner", {
             ticker,
@@ -1699,6 +1788,14 @@ export function TickerGroupCard({
                 : t("importPage.needsScreenshotSuffixNoOrders"),
             })}
           </p>
+          {matchStatus.discrepancySide ? (
+            <p className="mt-1.5 font-medium">
+              {"⚠ "}
+              {matchStatus.discrepancySide === "buy"
+                ? t("importPage.discrepancySideBuy")
+                : t("importPage.discrepancySideSell")}
+            </p>
+          ) : null}
           {lastBalanced ? (
             <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
           ) : null}
@@ -1717,43 +1814,66 @@ export function TickerGroupCard({
           </button>
         </div>
       ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          <span>
-            {t("importPage.alreadyFullyRecordedBanner", { ticker, extra: formatShares(matchStatus.netShares - matchStatus.verifiedUnits!) })}
-          </span>
-          <button
-            onClick={onDiscardAllPending}
-            className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
-          >
-            {t("importPage.discardAllPendingFor", { ticker })}
-          </button>
+        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>
+              {t("importPage.alreadyFullyRecordedBanner", { ticker, extra: formatShares(matchStatus.netShares - matchStatus.verifiedUnits!) })}
+            </span>
+            <button
+              onClick={onDiscardAllPending}
+              className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
+            >
+              {t("importPage.discardAllPendingFor", { ticker })}
+            </button>
+          </div>
+          {lastBalanced ? (
+            <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
+          ) : null}
         </div>
       ) : matchStatus?.reason === "mismatch" && reconcileSuggestion ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          <span>
-            {t("importPage.mismatchReconcileBanner", {
-              existingSuffix: (matchStatus.existingRemainingShares ?? 0) > 0 ? t("importPage.existingLedgerSuffix", { existing: formatShares(matchStatus.existingRemainingShares!) }) : "",
-              netShares: formatShares(matchStatus.netShares),
-              verified: formatShares(matchStatus.verifiedUnits ?? 0),
-              removeCount: reconcileSuggestion.keysToRemove.length,
-              avgCostSuffix: reconcileSuggestion.rankedByAvgCost ? t("importPage.rankedByAvgCostSuffix") : "",
-              alternativesSuffix: t("importPage.alternativesSuffix", { n: reconcileSuggestion.alternatives }),
-            })}
-          </span>
-          <button
-            onClick={() => onDiscardPendingKeys?.(reconcileSuggestion.keysToRemove)}
-            className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
-          >
-            {t("importPage.removeSuggestedRows", { n: reconcileSuggestion.keysToRemove.length })}
-          </button>
+        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span>
+              {t("importPage.mismatchReconcileBanner", {
+                existingSuffix: (matchStatus.existingRemainingShares ?? 0) > 0 ? t("importPage.existingLedgerSuffix", { existing: formatShares(matchStatus.existingRemainingShares!) }) : "",
+                netShares: formatShares(matchStatus.netShares),
+                verified: formatShares(matchStatus.verifiedUnits ?? 0),
+                removeCount: reconcileSuggestion.keysToRemove.length,
+                avgCostSuffix: reconcileSuggestion.rankedByAvgCost ? t("importPage.rankedByAvgCostSuffix") : "",
+                alternativesSuffix: t("importPage.alternativesSuffix", { n: reconcileSuggestion.alternatives }),
+              })}
+            </span>
+            <button
+              onClick={() => onDiscardPendingKeys?.(reconcileSuggestion.keysToRemove)}
+              className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
+            >
+              {t("importPage.removeSuggestedRows", { n: reconcileSuggestion.keysToRemove.length })}
+            </button>
+          </div>
+          {lastBalanced ? (
+            <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
+          ) : null}
         </div>
       ) : matchStatus?.reason === "mismatch" ? (
         <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          {t("importPage.mismatchGenericBanner", {
-            existingSuffix: (matchStatus.existingRemainingShares ?? 0) > 0 ? t("importPage.existingLedgerSuffix", { existing: formatShares(matchStatus.existingRemainingShares!) }) : "",
-            netShares: formatShares(matchStatus.netShares),
-            verified: formatShares(matchStatus.verifiedUnits ?? 0),
-          })}
+          <p>
+            {t("importPage.mismatchGenericBanner", {
+              existingSuffix: (matchStatus.existingRemainingShares ?? 0) > 0 ? t("importPage.existingLedgerSuffix", { existing: formatShares(matchStatus.existingRemainingShares!) }) : "",
+              netShares: formatShares(matchStatus.netShares),
+              verified: formatShares(matchStatus.verifiedUnits ?? 0),
+            })}
+          </p>
+          {matchStatus.discrepancySide ? (
+            <p className="mt-1.5 font-medium">
+              {"⚠ "}
+              {matchStatus.discrepancySide === "buy"
+                ? t("importPage.discrepancySideBuy")
+                : t("importPage.discrepancySideSell")}
+            </p>
+          ) : null}
+          {lastBalanced ? (
+            <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
+          ) : null}
         </div>
       ) : !portfolioResolved ? (
         <div className="border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">

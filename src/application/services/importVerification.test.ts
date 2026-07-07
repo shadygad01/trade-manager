@@ -13,6 +13,7 @@ describe("checkTickerMatch", () => {
     expect(result.matched).toBe(true);
     expect(result.reason).toBe("matched");
     expect(result.netShares).toBe(100);
+    expect(result.discrepancySide).toBeUndefined();
   });
 
   it("accounts for shares already on the ledger plus a pending sell", () => {
@@ -64,7 +65,7 @@ describe("checkTickerMatch", () => {
     expect(result.reason).toBe("no-shares-to-verify");
   });
 
-  it("is trivially matched for a fully sold-out ticker even with no broker screenshot", () => {
+  it("is trivially matched for a fully sold-out ticker (buy == sell) even with no broker screenshot", () => {
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 50,
@@ -75,6 +76,7 @@ describe("checkTickerMatch", () => {
     expect(result.matched).toBe(true);
     expect(result.reason).toBe("closed-position");
     expect(result.netShares).toBe(0);
+    expect(result.discrepancySide).toBeUndefined();
   });
 
   it("still requires a screenshot when net shares are nonzero and none was uploaded", () => {
@@ -231,5 +233,57 @@ describe("checkTickerMatch", () => {
     });
     expect(result.matched).toBe(false);
     expect(result.reason).toBe("no-verification");
+  });
+
+  // discrepancySide tests
+
+  it("sets discrepancySide to 'buy' on mismatch when net shares exceed verified (too many buys)", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 120,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 100,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.discrepancySide).toBe("buy");
+  });
+
+  it("sets discrepancySide to 'sell' on mismatch when net shares fall short of verified (too many sells or missing buys)", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 80,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 100,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.discrepancySide).toBe("sell");
+  });
+
+  it("sets discrepancySide to 'buy' on no-verification when buys outweigh sells", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 60,
+      pendingSellShares: 10,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("no-verification");
+    expect(result.discrepancySide).toBe("buy");
+  });
+
+  it("sets discrepancySide to 'sell' on no-verification when sells outweigh buys", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 60,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("no-verification");
+    expect(result.discrepancySide).toBe("sell");
   });
 });

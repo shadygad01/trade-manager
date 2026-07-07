@@ -348,6 +348,88 @@ describe("ThndrParser account-wide Transactions screen", () => {
   });
 });
 
+describe("ThndrParser single Order Details screen", () => {
+  const parser = new ThndrParser("2020-01-01");
+
+  // OCR-shaped text from the real per-order "Order Details" page (opened by
+  // tapping a history row): company header on top, then label/value pairs.
+  // Its timestamp carries no year, so it can only become undated evidence.
+  const orderDetailsText =
+    "11:09 ADIB Abu Dhabi Islamic Bank - Egypt " +
+    "Order State Fulfilled " +
+    "Date and Time Sun 14 Jul 11:53 AM " +
+    "Market Egypt " +
+    "Order Type Market Buy " +
+    "Price EGP 36.83 " +
+    "Estimated Quantity 5 Shares " +
+    "Expiry type Good till cancel";
+
+  it("recognizes the Order Details page as an evidence-bearing document", () => {
+    expect(parser.looksLikeOrdersTimeline(orderDetailsText)).toBe(true);
+  });
+
+  it("parses one undated fulfilled evidence with ticker/side/shares/price from the labels", () => {
+    const { evidences, unreadRowCount } = parser.parseOrdersTimeline(orderDetailsText);
+    expect(unreadRowCount).toBe(0);
+    expect(evidences).toHaveLength(1);
+    expect(evidences[0]).toMatchObject({
+      ticker: "ADIB",
+      side: "BUY",
+      orderType: "market",
+      shares: 5,
+      price: 36.83,
+      totalValue: 184.15,
+      status: "fulfilled",
+      confidence: "high",
+    });
+    expect(evidences[0].date).toBeUndefined();
+  });
+
+  it("parses a Limit Sell variant and a cancelled state correctly", () => {
+    const sellText = orderDetailsText.replace("Order Type Market Buy", "Order Type Limit Sell");
+    expect(parser.parseOrdersTimeline(sellText).evidences[0]).toMatchObject({ side: "SELL", orderType: "limit" });
+
+    const cancelledText = orderDetailsText.replace("Order State Fulfilled", "Order State Cancelled");
+    expect(parser.parseOrdersTimeline(cancelledText).evidences[0]).toMatchObject({ status: "cancelled" });
+  });
+
+  it("produces no evidence for a pending order's detail page", () => {
+    const pendingText = orderDetailsText.replace("Order State Fulfilled", "Order State Pending");
+    const { evidences, unreadRowCount } = parser.parseOrdersTimeline(pendingText);
+    expect(evidences).toHaveLength(0);
+    expect(unreadRowCount).toBe(0);
+  });
+
+  it("does not misfire on the other document shapes", () => {
+    expect(parser.looksLikeOrdersTimeline("2/2/2026 Buy Eastern Co. (50@39.3800) -1,974.47")).toBe(false);
+    const transactionsText = "Transactions Completed Buy EHDR 17 Jan 23 – 4:24pm -378.29 Sell RMDA 17 Jan 23 – 3:20pm 9,980.60";
+    const parsed = parser.parseOrdersTimeline(transactionsText);
+    expect(parsed.evidences.length).toBeGreaterThan(1); // still routed to the Transactions parser
+  });
+
+  it("reads a comma-grouped quantity as whole shares, never as a 3-decimal price", () => {
+    const bigQtyText = orderDetailsText.replace("Estimated Quantity 5 Shares", "Estimated Quantity 1,000 Shares");
+    const { evidences } = parser.parseOrdersTimeline(bigQtyText);
+    expect(evidences[0]).toMatchObject({ shares: 1000, price: 36.83, totalValue: 36830 });
+  });
+
+  it("binds the page's own Price label, not an earlier 'Last trade price' in the header", () => {
+    const noisyText = orderDetailsText.replace(
+      "Order State Fulfilled",
+      "Last trade price EGP 99.99 Order State Fulfilled",
+    );
+    const { evidences } = parser.parseOrdersTimeline(noisyText);
+    expect(evidences[0]).toMatchObject({ price: 36.83, shares: 5 });
+  });
+
+  it("rejects an unreadable quantity token instead of guessing", () => {
+    const badQtyText = orderDetailsText.replace("Estimated Quantity 5 Shares", "Estimated Quantity O.5 Shares");
+    const { evidences, unreadRowCount } = parser.parseOrdersTimeline(badQtyText);
+    expect(evidences).toHaveLength(0);
+    expect(unreadRowCount).toBe(1);
+  });
+});
+
 describe("ThndrParser.parseOrdersScreenText", () => {
   const parser = new ThndrParser("2020-01-01");
   const header = "ORAS\nOrascom Construction PLC\n";

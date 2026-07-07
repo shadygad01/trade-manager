@@ -750,6 +750,82 @@ function looksLikeTransactionsScreenImpl(text: string): boolean {
   return /\btransactions\b/i.test(text);
 }
 
+// ─── Format 2e: single "Order Details" screen (screenshot) ────────────────
+// Tapping a row in the Orders/Transactions history opens a per-order detail
+// page: a label/value list ("Order State: Fulfilled", "Date and Time",
+// "Order Type: Market Buy", "Price EGP 36.83", "Estimated Quantity: 5
+// Shares", "Expiry type") with the company header at the top. It documents
+// exactly one order, with shares AND price — richer than a Transactions row
+// — but its timestamp omits the year ("Sun 14 Jul 11:53 AM"), so it can't
+// become a dated trade candidate. Parsed as a single undated
+// ParsedOrderEvidence, corroborating a pending candidate on
+// ticker/side/shares/price like the Orders-timeline shape does.
+const orderDetailsStatePattern = /order\s*state\W*\s*(Fulf\w*|Cancel\w*|Pending|Rejected|Expired)/i;
+const orderDetailsTypePattern = /order\s*type\W*\s*(Market|Limit)\s*(Buy|Sell)/i;
+const orderDetailsPricePattern = /\bprice\b\W*\s*(?:EGP|EGX|E£)?\s*([\d,OoTIl]+(?:[.,]\d+)?)/i;
+const orderDetailsQtyPattern = /quantity\W*\s*([\d,OoTIl]+(?:\.\d+)?)\s*shares?/i;
+
+function looksLikeOrderDetailsImpl(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ");
+  return (
+    orderDetailsStatePattern.test(normalized) &&
+    orderDetailsTypePattern.test(normalized) &&
+    (orderDetailsQtyPattern.test(normalized) || /expiry\s*type/i.test(normalized))
+  );
+}
+
+function parseOrderDetailsImpl(text: string): OrdersTimelineParseResult {
+  const normalized = text.replace(/\s+/g, " ");
+
+  const stateMatch = orderDetailsStatePattern.exec(normalized);
+  const statusWord = stateMatch?.[1] ?? null;
+  // Pending/rejected/expired detail pages document an order that never
+  // executed — they are not evidence of anything, same as timeline rows.
+  if (!statusWord || !/^(fulf|cancel)/i.test(statusWord)) return { evidences: [], unreadRowCount: 0 };
+  const status: ParsedOrderEvidence["status"] = /^fulf/i.test(statusWord) ? "fulfilled" : "cancelled";
+
+  const typeMatch = orderDetailsTypePattern.exec(normalized);
+  const header = resolveHeaderTickerImpl(text);
+  if (!typeMatch || !header || NON_STOCK_INSTRUMENTS.has(header.ticker.toUpperCase())) {
+    return { evidences: [], unreadRowCount: 1 };
+  }
+
+  // Field order on the page is fixed (State → Date → Market → Order Type →
+  // Price → Quantity → Expiry), so anchoring the price/quantity search to
+  // the text AFTER "Order Type" guarantees the page's own "Price" label is
+  // read — never an unrelated one like a header's "Last trade price".
+  const afterType = normalized.slice(typeMatch.index + typeMatch[0].length);
+  const priceMatch = orderDetailsPricePattern.exec(afterType);
+  const qtyMatch = orderDetailsQtyPattern.exec(afterType);
+  if (!priceMatch || !qtyMatch) return { evidences: [], unreadRowCount: 1 };
+
+  const price = parsePrice(priceMatch[1]);
+  // Quantity is a whole-share count, not a price: strip OCR digit noise and
+  // grouping commas, then parse directly — parsePrice would misread "1,000"
+  // shares as 1.000. Reject fractions and zero.
+  const qtyRaw = parseFloat(normalizeDigits(qtyMatch[1]).replace(/,/g, ""));
+  const shares = Number.isFinite(qtyRaw) && qtyRaw >= 1 && Math.abs(qtyRaw - Math.round(qtyRaw)) < 1e-9 ? Math.round(qtyRaw) : null;
+  if (!price || shares === null) return { evidences: [], unreadRowCount: 1 };
+
+  const ticker = normalizeTicker(header.ticker);
+  return {
+    evidences: [
+      {
+        ticker,
+        companyName: canonicalNameForTicker(ticker),
+        side: /buy/i.test(typeMatch[2]) ? "BUY" : "SELL",
+        orderType: /limit/i.test(typeMatch[1]) ? "limit" : "market",
+        shares,
+        price,
+        totalValue: Math.round(shares * price * 100) / 100,
+        status,
+        confidence: KNOWN_TICKER_SET.has(ticker) ? "high" : "low",
+      },
+    ],
+    unreadRowCount: 0,
+  };
+}
+
 // ─── Format 3: Thndr app "My position" screen (ground-truth verification) ──
 function numbersAfter(section: string, label: RegExp): string[] {
   const m = label.exec(section);
@@ -883,7 +959,7 @@ export class ThndrParser implements BrokerParser {
   }
 
   looksLikeOrdersTimeline(text: string): boolean {
-    return looksLikeOrdersTimelineImpl(text) || looksLikeTransactionsScreenImpl(text);
+    return looksLikeOrdersTimelineImpl(text) || looksLikeTransactionsScreenImpl(text) || looksLikeOrderDetailsImpl(text);
   }
 
   // No tracked-date-range filter here: the undated "Orders" timeline shape
@@ -893,6 +969,10 @@ export class ThndrParser implements BrokerParser {
   // candidate (which already went through the filter on its own parse path),
   // so filtering it here would only be redundant, not protective.
   parseOrdersTimeline(text: string): OrdersTimelineParseResult {
+    // Order-details is checked first: its label/value layout ("Order Type
+    // Market Buy … Price EGP …") can superficially satisfy the timeline
+    // anchor regex, but a timeline parse of it would misread the fields.
+    if (looksLikeOrderDetailsImpl(text)) return parseOrderDetailsImpl(text);
     return looksLikeOrdersTimelineImpl(text) ? parseOrdersTimelineTextImpl(text) : parseTransactionsScreenImpl(text);
   }
 

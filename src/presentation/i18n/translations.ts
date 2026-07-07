@@ -573,6 +573,8 @@ export const en: Dict = {
     alreadyFullyRecordedBanner:
       "{{ticker}}'s existing position already matches the broker's count on its own — every transaction extracted in this batch looks like it's re-describing shares already on the ledger, just split into different dates/lots than before. Discard all {{extra}} extra shares' worth of pending rows for {{ticker}}?",
     discardAllPendingFor: "Discard all pending for {{ticker}}",
+    restoreTickerRows: "Restore dismissed/skipped rows for {{ticker}}",
+    orphanedEvidenceBanner: "Position verified against the broker's count, but {{n}} uploaded transaction(s) have no matching trade in your ledger — they may be historical buys that were sold before this screenshot. Upload a Statement or Orders screenshot covering those dates to record the full history, or discard the evidence rows if they're already captured elsewhere.",
     mismatchReconcileBanner: (v: TranslationVars) =>
       `Mismatch: this batch's rows{{existingSuffix}} total {{netShares}} shares, but the broker's "My Position" screenshot — the trusted source — shows {{verified}}. Removing the ${enPlural(Number(v.removeCount), "highlighted row", "{{removeCount}} highlighted rows")} below leaves exactly {{verified}}{{avgCostSuffix}}.{{alternativesSuffix}}`,
     existingLedgerSuffix: " plus {{existing}} already on the ledger",
@@ -598,6 +600,8 @@ export const en: Dict = {
     fulfilled: "Fulfilled",
     cancelled: "Cancelled",
     discardOrderEvidenceTitle: "Remove this order row if it was misread — it's evidence only, nothing was committed from it.",
+    discrepancySideBuy: "Likely in Buy side — check for a duplicate or misread buy transaction.",
+    discrepancySideSell: "Likely in Sell side — check for a duplicate or misread sell transaction, or a missing buy.",
     matchMissingBuyHistory: "Missing buy history",
     matchNeedsScreenshot: "Needs broker screenshot",
     matchMismatch: "Mismatch",
@@ -1180,6 +1184,8 @@ export const ar: Dict = {
     alreadyFullyRecordedBanner:
       "مركز {{ticker}} الحالي يطابق بالفعل عدد الوسيط من تلقاء نفسه — كل معاملة مستخرجة في هذه الدفعة تبدو وكأنها تعيد وصف أسهم مسجّلة بالفعل، لكن مقسّمة إلى تواريخ/دفعات مختلفة عمّا كانت عليه. حذف كل الصفوف المعلّقة الزائدة (بقيمة {{extra}} سهم) لـ {{ticker}}؟",
     discardAllPendingFor: "حذف كل المعلّق لـ {{ticker}}",
+    restoreTickerRows: "استعادة الصفوف المحذوفة/المتجاوزة لـ {{ticker}}",
+    orphanedEvidenceBanner: "المركز مؤكَّد مقارنةً بعدد الوسيط، لكن {{n}} معاملة/معاملات محمَّلة ليس لها أي صفقة مقابلة في السجل — قد تكون مشتريات تاريخية بِيعت قبل هذه اللقطة. ارفع كشف حساب أو لقطة أوامر تغطّي تلك التواريخ لتسجيل التاريخ الكامل، أو احذف صفوف الدليل إذا كانت مسجَّلة في مكان آخر.",
     mismatchReconcileBanner: (v: TranslationVars) =>
       `عدم تطابق: صفوف هذه الدفعة{{existingSuffix}} مجموعها {{netShares}} سهمًا، لكن لقطة شاشة "مركزي" من الوسيط — المصدر الموثوق — تُظهر {{verified}}. حذف ${arPlural(Number(v.removeCount), "", "الصف المميَّز", "الصفين المميَّزين", "{{removeCount}} صفوف مميَّزة")} أدناه يترك بالضبط {{verified}}{{avgCostSuffix}}.{{alternativesSuffix}}`,
     existingLedgerSuffix: " بالإضافة إلى {{existing}} مسجّلة بالفعل",
@@ -1205,6 +1211,8 @@ export const ar: Dict = {
     fulfilled: "منفَّذ",
     cancelled: "ملغى",
     discardOrderEvidenceTitle: "أزل صف الأمر هذا إن كان مقروءًا بالخطأ — إنه دليل فقط، لم يُسجَّل منه شيء.",
+    discrepancySideBuy: "الفرق محتمل في الشراء — تحقق من عملية شراء مكررة أو مقروءة بالخطأ.",
+    discrepancySideSell: "الفرق محتمل في البيع — تحقق من عملية بيع مكررة أو مقروءة بالخطأ، أو شراء ناقص.",
     matchMissingBuyHistory: "سجل شراء ناقص",
     matchNeedsScreenshot: "يحتاج لقطة شاشة من الوسيط",
     matchMismatch: "عدم تطابق",
