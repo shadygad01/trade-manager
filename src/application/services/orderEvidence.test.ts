@@ -77,6 +77,43 @@ describe("findOrderConfirmedKeys", () => {
   });
 });
 
+describe("findOrderConfirmedKeys — dated Transactions-list evidence", () => {
+  function txnEvidence(overrides: Partial<ParsedOrderEvidence> = {}): ParsedOrderEvidence {
+    return {
+      ticker: "JUFO",
+      side: "SELL",
+      date: "2023-01-17",
+      totalValue: 737.96,
+      status: "fulfilled",
+      ...overrides,
+    };
+  }
+
+  it("confirms a pending candidate by ticker/side/date, checking total against shares × price", () => {
+    const keys = findOrderConfirmedKeys(
+      [{ key: "a", candidate: candidate({ ticker: "JUFO", side: "SELL", date: "2023-01-17", shares: 90, price: 8.2 }) }],
+      [txnEvidence()],
+    );
+    expect(keys.has("a")).toBe(true);
+  });
+
+  it("requires the date to match exactly, unlike the undated Orders-timeline shape", () => {
+    const keys = findOrderConfirmedKeys(
+      [{ key: "a", candidate: candidate({ ticker: "JUFO", side: "SELL", date: "2023-01-16", shares: 90, price: 8.2 }) }],
+      [txnEvidence()],
+    );
+    expect(keys.size).toBe(0);
+  });
+
+  it("rejects a total that doesn't correspond to shares × price", () => {
+    const keys = findOrderConfirmedKeys(
+      [{ key: "a", candidate: candidate({ ticker: "JUFO", side: "SELL", date: "2023-01-17", shares: 10, price: 8.2 }) }],
+      [txnEvidence()],
+    );
+    expect(keys.size).toBe(0);
+  });
+});
+
 describe("findWrongTickerHintsFromOrders", () => {
   it("hints at the ticker whose fulfilled order matches a misfiled candidate's numbers", () => {
     // The reported real shape: SUGR's execution OCR'd under an HRHO guess —

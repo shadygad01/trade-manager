@@ -39,30 +39,43 @@ export interface ParsedTradeCandidate {
 }
 
 /**
- * One order row read from a broker's account-wide "Orders" timeline screen —
- * the full-account order history (every ticker mixed together), each row
- * carrying the real ticker code, side, order type, limit/execution price,
- * the order's total value, and a Fulfilled/Cancelled status, but NO
- * execution date and no printed share count (shares are derived from
- * totalValue / price, which lands on a whole number for a real row — the
- * parser uses that as a self-check). Because rows are undated they are never
- * imported as trades themselves; they corroborate transactions extracted
- * from other documents (see application/services/orderEvidence.ts): a
- * pending candidate matched by a fulfilled order here is confirmed by the
- * broker's own order history, and a candidate whose shares/price match
+ * One order row read from a broker's account-wide order-history screen —
+ * the full-account history (every ticker mixed together), never imported as
+ * a trade candidate itself; it corroborates transactions extracted from
+ * other documents (see application/services/orderEvidence.ts). Two distinct
+ * broker screens populate this shape:
+ *
+ * - The "Orders" timeline (order type + limit/execution price, no execution
+ *   date, no printed share count — shares are derived from totalValue /
+ *   price, which lands on a whole number for a real row, used as a
+ *   self-check). Matched against a pending candidate by ticker/side/shares/
+ *   price.
+ * - The account-wide "Transactions" list (a real execution date + time, and
+ *   the order's signed total value, but no order type, share count, or
+ *   per-share price at all). Matched against a pending candidate by
+ *   ticker/side/date and total value ≈ shares × price instead, since that's
+ *   genuinely all this screen prints. `date` is set only for this shape —
+ *   its presence is what the matcher branches on.
+ *
+ * Either way a candidate matched by a fulfilled order here is confirmed by
+ * the broker's own order history, and a candidate whose numbers match
  * another ticker's order is likely misfiled under a wrong ticker guess.
  */
 export interface ParsedOrderEvidence {
   ticker: string;
   companyName?: string;
   side: "BUY" | "SELL";
-  orderType: "limit" | "market";
-  /** Derived: totalValue / price, rounded to the whole-share count it lands on. */
-  shares: number;
-  price: number;
+  /** Only known from the "Orders" timeline shape — undefined for a "Transactions" list row. */
+  orderType?: "limit" | "market";
+  /** Derived: totalValue / price, rounded to the whole-share count it lands on. Undefined for a "Transactions" list row (no price to derive from). */
+  shares?: number;
+  price?: number;
   totalValue: number;
   status: "fulfilled" | "cancelled";
   confidence?: ParseConfidence;
+  /** Execution date (ISO), set only for the dated "Transactions" list shape — see the interface doc comment. */
+  date?: string;
+  time?: string;
 }
 
 /** A dividend payout read from a broker's "My Position" / dividends history screen. */

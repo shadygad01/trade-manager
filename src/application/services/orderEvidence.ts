@@ -28,22 +28,53 @@ function pricesClose(a: number, b: number, tolerance: number): boolean {
 }
 
 /**
- * Content identity for cross-file dedup of timeline rows: consecutive
- * scrolled screenshots of the same Orders screen overlap by a few rows, and
- * without dates this signature is all a row has. Deliberately used to dedup
- * only ACROSS files, never within one file — two identical rows visible in
- * one screenshot are genuinely two separate orders, while the same signature
+ * Content identity for cross-file dedup of order-history rows: consecutive
+ * scrolled screenshots of the same screen overlap by a few rows. The
+ * undated "Orders" timeline shape has nothing but its own numbers to key on;
+ * the dated "Transactions" list shape includes date/time, which is folded in
+ * too so two different days' rows for the same ticker/side/total are never
+ * mistaken for the same overlapping row. Deliberately used to dedup only
+ * ACROSS files, never within one file — two identical rows visible in one
+ * screenshot are genuinely two separate orders, while the same signature
  * appearing in two files is almost always the scroll overlap.
  */
 export function orderEvidenceContentKey(e: ParsedOrderEvidence): string {
-  return `${normalizeTicker(e.ticker)}|${e.side}|${e.orderType}|${e.price}|${e.totalValue}|${e.status}`;
+  return `${normalizeTicker(e.ticker)}|${e.side}|${e.orderType ?? ""}|${e.date ?? ""}|${e.time ?? ""}|${e.price ?? ""}|${e.totalValue}|${e.status}`;
 }
 
 /**
- * Matches still-pending Buy/Sell candidates against fulfilled timeline
- * orders: same ticker, same side, same share count, price within tolerance.
- * Each order corroborates at most ONE pending row — an evidence row consumed
- * by one candidate is not reused for its duplicate sibling, so a
+ * Whether a fulfilled order-history row's side/shares/price (or side/date/
+ * total, for the dated shape) match a candidate's — ticker-agnostic, so it
+ * doubles as both the same-ticker confirmation check and the
+ * other-ticker-misfiled hint check below. The undated "Orders" timeline
+ * shape matches on side/share count/price (its only fields); the dated
+ * "Transactions" list shape carries no share count or per-share price at
+ * all, so it matches on side/date instead, with the row's total value
+ * checked against shares × price — that's genuinely everything it prints.
+ * `evidence.date` is what distinguishes which shape this row came from (see
+ * ParsedOrderEvidence).
+ */
+function evidenceNumbersMatch(evidence: ParsedOrderEvidence, candidate: ParsedTradeCandidate): boolean {
+  if (evidence.side !== candidate.side) return false;
+  if (evidence.date) {
+    return evidence.date === candidate.date && pricesClose(evidence.totalValue, candidate.shares * candidate.price, ORDER_MATCH_PRICE_TOLERANCE);
+  }
+  return (
+    evidence.shares === candidate.shares &&
+    evidence.price !== undefined &&
+    pricesClose(evidence.price, candidate.price, ORDER_MATCH_PRICE_TOLERANCE)
+  );
+}
+
+function evidenceMatchesCandidate(evidence: ParsedOrderEvidence, candidate: ParsedTradeCandidate): boolean {
+  return normalizeTicker(evidence.ticker) === normalizeTicker(candidate.ticker) && evidenceNumbersMatch(evidence, candidate);
+}
+
+/**
+ * Matches still-pending Buy/Sell candidates against fulfilled order-history
+ * rows (see evidenceMatchesCandidate for the two shapes this covers). Each
+ * order corroborates at most ONE pending row — an evidence row consumed by
+ * one candidate is not reused for its duplicate sibling, so a
  * double-extracted transaction can never be double-confirmed by a single
  * real order (the un-corroborated copy stays flagged for the sibling
  * duplicate check to clean up).
@@ -57,14 +88,7 @@ export function findOrderConfirmedKeys(
 
   for (const entry of pendingEntries) {
     const c = entry.candidate;
-    const match = available.find(
-      (a) =>
-        !a.used &&
-        normalizeTicker(a.evidence.ticker) === normalizeTicker(c.ticker) &&
-        a.evidence.side === c.side &&
-        a.evidence.shares === c.shares &&
-        pricesClose(a.evidence.price, c.price, ORDER_MATCH_PRICE_TOLERANCE),
-    );
+    const match = available.find((a) => !a.used && evidenceMatchesCandidate(a.evidence, c));
     if (match) {
       match.used = true;
       confirmed.add(entry.key);
@@ -96,14 +120,11 @@ export function findWrongTickerHintsFromOrders(
     if (c.confidence === "high") continue;
     const ticker = normalizeTicker(c.ticker);
 
-    const matchesNumbers = (e: ParsedOrderEvidence) =>
-      e.side === c.side && e.shares === c.shares && pricesClose(e.price, c.price, ORDER_MATCH_PRICE_TOLERANCE);
-
-    const ownTickerMatch = fulfilled.some((e) => normalizeTicker(e.ticker) === ticker && matchesNumbers(e));
+    const ownTickerMatch = fulfilled.some((e) => normalizeTicker(e.ticker) === ticker && evidenceNumbersMatch(e, c));
     if (ownTickerMatch) continue;
 
     const otherTickers = new Set(
-      fulfilled.filter((e) => normalizeTicker(e.ticker) !== ticker && matchesNumbers(e)).map((e) => normalizeTicker(e.ticker)),
+      fulfilled.filter((e) => normalizeTicker(e.ticker) !== ticker && evidenceNumbersMatch(e, c)).map((e) => normalizeTicker(e.ticker)),
     );
     if (otherTickers.size === 1) hints.set(entry.key, [...otherTickers][0]);
   }
