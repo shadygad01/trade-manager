@@ -562,7 +562,7 @@ export const en: Dict = {
     matchesBrokerBanner: "Matches the broker: {{onLedger}} already on the ledger + {{batch}} in this batch = {{total}} — the rows below only show this batch's part.",
     missingBuyHistoryBanner:
       'Pending Sell(s) for {{ticker}} total {{pendingSellShares}} shares, but only {{existing}} already on the ledger + {{pendingBuy}} in this batch = {{available}} are available — {{short}} short. A broker "My Position" screenshot can\'t help here since the position is already sold out; the ledger is most likely missing earlier Buy transactions for the missing shares. Upload a Statement/Orders screenshot covering the full purchase history for {{ticker}}, or record the missing buy(s) manually if the invoices aren\'t available.',
-    needsScreenshotBanner: 'No broker "My Position" screenshot uploaded for {{ticker}} yet — upload one in Step 1 so its share count can be verified before anything is allocated to a portfolio.{{suffix}}',
+    needsScreenshotBanner: 'No broker "My Position" screenshot uploaded for {{ticker}} yet — upload one in Step 1 so its share count can be verified before anything is allocated to a portfolio. Current net from the rows below: {{netShares}} shares — if this position is fully closed, that needs to reach exactly 0 to verify automatically, with no screenshot at all.{{suffix}}',
     needsScreenshotSuffixHasOrders: " (This ticker has Orders-history rows, but not every transaction below is matched by one — a position screenshot settles it.)",
     needsScreenshotSuffixNoOrders: " An account-wide Orders history screenshot also works when it confirms every transaction below.",
     placeholderReplaceBanner:
@@ -1168,7 +1168,7 @@ export const ar: Dict = {
     matchesBrokerBanner: "مطابق للوسيط: {{onLedger}} مسجّلة بالفعل + {{batch}} في هذه الدفعة = {{total}} — الصفوف أدناه تعرض فقط جزء هذه الدفعة.",
     missingBuyHistoryBanner:
       'عمليات البيع المعلّقة لـ {{ticker}} يبلغ مجموعها {{pendingSellShares}} سهمًا، لكن يتوفر فقط {{existing}} مسجّلة بالفعل + {{pendingBuy}} في هذه الدفعة = {{available}} — ناقص {{short}}. لقطة شاشة "مركزي" من الوسيط لا تفيد هنا لأن المركز مباع بالكامل بالفعل؛ على الأرجح يفتقد السجل معاملات شراء سابقة للأسهم الناقصة. ارفع لقطة كشف حساب/أوامر تغطي كامل تاريخ الشراء لـ {{ticker}}، أو سجّل عملية (عمليات) الشراء الناقصة يدويًا إن لم تتوفر الفواتير.',
-    needsScreenshotBanner: 'لم تُرفع لقطة شاشة "مركزي" من الوسيط لـ {{ticker}} بعد — ارفع واحدة في الخطوة 1 حتى يمكن التحقق من عدد أسهمه قبل تخصيص أي شيء لمحفظة.{{suffix}}',
+    needsScreenshotBanner: 'لم تُرفع لقطة شاشة "مركزي" من الوسيط لـ {{ticker}} بعد — ارفع واحدة في الخطوة 1 حتى يمكن التحقق من عدد أسهمه قبل تخصيص أي شيء لمحفظة. الصافي الحالي من الصفوف أدناه: {{netShares}} سهم — لو هذا المركز مغلق بالكامل، لازم يصل هذا الرقم للصفر بالضبط عشان يتحقق تلقائيًا من غير أي لقطة شاشة خالص.{{suffix}}',
     needsScreenshotSuffixHasOrders: " (لهذا الرمز صفوف من سجل الأوامر، لكن ليست كل معاملة أدناه مطابقة بواحدة منها — لقطة شاشة المركز تحسم الأمر.)",
     needsScreenshotSuffixNoOrders: " تعمل أيضًا لقطة شاشة سجل الأوامر على مستوى الحساب عندما تؤكد كل معاملة أدناه.",
     placeholderReplaceBanner:

@@ -1666,6 +1666,7 @@ export function TickerGroupCard({
         <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
           {t("importPage.needsScreenshotBanner", {
             ticker,
+            netShares: formatShares(matchStatus.netShares),
             suffix: tickerHasFulfilledOrders
               ? t("importPage.needsScreenshotSuffixHasOrders")
               : t("importPage.needsScreenshotSuffixNoOrders"),
