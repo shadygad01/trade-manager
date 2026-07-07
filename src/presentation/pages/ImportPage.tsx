@@ -1860,13 +1860,19 @@ export function TickerGroupCard({
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="flex items-center gap-2 text-xs text-slate-400">
                 <History size={13} className={entry.evidence.status === "fulfilled" ? "text-cyan-400" : "text-slate-600"} />
-                {t("importPage.ordersHistoryRow", {
-                  side: entry.evidence.side,
-                  shares: formatShares(entry.evidence.shares),
-                  price: formatMoney(entry.evidence.price),
-                  orderType: entry.evidence.orderType,
-                  total: formatMoney(entry.evidence.totalValue),
-                })}
+                {entry.evidence.date
+                  ? t("importPage.transactionsHistoryRow", {
+                      side: entry.evidence.side,
+                      date: formatDate(entry.evidence.date),
+                      total: formatMoney(entry.evidence.totalValue),
+                    })
+                  : t("importPage.ordersHistoryRow", {
+                      side: entry.evidence.side,
+                      shares: formatShares(entry.evidence.shares ?? 0),
+                      price: formatMoney(entry.evidence.price ?? 0),
+                      orderType: entry.evidence.orderType ?? "",
+                      total: formatMoney(entry.evidence.totalValue),
+                    })}
                 <span
                   className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
                     entry.evidence.status === "fulfilled" ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-700/40 text-slate-400 line-through"

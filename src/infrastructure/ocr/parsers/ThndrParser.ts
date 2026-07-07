@@ -671,6 +671,85 @@ function parseOrdersTimelineTextImpl(text: string): OrdersTimelineParseResult {
   return { evidences, unreadRowCount };
 }
 
+// ─── Format 2d: account-wide "Transactions" screen (screenshot) ───────────
+// A second, distinct account-wide history screen (title "Transactions",
+// tabs Completed/Pending/Cancelled). Unlike Format 2c's "Orders" timeline,
+// every row here DOES carry a real execution date + time — but, unlike the
+// per-stock "Orders" screen (Format 2), it never prints a share count or a
+// per-share price, only the real ticker code and the order's signed net
+// total (negative for a Buy debit, positive for a Sell credit). Parsed as
+// ParsedOrderEvidence with `date` set (see that interface's doc comment) so
+// it corroborates a pending candidate on ticker/side/date/total-value match
+// instead of ticker/side/shares/price — there is no way to recover a share
+// count or price from a total alone. The screen doesn't print a per-row
+// status word either (status is conveyed by which tab is selected, which
+// plain OCR text can't distinguish) — every row this parses is treated as
+// "fulfilled", matching the Completed tab this format is meant to be
+// uploaded from.
+const transactionsAnchorPattern = /\b(Buy|Sell)\s+([A-Z]{4})\b/g;
+const transactionsAmountPattern = /([+-]?[\d,]+\.\d{2})/g;
+
+function parseTransactionsScreenImpl(text: string): OrdersTimelineParseResult {
+  const evidences: ParsedOrderEvidence[] = [];
+  let unreadRowCount = 0;
+  const normalized = text.replace(/\s+/g, " ");
+  const anchors = [...normalized.matchAll(transactionsAnchorPattern)].filter(
+    (m) => !NON_TICKER_WORDS.has(m[2]) && !NON_STOCK_INSTRUMENTS.has(m[2]),
+  );
+
+  for (let i = 0; i < anchors.length; i++) {
+    const anchor = anchors[i];
+    const anchorEnd = (anchor.index ?? 0) + anchor[0].length;
+    const nextStart = i + 1 < anchors.length ? (anchors[i + 1].index ?? normalized.length) : normalized.length;
+    const window = normalized.slice(anchorEnd, nextStart);
+
+    const dateMatch = [...window.matchAll(orderDateTimePattern)][0];
+    const date = dateMatch ? parseShortDate(dateMatch[1]) : null;
+    if (!date) {
+      unreadRowCount += 1;
+      continue;
+    }
+
+    // The total sits after the date/time in a genuine row; searching only
+    // past the date match means a stray number earlier in the window (e.g.
+    // the previous row's trailing digits) can never be mistaken for it.
+    const afterDate = window.slice((dateMatch.index ?? 0) + dateMatch[0].length);
+    const amountMatch = [...afterDate.matchAll(transactionsAmountPattern)][0];
+    const totalValue = amountMatch ? Math.abs(parseFloat(amountMatch[1].replace(/,/g, ""))) : 0;
+    if (!totalValue) {
+      unreadRowCount += 1;
+      continue;
+    }
+
+    const ticker = normalizeTicker(anchor[2]);
+    evidences.push({
+      ticker,
+      companyName: canonicalNameForTicker(ticker),
+      side: /buy/i.test(anchor[1]) ? "BUY" : "SELL",
+      date,
+      time: normalizeTime(dateMatch[2]),
+      totalValue,
+      status: "fulfilled",
+      confidence: KNOWN_TICKER_SET.has(ticker) ? "high" : "low",
+    });
+  }
+
+  return { evidences, unreadRowCount };
+}
+
+// Actually parses the candidate rows (rather than just testing for anchors)
+// so detection can't misfire on an unrelated document that happens to
+// contain a stray "Buy/Sell <4 letters>" — the statement/invoice/Orders-
+// screen formats never pair that shape with a day-month-year + AM/PM
+// timestamp immediately after it, so a real parsed row is a much safer
+// signal than the anchor alone.
+function looksLikeTransactionsScreenImpl(text: string): boolean {
+  const { evidences } = parseTransactionsScreenImpl(text);
+  if (evidences.length === 0) return false;
+  if (evidences.length >= 2) return true;
+  return /\btransactions\b/i.test(text);
+}
+
 // ─── Format 3: Thndr app "My position" screen (ground-truth verification) ──
 function numbersAfter(section: string, label: RegExp): string[] {
   const m = label.exec(section);
@@ -804,13 +883,17 @@ export class ThndrParser implements BrokerParser {
   }
 
   looksLikeOrdersTimeline(text: string): boolean {
-    return looksLikeOrdersTimelineImpl(text);
+    return looksLikeOrdersTimelineImpl(text) || looksLikeTransactionsScreenImpl(text);
   }
 
-  // No tracked-date-range filter here — timeline rows carry no date at all,
-  // which is exactly why they're evidence rather than trade candidates.
+  // No tracked-date-range filter here: the undated "Orders" timeline shape
+  // carries no date at all, which is exactly why it's evidence rather than
+  // trade candidates; the dated "Transactions" list shape does have real
+  // dates, but an out-of-range evidence row simply never matches any pending
+  // candidate (which already went through the filter on its own parse path),
+  // so filtering it here would only be redundant, not protective.
   parseOrdersTimeline(text: string): OrdersTimelineParseResult {
-    return parseOrdersTimelineTextImpl(text);
+    return looksLikeOrdersTimelineImpl(text) ? parseOrdersTimelineTextImpl(text) : parseTransactionsScreenImpl(text);
   }
 
   parsePositionVerification(text: string): Omit<PositionVerification, "id" | "portfolioId">[] {

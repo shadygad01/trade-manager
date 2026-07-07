@@ -304,6 +304,50 @@ describe("ThndrParser orders timeline", () => {
   });
 });
 
+describe("ThndrParser account-wide Transactions screen", () => {
+  const parser = new ThndrParser("2020-01-01");
+
+  // OCR-shaped text from the real account-wide "Transactions" screen: title,
+  // filter tabs, then rows read as "<Buy/Sell> <TICKER>" followed by a
+  // "<date> – <time>" and a signed net total — no share count, no per-share
+  // price, unlike the per-stock Orders screen or the undated Orders timeline.
+  const transactionsText =
+    "5:32 Transactions Completed Pending Cancelled " +
+    "Buy EHDR 17 Jan 23 – 4:24pm -378.29 " +
+    "Sell RMDA 17 Jan 23 – 3:20pm 9,980.60 " +
+    "Sell JUFO 17 Jan 23 – 3:20pm 737.96 " +
+    "Buy ESRS 16 Jan 23 – 4:40pm -4,603.91 " +
+    "Sell JUFO 16 Jan 23 – 2:49pm 250.90";
+
+  it("recognizes the Transactions screen and not the other document shapes", () => {
+    expect(parser.looksLikeOrdersTimeline(transactionsText)).toBe(true);
+    expect(parser.looksLikeOrdersTimeline("2/2/2026 Buy Eastern Co. (50@39.3800) -1,974.47")).toBe(false);
+    expect(
+      parser.looksLikeOrdersTimeline("ORAS Orascom Construction All orders Buy • 3 shares @ EGP 448.000 11 Feb 26 – 11:00AM Fulfilled"),
+    ).toBe(false);
+  });
+
+  it("parses each row's ticker, side, date and signed total, with no shares/price/orderType", () => {
+    const { evidences, unreadRowCount } = parser.parseOrdersTimeline(transactionsText);
+    expect(unreadRowCount).toBe(0);
+    expect(evidences).toHaveLength(5);
+    expect(evidences[0]).toMatchObject({ ticker: "EHDR", side: "BUY", date: "2023-01-17", totalValue: 378.29, status: "fulfilled" });
+    expect(evidences[0].shares).toBeUndefined();
+    expect(evidences[0].price).toBeUndefined();
+    expect(evidences[0].orderType).toBeUndefined();
+    expect(evidences[2]).toMatchObject({ ticker: "JUFO", side: "SELL", date: "2023-01-17", totalValue: 737.96, confidence: "high" });
+    expect(evidences[4]).toMatchObject({ ticker: "JUFO", side: "SELL", date: "2023-01-16", totalValue: 250.9 });
+  });
+
+  it("does not misfire on the per-stock Orders screen (ticker only in the header, never inline with Buy/Sell)", () => {
+    const ordersScreenText =
+      "JUFO Juhayna Food Industries " +
+      "Buy • 57 shares @ EGP 8.700 09 Jan 23 – 01:09PM Fulfilled " +
+      "Buy • 500 shares @ EGP 8.790 09 Jan 23 – 11:56AM Fulfilled";
+    expect(parser.looksLikeOrdersTimeline(ordersScreenText)).toBe(false);
+  });
+});
+
 describe("ThndrParser.parseOrdersScreenText", () => {
   const parser = new ThndrParser("2020-01-01");
   const header = "ORAS\nOrascom Construction PLC\n";
