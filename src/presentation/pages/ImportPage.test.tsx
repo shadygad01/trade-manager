@@ -1029,4 +1029,45 @@ describe("TickerGroupCard — Orders timeline evidence", () => {
     await user.click(screen.getByTitle(/Remove this order row if it was misread/));
     expect(onDiscardOrderEvidence).toHaveBeenCalledWith(expect.objectContaining({ key: "skpc-o1" }));
   });
+
+  it("also badges the unconfirmed row on a no-verification ticker (e.g. a closed position with no My Position screen to ever upload) — not just on a mismatch", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{
+          buys: [buyEntry("skpc-good"), buyEntry("skpc-extra")],
+          sells: [],
+          verifications: [],
+          dividends: [],
+          orderEvidences: [orderEvidenceEntry("skpc-o1")],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: 60 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        orderConfirmedKeys={new Set(["skpc-good"])}
+        onDiscardOrderEvidence={vi.fn()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Matches Orders history")).toBeInTheDocument();
+    expect(screen.getByText("No matching order")).toBeInTheDocument();
+  });
 });

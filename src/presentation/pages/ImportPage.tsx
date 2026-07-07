@@ -1506,10 +1506,18 @@ export function TickerGroupCard({
   const hasCommittable =
     group.buys.length + group.sells.length + group.verifications.length + group.dividends.length > 0;
   // "No matching order" is only a meaningful signal when the broker's order
-  // history for this ticker was actually uploaded AND the count doesn't
-  // reconcile — an absent screenshot proves nothing about any row.
+  // history for this ticker was actually uploaded AND the ticker isn't
+  // already matched — an absent screenshot proves nothing about any row.
+  // Covers both "mismatch" (a broker position screenshot disagrees) and
+  // "no-verification" (no screenshot at all, e.g. a fully closed position
+  // with no "My Position" screen to ever upload) — either way, a row this
+  // ticker's own uploaded order history doesn't corroborate is the likely
+  // place a missing/misread/duplicate transaction is hiding, and unlike a
+  // combinatorial "which subset reconciles" solver this scales to any
+  // number of pending rows.
   const tickerHasFulfilledOrders = orderEvidences.some((e) => e.evidence.status === "fulfilled");
-  const highlightUnmatchedByOrders = tickerHasFulfilledOrders && matchStatus?.reason === "mismatch";
+  const highlightUnmatchedByOrders =
+    tickerHasFulfilledOrders && (matchStatus?.reason === "mismatch" || matchStatus?.reason === "no-verification");
   // Only meaningful for the "no-verification" shortfall banner below — a
   // pending Sell total that exceeds existing-ledger + pending-Buy shares
   // means the ledger is missing Buy history, not missing a screenshot.
