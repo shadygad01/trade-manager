@@ -245,7 +245,19 @@ function siblingPricesClose(a: number, b: number): boolean {
  */
 function sameCandidateExecution(a: ParsedTradeCandidate, b: ParsedTradeCandidate): boolean {
   const decisive = sameExecution(a.transactionNumber, b.transactionNumber);
-  return decisive !== undefined ? decisive : siblingPricesClose(a.price, b.price);
+  if (decisive !== undefined) return decisive;
+  // Two rows that BOTH carry a real, differing execution time are provably
+  // two different real orders — real observed failure (RMDA): two genuine
+  // 500-share buys at the same price, 28 minutes apart, wrongly flagged as
+  // duplicates of each other because the signature these checks group by
+  // (ticker+side+date+shares) doesn't include time. Only fires when both
+  // sides actually printed a time — a document that never carries one (a
+  // statement row) must not be penalized for the comparison, since that's
+  // the routine cross-document pairing case this same grouping exists to
+  // support (a statement row and an orders-screen row of the same execution,
+  // one of them time-less).
+  if (a.time !== undefined && b.time !== undefined && a.time !== b.time) return false;
+  return siblingPricesClose(a.price, b.price);
 }
 
 /** Invoices are labeled, standardized PDFs — the most trustworthy read of a transaction when one exists in a duplicate group. */
@@ -497,6 +509,75 @@ export function findWrongTickerCandidateKeys(
         wrongTickerConfidenceRank(o.candidate.confidence) > wrongTickerConfidenceRank(c.confidence),
     );
     if (betterPendingCopy) hints.set(e.key, normalizeTicker(betterPendingCopy.candidate.ticker));
+  }
+  return hints;
+}
+
+/**
+ * Two dates plausibly the same real day, misread by a single OCR digit
+ * substitution in the day component (same year+month, the two-digit day
+ * strings differ in exactly one character position) — e.g. "2023-01-11" vs
+ * "2023-01-01" (a real observed failure: the same execution, scroll-overlap
+ * duplicated across two screenshots, read once with the day intact and once
+ * with it misread). Deliberately narrow: a blanket "nearby date" tolerance
+ * would be unsafe here — two genuinely different real trades of the same
+ * share count at a similar price, a week or two apart, are an entirely
+ * ordinary trading pattern (accumulating a position over several weeks), so
+ * this only fires for the specific single-digit-substitution shape OCR
+ * actually produces, not any date that happens to be "close".
+ */
+function datesLikelyOcrMisread(a: string, b: string): boolean {
+  if (a === b) return false;
+  const [ay, am, ad] = a.split("-");
+  const [by, bm, bd] = b.split("-");
+  if (ay !== by || am !== bm || ad === undefined || bd === undefined || ad.length !== bd.length) return false;
+  let differing = 0;
+  for (let i = 0; i < ad.length; i++) {
+    if (ad[i] !== bd[i]) differing++;
+  }
+  return differing === 1;
+}
+
+/**
+ * Advisory-only hint for a pending Buy/Sell whose ticker+side+shares+price
+ * match a trade already on the ledger closely enough to be the same real
+ * execution, except its date differs by exactly the single-digit OCR
+ * substitution datesLikelyOcrMisread targets. Real observed failure (RMDA):
+ * a 500-share buy appearing in the scroll overlap of two screenshots landed
+ * as two separate committed trades — "11 Jan" in one read, "01 Jan" in the
+ * other — because the exact-date signature every other duplicate check
+ * relies on never recognized them as the same row. This never auto-skips or
+ * auto-merges anything, same contract as findWrongTickerCandidateKeys: a
+ * badge plus the existing manual discard/delete action, since silently
+ * collapsing two nearby-date trades that could genuinely be different real
+ * orders would be an unacceptable risk to take automatically.
+ */
+export function findDateMisreadDuplicateHints(
+  pendingEntries: { key: string; candidate: ParsedTradeCandidate }[],
+  committedTrades: { ticker: string; executionDate: string; shares: number; entryPrice: number }[],
+  committedAllocations: { ticker: string; executionDate: string; sharesClosed: number; exitPrice: number }[],
+): Map<string, string> {
+  const hints = new Map<string, string>();
+  for (const e of pendingEntries) {
+    const ticker = normalizeTicker(e.candidate.ticker);
+    const c = e.candidate;
+    const matched =
+      c.side === "BUY"
+        ? committedTrades.find(
+            (t) =>
+              normalizeTicker(t.ticker) === ticker &&
+              t.shares === c.shares &&
+              pricesWithinOcrNoise(t.entryPrice, c.price) &&
+              datesLikelyOcrMisread(t.executionDate, c.date),
+          )
+        : committedAllocations.find(
+            (a) =>
+              normalizeTicker(a.ticker) === ticker &&
+              a.sharesClosed === c.shares &&
+              pricesWithinOcrNoise(a.exitPrice, c.price) &&
+              datesLikelyOcrMisread(a.executionDate, c.date),
+          );
+    if (matched) hints.set(e.key, matched.executionDate);
   }
   return hints;
 }

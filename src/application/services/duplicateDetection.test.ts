@@ -10,6 +10,7 @@ import {
   completeCandidateFieldsFromSiblings,
   findCrossSourceVerifiedKeys,
   findWrongTickerCandidateKeys,
+  findDateMisreadDuplicateHints,
 } from "./duplicateDetection";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
@@ -436,6 +437,25 @@ describe("suggestDuplicatePendingCandidateKeysToDelete", () => {
     ];
     expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["inv2"]);
   });
+
+  it("does NOT flag two same-signature Buys as duplicates when both carry a real, differing execution time (the RMDA case: two genuine same-day, same-price buys 28 minutes apart)", () => {
+    const entries = [
+      { key: "b1", candidate: buyCandidate({ ticker: "RMDA", price: 2.94, date: "2023-01-05", shares: 500, time: "10:33AM" }) },
+      { key: "b2", candidate: buyCandidate({ ticker: "RMDA", price: 2.94, date: "2023-01-05", shares: 500, time: "10:05AM" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("still flags a same-signature pair as a duplicate when only one side carries a time (the routine statement+orders-screen pairing case)", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" }) }, // statement rows never carry a time
+      { key: "os", candidate: buyCandidate({ price: 50.0, source: "orders-screen", time: "10:33AM" }) },
+    ];
+    // "st" sorts first (tied price, stable sort keeps array order) and
+    // survives; "os" — missing a time on the OTHER side, so the new time
+    // guard doesn't apply — is still flagged as the duplicate to delete.
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["os"]);
+  });
 });
 
 describe("completeCandidateFieldsFromSiblings", () => {
@@ -658,5 +678,95 @@ describe("findWrongTickerCandidateKeys", () => {
     };
     const hints = findWrongTickerCandidateKeys([phantomSell], [], [allocation]);
     expect(hints.get("hrho-s1")).toBe("SUGR");
+  });
+});
+
+describe("findDateMisreadDuplicateHints", () => {
+  it("flags a pending Buy whose day was likely misread by one digit against an already-committed trade (the real RMDA case: 11 Jan vs 01 Jan)", () => {
+    const committed = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "RMDA",
+      shares: 500,
+      entryPrice: 2.79,
+      executionDate: "2023-01-11",
+      executionTime: "10:34",
+    });
+    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 2.79, date: "2023-01-01" }) };
+    const hints = findDateMisreadDuplicateHints([pending], [committed], []);
+    expect(hints.get("p1")).toBe("2023-01-11");
+  });
+
+  it("does not flag an exact date match — that's the normal exact-duplicate path's job, not this one", () => {
+    const committed = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "RMDA",
+      shares: 500,
+      entryPrice: 2.79,
+      executionDate: "2023-01-11",
+      executionTime: "10:34",
+    });
+    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 2.79, date: "2023-01-11" }) };
+    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
+  });
+
+  it("does not flag dates differing in more than one digit position — too far from a single OCR misread to be safe", () => {
+    const committed = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "RMDA",
+      shares: 500,
+      entryPrice: 2.79,
+      executionDate: "2023-01-11",
+      executionTime: "10:34",
+    });
+    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 2.79, date: "2023-01-22" }) };
+    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
+  });
+
+  it("does not flag a different month/year even if the day looks similar", () => {
+    const committed = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "RMDA",
+      shares: 500,
+      entryPrice: 2.79,
+      executionDate: "2023-01-11",
+      executionTime: "10:34",
+    });
+    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 2.79, date: "2023-02-11" }) };
+    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
+  });
+
+  it("does not flag when the price genuinely differs — not the same execution", () => {
+    const committed = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "RMDA",
+      shares: 500,
+      entryPrice: 2.79,
+      executionDate: "2023-01-11",
+      executionTime: "10:34",
+    });
+    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 3.5, date: "2023-01-01" }) };
+    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
+  });
+
+  it("flags a pending Sell against a committed allocation the same way", () => {
+    const allocation = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "sg1",
+      tradeId: "t1",
+      portfolioId: "p1",
+      ticker: "RMDA",
+      sharesClosed: 500,
+      exitPrice: 2.8,
+      executionDate: "2023-01-17",
+      executionTime: "13:26",
+    });
+    const pending = { key: "s1", candidate: buyCandidate({ ticker: "RMDA", side: "SELL" as const, shares: 500, price: 2.8, date: "2023-01-07" }) };
+    const hints = findDateMisreadDuplicateHints([pending], [], [allocation]);
+    expect(hints.get("s1")).toBe("2023-01-17");
   });
 });

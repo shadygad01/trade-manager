@@ -23,6 +23,16 @@ export interface OrdersScreenParseResult {
   fulfilledStatusCount: number;
   statusCountMismatch: boolean;
   outOfRangeCount?: number;
+  /**
+   * True when order rows (Buy/Sell + share count) were clearly present but
+   * no ticker could be resolved from the header at all (neither a known
+   * company name nor a 4-letter code) — the whole file is dropped as a
+   * result, worse than a single unreadable row. Lets ImportOrchestrator
+   * surface a specific, actionable failure message instead of the generic
+   * "no transactions found in the file" (which reads as "wrong document
+   * type" when the real problem is "right document, unresolvable header").
+   */
+  unresolvedTicker?: boolean;
 }
 
 export interface OrdersTimelineParseResult {
