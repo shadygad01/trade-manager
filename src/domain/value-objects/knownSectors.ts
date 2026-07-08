@@ -33,6 +33,7 @@ const SECTOR_BY_TICKER: Readonly<Record<string, string>> = {
   ORHD: "Real Estate",
   SUGR: "Food & Beverage",
   MASR: "Real Estate",
+  RMDA: "Healthcare & Pharmaceuticals",
 };
 
 /** Every entry in `KNOWN_EGX_TICKERS` must be classified — this is asserted by a test, not just assumed. */

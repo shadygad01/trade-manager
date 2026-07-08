@@ -533,6 +533,30 @@ describe("ThndrParser.parseOrdersScreenText", () => {
     expect(result.candidates[0].date).toBe("2026-02-02");
   });
 
+  it("recovers a Buy row whose bullet glyph OCR'd as a stray digit instead of being dropped entirely", () => {
+    // Real observed failure (RMDA screenshot): every Sell row's bullet OCR'd
+    // fine as "»", but every Buy row's bullet OCR'd as "0" — a real digit —
+    // which the original [^\s\d] gap pattern couldn't skip over (digits were
+    // deliberately excluded from that gap), silently dropping every Buy row
+    // from the screen while Sells on the same screenshot extracted fine.
+    const text = `${header}All orders Buy 0 990 shares @EGP 2.790 11 Jan 23 - 10:49AM Fulfilled`;
+    const result = parser.parseOrdersScreenText(text);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({ side: "BUY", shares: 990, price: 2.79 });
+  });
+
+  it("does not let the misread-bullet-digit tolerance corrupt a real Sell row's own bullet-less-digit reading", () => {
+    // Guard against a false positive: this pattern must not fire for a row
+    // whose quantity itself genuinely starts right after the verb with no
+    // separator at all (e.g. "Buy3 shares" from the existing dropped-bullet
+    // test above) — already covered — nor swallow a two-digit quantity by
+    // misparsing its first digit as the bullet.
+    const text = `${header}All orders Sell » 17 shares @ EGP 253.128 20 Aug 24 – 10:07AM Fulfilled`;
+    const result = parser.parseOrdersScreenText(text);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].shares).toBe(17);
+  });
+
   it("flags an incomplete row when a field is missing without corrupting other rows", () => {
     const text =
       header +
@@ -559,6 +583,24 @@ describe("ThndrParser.parseOrdersScreenText", () => {
     const text = "AZG\nAll orders Buy • 6 shares @ EGP 22.321 11 Feb 26 – 11:00AM Fulfilled";
     const result = parser.parseOrdersScreenText(text);
     expect(result.candidates).toHaveLength(0);
+  });
+
+  it("resolves the ticker from the company name alone when the header's ticker-code text isn't visible (a scrolled continuation screenshot)", () => {
+    // Real observed failure (RMDA): a screenshot of a scrolled-down portion
+    // of the per-stock Orders screen keeps "Rameda Pharmaceutical Company"
+    // pinned at the top but drops the small "RMDA" code label above it —
+    // resolveHeaderTicker's only fallback before RMDA was added to
+    // KNOWN_EGX_TICKERS was a bare 4-letter-code scan, which found nothing
+    // here and dropped every row in the file (0 candidates, whole upload
+    // treated as unrecognized) even though the company name was read fine.
+    const text = "Rameda Pharmaceutical Company\nAll orders Buy 0 500 shares @EGP 2.790 11 Jan 23 - 10:34AM Fulfilled";
+    const result = parser.parseOrdersScreenText(text);
+    expect(result.candidates).toHaveLength(1);
+    // The flat orders-screen parser caps confidence at "medium" regardless of
+    // how confidently the header ticker resolved (positional field-pairing
+    // risk) — the ticker itself still resolves correctly, which is the fix
+    // under test here.
+    expect(result.candidates[0]).toMatchObject({ ticker: "RMDA", side: "BUY", shares: 500, confidence: "medium" });
   });
 });
 
@@ -605,6 +647,13 @@ describe("ThndrParser.parseOrderRowsText (row-isolated rescan)", () => {
     const result = parser.parseOrderRowsText(rows, "AZG");
     expect(result.candidates).toHaveLength(0);
     expect(result.resolvedRowCount).toBe(0);
+  });
+
+  it("recovers a Buy row whose bullet glyph OCR'd as a stray digit, same as the flat parser", () => {
+    const rows = [{ text: "Buy 0 500 shares @EGP 2.790 11 Jan 23 - 10:34AM Fulfilled", colorStatus: "fulfilled" as const }];
+    const result = parser.parseOrderRowsText(rows, "RMDA");
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({ side: "BUY", shares: 500, price: 2.79 });
   });
 });
 

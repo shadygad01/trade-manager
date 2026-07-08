@@ -441,8 +441,14 @@ function ordersSection(text: string): { section: string; strict: boolean } {
 // Bullet between "Buy/Sell" and the quantity OCRs inconsistently (bullet
 // glyph, asterisk, guillemet, or dropped entirely) — accept up to two
 // non-digit, non-space characters instead of a fixed set of glyphs. Digits
-// are explicitly excluded from that gap so they can never be swallowed by it.
-const orderActionPattern = /(Buy|Sell|شراء|بيع)\s*[^\s\d]{0,2}\s*([\d,TIl]+(?:\.\d+)?)\s*shares?/gi;
+// are explicitly excluded from that gap so they can never be swallowed by it
+// — EXCEPT a single lone digit immediately followed by whitespace ("Buy 0
+// 990 shares"), a real observed OCR failure: the bullet glyph itself gets
+// misread as a stray digit (typically "0"). A genuine quantity is never
+// written as two space-separated digit groups in this document's format, so
+// an isolated single-digit token followed by more digits is unambiguously
+// the misread bullet, not part of the real number.
+const orderActionPattern = /(Buy|Sell|شراء|بيع)\s*(?:[^\s\d]{0,2}|\d\s)\s*([\d,TIl]+(?:\.\d+)?)\s*shares?/gi;
 const orderPriceStrictPattern = /@\s*EGP\s*([\d,]+(?:[.,]\d+)?)/gi;
 const orderPriceLenientPattern = /@?\s*EGP\s*([\d,]+(?:[.,]\d+)?)/gi;
 // Allow up to a few stray characters between date and time instead of
@@ -522,8 +528,9 @@ function parseOrdersScreenTextImpl(text: string): OrdersScreenParseResult {
 // contains exactly one row, the flat parser's positional action<->status
 // pairing (and its observed failure mode: a Cancelled order silently counted
 // as Fulfilled when Tesseract shuffled reading order) simply doesn't exist
-// here — a row's fields can only ever come from that row.
-const rowActionPattern = /(Buy|Sell|شراء|بيع)\s*[^\s\d]{0,2}\s*([\d,TIl]+(?:\.\d+)?)\s*shares?/i;
+// here — a row's fields can only ever come from that row. Same lone-digit
+// misread-bullet tolerance as orderActionPattern above.
+const rowActionPattern = /(Buy|Sell|شراء|بيع)\s*(?:[^\s\d]{0,2}|\d\s)\s*([\d,TIl]+(?:\.\d+)?)\s*shares?/i;
 // Within a single row slice the only "EGP <number>" is the execution price,
 // so the lenient (no-@) form is always safe — the header stat lines that
 // forced the flat parser's strict/lenient split never appear in a slice.

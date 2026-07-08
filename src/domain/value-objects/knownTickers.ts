@@ -31,6 +31,7 @@ export const KNOWN_EGX_TICKERS: readonly { ticker: string; companyName: string }
   { ticker: "ORHD", companyName: "ORASCOM DEVELOPMENT EGYPT" },
   { ticker: "SUGR", companyName: "DELTA SUGAR" },
   { ticker: "MASR", companyName: "MEDINET MASR HOUSING" },
+  { ticker: "RMDA", companyName: "RAMEDA PHARMACEUTICAL COMPANY" },
 ];
 
 /**
