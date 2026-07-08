@@ -108,7 +108,14 @@ describe("TickerGroupCard — a pending Sell exceeding the ledger's available sh
         portfolios={PORTFOLIOS}
         portfolioId="p-smc"
         portfolioResolved
-        matchStatus={{ matched: false, reason: "no-verification", netShares: -70, existingRemainingShares: 12 }}
+        matchStatus={{
+          matched: false,
+          reason: "no-verification",
+          netShares: -70,
+          existingRemainingShares: 12,
+          pendingBuyShares: 0,
+          pendingSellShares: 82,
+        }}
         distributing={false}
         onPortfolioChange={vi.fn()}
         addedKeys={new Set()}
@@ -135,19 +142,28 @@ describe("TickerGroupCard — a pending Sell exceeding the ledger's available sh
     expect(screen.getByText(/70 short/)).toBeInTheDocument();
   });
 
-  it("excludes an already-skipped/dismissed Sell from the displayed pending-sell total — it must match what the engine actually used to reach this banner's own verdict", () => {
+  it("renders the banner's pending-sell/pending-buy figures directly from matchStatus (checkTickerMatch's own echoed inputs), not a locally re-derived count — the single canonical source after the display/engine drift fix", () => {
     render(
       <TickerGroupCard
         ticker="SKPC"
+        // Two Sell rows extracted (82 + 82 = 164), but "s2" is an
+        // exact-duplicate already auto-skipped by the engine — the ONLY
+        // number that may legitimately reach this banner is whatever
+        // checkTickerMatch itself computed and echoed onto matchStatus
+        // (82), since TickerGroupCard no longer re-derives this figure
+        // from group.sells/skippedKeys at all.
         group={{ buys: [], sells: [sellEntry("s1"), sellEntry("s2")], verifications: [], dividends: [] }}
         portfolios={PORTFOLIOS}
         portfolioId="p-smc"
         portfolioResolved
-        // Same matchStatus as the case above — "s2" (an exact-duplicate Sell,
-        // already auto-skipped) contributes nothing to the engine's real
-        // shortfall math, so the banner's displayed pending-sell figure must
-        // reflect only "s1"'s 82 shares, not both rows' 164.
-        matchStatus={{ matched: false, reason: "no-verification", netShares: -70, existingRemainingShares: 12 }}
+        matchStatus={{
+          matched: false,
+          reason: "no-verification",
+          netShares: -70,
+          existingRemainingShares: 12,
+          pendingBuyShares: 0,
+          pendingSellShares: 82,
+        }}
         distributing={false}
         onPortfolioChange={vi.fn()}
         addedKeys={new Set()}
@@ -467,6 +483,8 @@ describe("TickerGroupCard — no-verification banner surfaces the current net sh
           reason: "no-verification",
           netShares: 220,
           existingRemainingShares: 300,
+          pendingBuyShares: 0,
+          pendingSellShares: 80,
           discrepancySide: "buy",
         }}
         distributing={false}

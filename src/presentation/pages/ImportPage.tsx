@@ -1813,18 +1813,14 @@ export function TickerGroupCard({
   }, [group.buys, group.sells, matchStatus, addedKeys, skippedKeys, dismissedKeys]);
   // Only meaningful for the "no-verification" shortfall banner below — a
   // pending Sell total that exceeds existing-ledger + pending-Buy shares
-  // means the ledger is missing Buy history, not missing a screenshot. Must
-  // exclude skipped/dismissed rows exactly like pendingBuyShares below and
-  // like tickerMatchStatuses' own remainingSells — an already-resolved
-  // (auto-skipped exact-duplicate, or manually dismissed) Sell is not part
-  // of the real shortfall and must not inflate the number displayed here
-  // beyond what the engine actually used to reach this banner's own verdict.
-  const pendingSellShares = group.sells
-    .filter((e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key))
-    .reduce((sum, e) => sum + e.candidate.shares, 0);
-  const pendingBuyShares = group.buys
-    .filter((e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key))
-    .reduce((sum, e) => sum + e.candidate.shares, 0);
+  // means the ledger is missing Buy history, not missing a screenshot. Read
+  // directly off matchStatus (checkTickerMatch's own echoed inputs) rather
+  // than re-deriving from group.buys/group.sells here — the single
+  // canonical figure the match/mismatch decision was actually computed
+  // against, so this display can never again silently drift from the
+  // engine's own numbers the way it once did (see importVerification.ts).
+  const pendingSellShares = matchStatus?.pendingSellShares ?? 0;
+  const pendingBuyShares = matchStatus?.pendingBuyShares ?? 0;
   /**
    * Signed net effect of the still-pending rows flagged "Duplicate"
    * (+buys, -sells). Rows keep counting toward netShares until the user

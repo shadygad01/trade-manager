@@ -20,6 +20,17 @@ export interface TickerMatchStatus {
    * doesn't add up against the rows on screen.
    */
   existingRemainingShares?: number;
+  /**
+   * Echoes checkTickerMatch's own inputs back on the result — the single
+   * canonical figures every "Pending Buy/Sell for TICKER total N shares"
+   * display in the UI must read from, instead of re-deriving them with a
+   * second filter that can silently drift from the one the match/mismatch
+   * decision itself was actually computed against (a real, found-and-fixed
+   * bug: TickerGroupCard's own local pendingSellShares once omitted the
+   * skippedKeys/dismissedKeys exclusion this field's source already applies).
+   */
+  pendingBuyShares?: number;
+  pendingSellShares?: number;
   verifiedUnits?: number;
   /**
    * True on a "mismatch" whose already-committed shares alone (before this
@@ -111,23 +122,26 @@ export function checkTickerMatch(params: {
   allPendingOrderConfirmed?: boolean;
 }): TickerMatchStatus {
   const existingRemainingShares = params.existingRemainingShares;
-  const netShares = existingRemainingShares + params.pendingBuyShares - params.pendingSellShares;
+  const pendingBuyShares = params.pendingBuyShares;
+  const pendingSellShares = params.pendingSellShares;
+  const netShares = existingRemainingShares + pendingBuyShares - pendingSellShares;
+  const common = { existingRemainingShares, pendingBuyShares, pendingSellShares };
 
   if (!params.hasShares) {
-    return { matched: true, reason: "no-shares-to-verify", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits };
+    return { matched: true, reason: "no-shares-to-verify", netShares, ...common, verifiedUnits: params.verifiedUnits };
   }
   if (params.verifiedUnits === undefined) {
     if (Math.abs(netShares) < 1e-6) {
-      return { matched: true, reason: "closed-position", netShares, existingRemainingShares };
+      return { matched: true, reason: "closed-position", netShares, ...common };
     }
     if (params.allPendingFromInvoice) {
-      return { matched: true, reason: "invoice-verified", netShares, existingRemainingShares };
+      return { matched: true, reason: "invoice-verified", netShares, ...common };
     }
     if (params.allPendingSelfVerified) {
-      return { matched: true, reason: "cross-verified", netShares, existingRemainingShares };
+      return { matched: true, reason: "cross-verified", netShares, ...common };
     }
     if (params.allPendingOrderConfirmed) {
-      return { matched: true, reason: "orders-verified", netShares, existingRemainingShares };
+      return { matched: true, reason: "orders-verified", netShares, ...common };
     }
     // No broker screenshot and no alternative verification — indicate which
     // side the surplus/shortage sits on so the user knows where to look.
@@ -136,17 +150,17 @@ export function checkTickerMatch(params: {
     // recorded position has its problem on the Buy side (an extra/duplicate
     // buy already committed), even though Sells are the only pending rows.
     const discrepancySide: "buy" | "sell" = netShares >= 0 ? "buy" : "sell";
-    return { matched: false, reason: "no-verification", netShares, existingRemainingShares, discrepancySide };
+    return { matched: false, reason: "no-verification", netShares, ...common, discrepancySide };
   }
   const matched = Math.abs(netShares - params.verifiedUnits) < 1e-6;
   if (matched) {
-    return { matched: true, reason: "matched", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits };
+    return { matched: true, reason: "matched", netShares, ...common, verifiedUnits: params.verifiedUnits };
   }
   const alreadyFullyRecorded = Math.abs(existingRemainingShares - params.verifiedUnits) < 1e-6;
   // netShares > verifiedUnits → too many shares → excess likely on buy side.
   // netShares < verifiedUnits → too few shares → shortage likely on sell side (extra sell or missing buy).
   const discrepancySide: "buy" | "sell" = netShares > params.verifiedUnits ? "buy" : "sell";
-  return { matched: false, reason: "mismatch", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded, discrepancySide };
+  return { matched: false, reason: "mismatch", netShares, ...common, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded, discrepancySide };
 }
 
 /**
