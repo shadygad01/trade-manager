@@ -583,6 +583,14 @@ describe("ThndrParser.parseOrdersScreenText", () => {
     const text = "AZG\nAll orders Buy • 6 shares @ EGP 22.321 11 Feb 26 – 11:00AM Fulfilled";
     const result = parser.parseOrdersScreenText(text);
     expect(result.candidates).toHaveLength(0);
+    expect(result.unresolvedTicker).toBeFalsy(); // a non-stock instrument resolved fine — it's excluded on purpose, not a resolution failure
+  });
+
+  it("flags unresolvedTicker when order rows are clearly present but the header resolves to no ticker at all", () => {
+    const text = "All orders Buy • 6 shares @ EGP 22.321 11 Feb 26 – 11:00AM Fulfilled"; // no header text above "All orders" at all
+    const result = parser.parseOrdersScreenText(text);
+    expect(result.candidates).toHaveLength(0);
+    expect(result.unresolvedTicker).toBe(true);
   });
 
   it("resolves the ticker from the company name alone when the header's ticker-code text isn't visible (a scrolled continuation screenshot)", () => {

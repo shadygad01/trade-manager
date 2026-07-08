@@ -195,6 +195,7 @@ export class ImportOrchestrator {
     // result matters just as much as on an empty one: a clear screenshot
     // that flat-parsed 4-of-5 used to ship with a "may be missing" warning
     // without ever trying the more reliable path.
+    let unresolvedTickerDetected = false;
     for (const parser of candidateParsers) {
       const flatResult = parser.parseOrdersScreenText(rawText);
       let chosen: typeof flatResult = flatResult;
@@ -236,6 +237,7 @@ export class ImportOrchestrator {
 
       const { candidates, incompleteRowCount, fulfilledStatusCount, statusCountMismatch } = chosen;
       const outOfRangeCount = chosen.outOfRangeCount ?? 0;
+      if (chosen.unresolvedTicker) unresolvedTickerDetected = true;
 
       if (candidates.length > 0 || usedRowScan) {
         const warnings: string[] = [];
@@ -277,7 +279,13 @@ export class ImportOrchestrator {
     // A document can be a real, recognized broker document with zero
     // trades in scope (e.g. a statement covering a period with only
     // deposits/transfers) — different from a file that isn't a recognized
-    // document at all, so the message differs.
+    // document at all, so the message differs. unresolvedTickerDetected is
+    // more specific still: order rows were clearly present, but nothing in
+    // the header — often a scrolled-down continuation whose ticker code
+    // isn't visible, only the company name — resolved to a ticker at all
+    // (see OrdersScreenParseResult.unresolvedTicker). Surfacing that
+    // distinction directly means the user re-crops/re-shoots the header
+    // instead of assuming the whole file is unsupported.
     const looksLikeAnyKnownDocument = candidateParsers.some((p) => p.looksLikeOwnDocument(rawText));
     return {
       status: "failed",
@@ -287,9 +295,11 @@ export class ImportOrchestrator {
       orderEvidences: [],
       rawText,
       warnings: [
-        looksLikeAnyKnownDocument
-          ? "This looks like a recognized broker document, but it has no buy/sell trades in this period."
-          : "No transactions found in the file. Make sure it's a supported broker report.",
+        unresolvedTickerDetected
+          ? "Recognized order rows on this screenshot, but couldn't identify which stock they belong to — no known ticker code or company name was found in the header. Try a screenshot that includes the ticker/company name at the top (scrolling down can cut it off)."
+          : looksLikeAnyKnownDocument
+            ? "This looks like a recognized broker document, but it has no buy/sell trades in this period."
+            : "No transactions found in the file. Make sure it's a supported broker report.",
       ],
       fileHash,
     };

@@ -15,6 +15,7 @@ import {
   completeCandidateFieldsFromSiblings,
   findCrossSourceVerifiedKeys,
   findWrongTickerCandidateKeys,
+  findDateMisreadDuplicateHints,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
 import {
@@ -1176,6 +1177,22 @@ export function ImportPage() {
   }, [pendingCandidates, pendingOrderEvidences, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingAllocations]);
 
   /**
+   * A pending row whose ticker/side/shares/price closely match a trade
+   * already on the ledger, but whose date differs by exactly a single-digit
+   * OCR misread — real observed failure (RMDA): the same execution,
+   * duplicated across a scroll-overlap pair of screenshots, read once with
+   * the day intact and once misread, so the exact-date signature every
+   * other duplicate check relies on never caught it. Advisory only (see
+   * findDateMisreadDuplicateHints) — drives a badge, never an auto-skip.
+   */
+  const dateMisreadHints = useMemo(() => {
+    const stillPending = pendingCandidates.filter(
+      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    );
+    return findDateMisreadDuplicateHints(stillPending, existingTrades, existingAllocations);
+  }, [pendingCandidates, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingAllocations]);
+
+  /**
    * For a mismatch none of the row-level checks can explain, the share
    * arithmetic itself often can: which subset of pending rows, removed,
    * leaves exactly the broker's verified count — ranked by the broker's own
@@ -1544,6 +1561,7 @@ export function ImportPage() {
                 orderConfirmedKeys={orderConfirmedKeys}
                 onDiscardOrderEvidence={(entry) => discardOrderEvidence(entry.key)}
                 wrongTickerHints={wrongTickerHints}
+                dateMisreadHints={dateMisreadHints}
                 reconcileSuggestion={reconcileSuggestions.get(ticker)}
                 placeholderReplacement={placeholderReplacements.has(ticker)}
                 replacingPlaceholder={replacingPlaceholderFor === ticker}
@@ -1628,6 +1646,7 @@ export function TickerGroupCard({
   orderConfirmedKeys,
   onDiscardOrderEvidence,
   wrongTickerHints,
+  dateMisreadHints,
   reconcileSuggestion,
   placeholderReplacement = false,
   replacingPlaceholder = false,
@@ -1688,6 +1707,8 @@ export function TickerGroupCard({
   onDiscardOrderEvidence?: (entry: OrderEvidenceEntry) => void;
   /** Pending key -> the ticker a phantom wrong-ticker read most likely belongs to (see findWrongTickerCandidateKeys) — drives the "likely {other}'s transaction" badge. */
   wrongTickerHints?: Map<string, string>;
+  /** Pending key -> the date (already on the ledger) this row's date was most likely misread from (see findDateMisreadDuplicateHints) — drives an advisory "possible duplicate, misread date" badge. Never auto-discards anything. */
+  dateMisreadHints?: Map<string, string>;
   /** The mismatch auto-reconcile solver's suggested removal for this ticker, when one exists (see suggestRemovalsToReconcile) — drives the banner's one-click fix and the per-row highlight. */
   reconcileSuggestion?: ReconcileSuggestion;
   /** True when this ticker's recorded shares are all deletable opening-balance placeholders and this batch's rows alone reconcile with the broker — flips the alreadyFullyRecorded banner from "discard pending" to "replace the placeholder" (see ImportPage's placeholderReplacements). */
@@ -2155,6 +2176,7 @@ export function TickerGroupCard({
               suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
               suggestedRemoval={reconcileSuggestion?.keysToRemove.includes(entry.key) ?? false}
               wrongTickerHint={wrongTickerHints?.get(entry.key)}
+              dateMisreadHint={dateMisreadHints?.get(entry.key)}
               crossSourceVerified={crossVerifiedKeys?.has(entry.key) ?? false}
               orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
               noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
@@ -2188,6 +2210,7 @@ export function TickerGroupCard({
               suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
               suggestedRemoval={reconcileSuggestion?.keysToRemove.includes(entry.key) ?? false}
               wrongTickerHint={wrongTickerHints?.get(entry.key)}
+              dateMisreadHint={dateMisreadHints?.get(entry.key)}
               crossSourceVerified={crossVerifiedKeys?.has(entry.key) ?? false}
               orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
               noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
@@ -2391,6 +2414,7 @@ export function AutoCommitRow({
   suspectedDuplicate = false,
   suggestedRemoval = false,
   wrongTickerHint,
+  dateMisreadHint,
   crossSourceVerified = false,
   orderConfirmed = false,
   noMatchingOrder = false,
@@ -2414,6 +2438,8 @@ export function AutoCommitRow({
   suggestedRemoval?: boolean;
   /** The ticker this row most likely belongs to, when it looks like a phantom wrong-ticker read of another ticker's transaction (see findWrongTickerCandidateKeys). */
   wrongTickerHint?: string;
+  /** The ledger date this row's date was most likely misread from (see findDateMisreadDuplicateHints) — advisory only, never auto-discards. */
+  dateMisreadHint?: string;
   /** True when this exact transaction was read from two different document types (statement + invoice, statement + orders screenshot, …) — the dual-source verification rule (see findCrossSourceVerifiedKeys). */
   crossSourceVerified?: boolean;
   /** True when a fulfilled order on the broker's Orders timeline screenshot corroborates this exact row (see findOrderConfirmedKeys). */
@@ -2488,6 +2514,14 @@ export function AutoCommitRow({
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
               <ShieldAlert size={11} /> {t("importPage.likelyOthersTransaction", { ticker: wrongTickerHint })}
+            </span>
+          ) : null}
+          {stillPending && dateMisreadHint ? (
+            <span
+              title={t("importPage.dateMisreadHintTitle", { date: formatDate(dateMisreadHint) })}
+              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
+            >
+              <ShieldAlert size={11} /> {t("importPage.dateMisreadHint", { date: formatDate(dateMisreadHint) })}
             </span>
           ) : null}
           {stillPending && suggestedRemoval ? (
@@ -2605,6 +2639,7 @@ export function CandidateRow({
   suspectedDuplicate = false,
   suggestedRemoval = false,
   wrongTickerHint,
+  dateMisreadHint,
   crossSourceVerified = false,
   orderConfirmed = false,
   noMatchingOrder = false,
@@ -2626,6 +2661,8 @@ export function CandidateRow({
   suggestedRemoval?: boolean;
   /** The ticker this row most likely belongs to, when it looks like a phantom wrong-ticker read (see findWrongTickerCandidateKeys and AutoCommitRow's twin prop). */
   wrongTickerHint?: string;
+  /** The ledger date this row's date was most likely misread from (see findDateMisreadDuplicateHints and AutoCommitRow's twin prop). */
+  dateMisreadHint?: string;
   /** True when this exact transaction was read from two different document types (see AutoCommitRow's twin prop). */
   crossSourceVerified?: boolean;
   /** True when a fulfilled order on the broker's Orders timeline screenshot corroborates this exact row (see AutoCommitRow's twin prop). */
@@ -2694,6 +2731,14 @@ export function CandidateRow({
               className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
             >
               <ShieldAlert size={11} /> {t("importPage.likelyOthersTransaction", { ticker: wrongTickerHint })}
+            </span>
+          ) : null}
+          {!added && dateMisreadHint ? (
+            <span
+              title={t("importPage.dateMisreadHintTitle", { date: formatDate(dateMisreadHint) })}
+              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
+            >
+              <ShieldAlert size={11} /> {t("importPage.dateMisreadHint", { date: formatDate(dateMisreadHint) })}
             </span>
           ) : null}
           {!added && suggestedRemoval ? (

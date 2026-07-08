@@ -469,7 +469,22 @@ function parseOrdersScreenTextImpl(text: string): OrdersScreenParseResult {
   }
 
   const header = resolveHeaderTickerImpl(text);
-  if (!header || NON_STOCK_INSTRUMENTS.has(header.ticker.toUpperCase())) {
+  if (!header) {
+    // A non-stock instrument's code can be shorter than the strict 4-letter
+    // ticker regex (e.g. "AZG" for gold savings), so it never reaches
+    // resolveHeaderTickerImpl's candidate list — check for it directly
+    // before concluding the header is genuinely unresolved.
+    const headWords = text.slice(0, 400).match(/\b[A-Z]{2,}\b/g) ?? [];
+    if (headWords.some((w) => NON_STOCK_INSTRUMENTS.has(w))) {
+      return { candidates, incompleteRowCount, fulfilledStatusCount: 0, statusCountMismatch: false };
+    }
+    // Order rows are clearly present (actions.length > 0 above) but nothing
+    // in the header — neither a known company name nor a bare 4-letter code
+    // — resolved to a ticker at all. Distinct from "not this broker's
+    // document" (see ImportOrchestrator's unresolvedTicker-aware message).
+    return { candidates, incompleteRowCount, fulfilledStatusCount: 0, statusCountMismatch: false, unresolvedTicker: true };
+  }
+  if (NON_STOCK_INSTRUMENTS.has(header.ticker.toUpperCase())) {
     return { candidates, incompleteRowCount, fulfilledStatusCount: 0, statusCountMismatch: false };
   }
   const { ticker } = header;
