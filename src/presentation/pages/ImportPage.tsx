@@ -1633,6 +1633,23 @@ export function TickerGroupCard({
   const pendingBuyShares = group.buys
     .filter((e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key))
     .reduce((sum, e) => sum + e.candidate.shares, 0);
+  /**
+   * Signed net effect of the still-pending rows flagged "Duplicate"
+   * (+buys, -sells). Rows keep counting toward netShares until the user
+   * discards them — the system deliberately never auto-deletes — so a
+   * position that looks fully closed can still show a non-zero net purely
+   * because of flagged duplicates. Surfacing "discarding them brings the
+   * net to X" turns that from a mystery into one obvious action.
+   */
+  const duplicateFlaggedNet = useMemo(() => {
+    const stillPending = (e: { key: string }) =>
+      !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key) && suspectedDuplicateKeys.has(e.key);
+    return (
+      group.buys.filter(stillPending).reduce((sum, e) => sum + e.candidate.shares, 0) -
+      group.sells.filter(stillPending).reduce((sum, e) => sum + e.candidate.shares, 0)
+    );
+  }, [group.buys, group.sells, addedKeys, skippedKeys, dismissedKeys, suspectedDuplicateKeys]);
+  const netAfterDiscardingDuplicates = (matchStatus?.netShares ?? 0) - duplicateFlaggedNet;
 
   function confirmRename() {
     onRenameTicker(draftTicker);
@@ -1810,6 +1827,16 @@ export function TickerGroupCard({
               {matchStatus.discrepancySide === "buy"
                 ? t("importPage.discrepancySideBuy")
                 : t("importPage.discrepancySideSell")}
+            </p>
+          ) : null}
+          {Math.abs(duplicateFlaggedNet) > 1e-6 ? (
+            <p className="mt-1.5 text-cyan-300">
+              {Math.abs(netAfterDiscardingDuplicates) < 1e-6
+                ? t("importPage.duplicateDiscardHintZero", { dupNet: formatShares(duplicateFlaggedNet) })
+                : t("importPage.duplicateDiscardHint", {
+                    dupNet: formatShares(duplicateFlaggedNet),
+                    after: formatShares(netAfterDiscardingDuplicates),
+                  })}
             </p>
           ) : null}
           {lastBalanced ? (

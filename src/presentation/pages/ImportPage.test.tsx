@@ -209,6 +209,87 @@ describe("TickerGroupCard — no-verification banner surfaces the current net sh
     expect(screen.getByText(/Current net from the rows below: 450 shares/)).toBeInTheDocument();
     expect(screen.getByText(/every row through .* already nets to exactly 0/)).toBeInTheDocument();
   });
+
+  it("explains that discarding the flagged duplicates lands the net on exactly 0 (the real AMOC shape)", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number): CandidateEntry {
+      return { key, candidate: { ticker: "AMOC", side, shares, price: 8, date: "2023-02-12", confidence: "medium" } };
+    }
+    render(
+      <TickerGroupCard
+        ticker="AMOC"
+        group={{
+          buys: [entry("b1", "BUY", 500), entry("b2", "BUY", 250), entry("b3", "BUY", 50)],
+          sells: [entry("s1", "SELL", 80)],
+          verifications: [],
+          dividends: [],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: 800, existingRemainingShares: 80 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set(["b1", "b2", "b3"])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/account for 800 shares of that net/)).toBeInTheDocument();
+    expect(screen.getByText(/lands on exactly 0, verifying this position automatically/)).toBeInTheDocument();
+  });
+
+  it("when discarding the flagged duplicates does NOT reach 0, shows the resulting net instead of promising auto-verification", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number): CandidateEntry {
+      return { key, candidate: { ticker: "AMOC", side, shares, price: 8, date: "2023-02-12", confidence: "medium" } };
+    }
+    render(
+      <TickerGroupCard
+        ticker="AMOC"
+        group={{
+          buys: [entry("b1", "BUY", 500), entry("b2", "BUY", 250)],
+          sells: [],
+          verifications: [],
+          dividends: [],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: 750 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set(["b1"])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/account for 500 shares of that net — discarding them brings it to 250/)).toBeInTheDocument();
+  });
 });
 
 describe("TickerGroupCard — portfolio picker for a brand-new ticker in more than one portfolio", () => {

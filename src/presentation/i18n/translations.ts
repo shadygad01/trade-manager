@@ -566,6 +566,10 @@ export const en: Dict = {
     needsScreenshotSuffixHasOrders: " (This ticker has Orders-history rows, but not every transaction below is matched by one — rows below flagged \"No matching order\" are the likely place a missing/misread/duplicate transaction is hiding; a position screenshot also settles it.)",
     needsScreenshotSuffixNoOrders: " An account-wide Orders history screenshot also works when it confirms every transaction below.",
     lastBalancedHint: "Suggestion: every row through {{date}} already nets to exactly 0 — the gap starts in whatever's dated after that, so start your search there.",
+    duplicateDiscardHintZero:
+      'Rows flagged "Duplicate" below account for {{dupNet}} shares of that net — likely duplicate copies of transactions already represented in the ledger or the rows here. Discard them and the net lands on exactly 0, verifying this position automatically.',
+    duplicateDiscardHint:
+      'Rows flagged "Duplicate" below account for {{dupNet}} shares of that net — discarding them brings it to {{after}}.',
     placeholderReplaceBanner:
       "{{ticker}}'s recorded position is an opening-balance placeholder with no real dates — and this batch carries its real dated transactions, adding up to the same {{verified}} the broker shows. Replace the placeholder with them? Its cost refunds to cash, then the rows below verify and confirm as usual.",
     replacePlaceholder: "Replace placeholder with real rows",
@@ -1177,6 +1181,10 @@ export const ar: Dict = {
     needsScreenshotSuffixHasOrders: " (لهذا الرمز صفوف من سجل الأوامر، لكن ليست كل معاملة أدناه مطابقة بواحدة منها — الصفوف المعلَّمة \"لا يوجد أمر مطابق\" أدناه هي على الأرجح مكان المعاملة الناقصة أو المقروءة خطأً أو المكررة؛ لقطة شاشة المركز تحسم الأمر أيضًا.)",
     needsScreenshotSuffixNoOrders: " تعمل أيضًا لقطة شاشة سجل الأوامر على مستوى الحساب عندما تؤكد كل معاملة أدناه.",
     lastBalancedHint: "اقتراح: كل الصفوف حتى {{date}} صافيها بالظبط صفر — الفجوة تبدأ فيما هو مؤرَّخ بعد ذلك، فابدأ البحث هناك.",
+    duplicateDiscardHintZero:
+      'الصفوف المعلَّمة "مكرر" أدناه تمثل {{dupNet}} سهمًا من هذا الصافي — على الأرجح نسخ مكررة لمعاملات ممثَّلة بالفعل في السجل أو في الصفوف هنا. احذفها ليصل الصافي إلى صفر بالضبط ويتحقق هذا المركز تلقائيًا.',
+    duplicateDiscardHint:
+      'الصفوف المعلَّمة "مكرر" أدناه تمثل {{dupNet}} سهمًا من هذا الصافي — حذفها يوصله إلى {{after}}.',
     placeholderReplaceBanner:
       "مركز {{ticker}} المسجّل هو بديل مؤقت لرصيد افتتاحي بدون تواريخ حقيقية — وهذه الدفعة تحمل معاملاته الحقيقية المؤرخة، والتي مجموعها {{verified}} كما يظهر عند الوسيط. استبدال البديل المؤقت بها؟ تُرد تكلفته إلى النقد، ثم تتحقق الصفوف أدناه وتؤكَّد كالمعتاد.",
     replacePlaceholder: "استبدال البديل المؤقت بصفوف حقيقية",
