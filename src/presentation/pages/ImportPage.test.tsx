@@ -134,6 +134,43 @@ describe("TickerGroupCard — a pending Sell exceeding the ledger's available sh
     expect(screen.getByText(/Pending Sell\(s\) for SKPC total 82 shares/)).toBeInTheDocument();
     expect(screen.getByText(/70 short/)).toBeInTheDocument();
   });
+
+  it("excludes an already-skipped/dismissed Sell from the displayed pending-sell total — it must match what the engine actually used to reach this banner's own verdict", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [sellEntry("s1"), sellEntry("s2")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        // Same matchStatus as the case above — "s2" (an exact-duplicate Sell,
+        // already auto-skipped) contributes nothing to the engine's real
+        // shortfall math, so the banner's displayed pending-sell figure must
+        // reflect only "s1"'s 82 shares, not both rows' 164.
+        matchStatus={{ matched: false, reason: "no-verification", netShares: -70, existingRemainingShares: 12 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set(["s2"])}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/Pending Sell\(s\) for SKPC total 82 shares/)).toBeInTheDocument();
+    expect(screen.queryByText(/total 164 shares/)).not.toBeInTheDocument();
+  });
 });
 
 describe("TickerGroupCard — 'Recorded on the ledger' panel (find/delete an already-committed duplicate without leaving Import)", () => {
