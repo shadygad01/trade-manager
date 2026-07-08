@@ -156,6 +156,27 @@ describe("ThndrParser.parseStatementText", () => {
     expect(parser.parseStatementText(text)).toHaveLength(0);
   });
 
+  it("repairs OCR digit artifacts (O→0, l/I→1) inside the qty@price group only", () => {
+    // "5O" = 50, "l7.35O" = 17.350 — misreads confined to numeric groups.
+    const text = "2/2/2026 Buy Eastern Co. (5O@39.38OO) -1,974.47";
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.shares).toBe(50);
+    expect(candidate.ticker).toBe("EAST");
+  });
+
+  it("keeps the printed price when the Value column is wildly inconsistent (misread OCR)", () => {
+    // 50 @ 39.38 ≈ 1,969 — a Value of 19.74 (lost digits) must not corrupt price.
+    const text = "2/2/2026 Buy Eastern Co. (50@39.3800) -19.74";
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.price).toBeCloseTo(39.38, 5);
+  });
+
+  it("accepts '.' as a statement date separator", () => {
+    const text = "5.1.2023 Buy Eastern Co. (50@39.3800)";
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.date).toBe("2023-01-05");
+  });
+
   it("matches bilingual Buy/Sell verbs", () => {
     const text = "2/2/2026 شراء Eastern Co. (50@39.3800)";
     const [candidate] = parser.parseStatementText(text);
@@ -235,6 +256,17 @@ describe("ThndrParser.parseStatementText — per-trade Invoice PDF", () => {
       confidence: "high",
       source: "invoice",
     });
+  });
+
+  it("recovers a misread (zero) Average Price from Total Cost / Total Quantity", () => {
+    // OCR turned "26.98" into "0" — on the invoice, Total Cost is exactly
+    // shares × average price (39 × 26.98 = 1,052.22; fees are separate and
+    // only appear in Grand Total), so price = 1,052.22 / 39 = 26.98.
+    const broken = invoiceText.replace("39               26.98 EGP       1,052.22 EGP", "39               0 EGP       1,052.22 EGP");
+    const [candidate] = parser.parseStatementText(broken);
+    expect(candidate).toBeDefined();
+    expect(candidate.price).toBeCloseTo(26.98, 5);
+    expect(candidate.shares).toBe(39);
   });
 
   it("returns no candidates when the invoice's totals row is missing (rather than guessing)", () => {

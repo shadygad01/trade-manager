@@ -16,7 +16,9 @@ function toIsoDate(year: number, month: number, day: number): string | null {
 
 /** Parses dd-mm-yyyy / yyyy-mm-dd / dd-mm-yy (after normalizing "/" to "-") statement dates into an ISO date string. */
 function parseStatementDate(str: string): string | null {
-  const clean = str.replace(/\//g, "-");
+  // "/", "-" and "." are all seen as date separators depending on the
+  // statement's export locale and how OCR renders the glyph.
+  const clean = str.replace(/[/.]/g, "-");
   let m = /^(\d{1,2})-(\d{1,2})-(\d{4})$/.exec(clean);
   if (m) return toIsoDate(parseInt(m[3], 10), parseInt(m[2], 10), parseInt(m[1], 10));
   m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(clean);
@@ -167,8 +169,24 @@ function resolveTicker(description: string): { ticker: string; confidence: Parse
 // it finds the one that's actually "<qty>@<price>". An optional "EGP" is
 // allowed right before the close bracket, and the trailing group captures
 // the row's "Value" column (see the price-from-value note below).
+// The qty/price/value groups additionally accept "O"/"o" (misread "0") and
+// "l"/"I" (misread "1") — but only inside those numeric groups, where context
+// already guarantees the characters are digits; repairStatementNumber() maps
+// them back before parsing. The date keeps strict digits ("." joins "/" and
+// "-" as an accepted separator), and the company-name group is untouched.
 const statementRowPattern =
-  /(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+(Buy|Sell|شراء|بيع)\s+(.{1,80}?)\s*[({[]\s*([\d,]+(?:\.\d+)?)\s*@\s*([\d,]+(?:\.\d+)?)\s*(?:EGP\s*)?[)}\]](?:\s*(-?[\d,]+(?:\.\d+)?))?/gi;
+  /(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})\s+(Buy|Sell|شراء|بيع)\s+(.{1,80}?)\s*[({[]\s*([\dOoIl,]+(?:\.[\dOoIl]+)?)\s*@\s*([\dOoIl,]+(?:\.[\dOoIl]+)?)\s*(?:EGP\s*)?[)}\]](?:\s*(-?[\dOoIl,]+(?:\.[\dOoIl]+)?))?/gi;
+
+// Numeric-group-only OCR repair for statement rows: O/o → 0, l/I → 1, then
+// strip thousands separators. Never applied to free text — only to regex
+// groups whose position (inside "qty@price" / the Value column) proves they
+// are numbers. A token made purely of repairable letters (e.g. "OI") is
+// rejected outright — a real OCR'd number always retains at least one true
+// digit, so requiring one keeps letter-only noise from becoming a value.
+function repairStatementNumber(raw: string | undefined): number {
+  if (!raw || !/\d/.test(raw)) return NaN;
+  return parseFloat(raw.replace(/[Oo]/g, "0").replace(/[Il]/g, "1").replace(/,/g, ""));
+}
 
 function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
   const candidates: ParsedTradeCandidate[] = [];
@@ -187,9 +205,9 @@ function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
 
     if (NON_STOCK_INSTRUMENTS.has(normalizeCompanyKey(description))) continue;
 
-    const shares = parseFloat(qtyStr.replace(/,/g, ""));
-    let price = parseFloat(priceStr.replace(/,/g, ""));
-    if (!shares || !price) continue;
+    const shares = repairStatementNumber(qtyStr);
+    let price = repairStatementNumber(priceStr);
+    if (!shares || !price || Number.isNaN(shares) || Number.isNaN(price)) continue;
 
     // The printed per-share price doesn't include brokerage commission, but
     // the actual amount debited/credited (the Value column) does — e.g. a
@@ -197,9 +215,18 @@ function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
     // costs 1,999.23, not 42 * 47.47 = 1,993.74. Deriving an effective
     // per-share price from Value keeps shares * price (used everywhere
     // downstream) equal to what was actually paid/received.
+    //
+    // Cross-validation guard: commission is small (well under 1%), so the
+    // Value-derived price must land close to the printed qty@price. If it
+    // deviates by more than 25%, the Value column itself was misread (lost
+    // digit, swallowed neighbouring text) — keep the printed price rather
+    // than let one bad OCR field corrupt an otherwise-good row.
     if (valueStr) {
-      const value = Math.abs(parseFloat(valueStr.replace(/,/g, "")));
-      if (value > 0) price = value / shares;
+      const value = Math.abs(repairStatementNumber(valueStr));
+      if (value > 0) {
+        const derived = value / shares;
+        if (Math.abs(derived - price) / price <= 0.25) price = derived;
+      }
     }
 
     const date = parseStatementDate(dateStr);
@@ -246,7 +273,9 @@ function looksLikeInvoiceImpl(text: string): boolean {
 function parseInvoiceTextImpl(text: string): ParsedTradeCandidate[] {
   const normalized = text.replace(/\s+/g, " ");
 
-  const dateMatch = normalized.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  // "/", "-" and "." all appear as invoice date separators across export
+  // locales and PDF text-layer variations.
+  const dateMatch = normalized.match(/(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/);
   if (!dateMatch) return [];
   const date = toIsoDate(parseInt(dateMatch[3], 10), parseInt(dateMatch[2], 10), parseInt(dateMatch[1], 10));
   if (!date) return [];
@@ -265,11 +294,23 @@ function parseInvoiceTextImpl(text: string): ParsedTradeCandidate[] {
   );
   if (!totalsMatch) return [];
   const shares = parseFloat(totalsMatch[1].replace(/,/g, ""));
-  const price = parseFloat(totalsMatch[2].replace(/,/g, ""));
-  if (!shares || !price) return [];
+  let price = parseFloat(totalsMatch[2].replace(/,/g, ""));
+  const totalCost = parseFloat(totalsMatch[3].replace(/,/g, ""));
+  if (!shares) return [];
 
   const feesMatch = normalized.match(/Total Fees\s+([\d,]+(?:\.\d+)?)\s*EGP/i);
   const fees = feesMatch ? parseFloat(feesMatch[1].replace(/,/g, "")) : 0;
+
+  // Context recovery: if the Average Price cell was misread (zero/garbage)
+  // but Total Quantity and Total Cost survived, the price is fully
+  // determined by them — recompute instead of dropping the transaction.
+  // On these invoices Total Cost = shares × average price (fees are listed
+  // separately and only join in "Grand Total"), so no fee adjustment here.
+  if (!price && totalCost > 0) {
+    const derived = totalCost / shares;
+    if (derived > 0) price = derived;
+  }
+  if (!price) return [];
 
   const resolved = resolveTicker(securityName.trim());
   if (!resolved) return [];

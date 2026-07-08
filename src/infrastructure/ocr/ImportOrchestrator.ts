@@ -7,6 +7,7 @@ import type { BrokerParser, OrderRowText } from "./parsers/BrokerParser";
 import { flatResultIsDeficient, missingFulfilledCount, shouldPreferRowScan } from "./ordersScanSelection";
 import { ThndrParser } from "./parsers/ThndrParser";
 import { CsvStatementParser } from "./parsers/CsvStatementParser";
+import { normalizeExtractedText } from "./textNormalize";
 
 export type ImportDocType = "statement" | "orders-screen" | "orders-timeline" | "position-verification";
 
@@ -75,6 +76,11 @@ export class ImportOrchestrator {
       // layer to extract — the file's bytes already are the text.
       rawText = new TextDecoder("utf-8").decode(buffer);
     }
+
+    // Normalize once, before ANY parser: Eastern Arabic digits, Arabic
+    // decimal/thousands separators, hidden bidi/zero-width chars, and exotic
+    // Unicode spaces all silently break regexes written for clean text.
+    rawText = normalizeExtractedText(rawText);
 
     if (!rawText || rawText.trim().length < MIN_TEXT_LENGTH) {
       return {
@@ -204,7 +210,10 @@ export class ImportOrchestrator {
               slices.map((s) => s.canvas),
               ["eng"],
             );
-            const rows: OrderRowText[] = slices.map((s, i) => ({ text: rowTexts[i], colorStatus: s.colorStatus }));
+            const rows: OrderRowText[] = slices.map((s, i) => ({
+              text: normalizeExtractedText(rowTexts[i]),
+              colorStatus: s.colorStatus,
+            }));
             const rowResult = parser.parseOrderRowsText(rows, headerTicker);
             // Adoption is guarded so switching can never lose a trade the
             // flat parse already extracted (see ordersScanSelection.ts) —
