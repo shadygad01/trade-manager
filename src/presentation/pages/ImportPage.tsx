@@ -1112,6 +1112,7 @@ export function ImportPage() {
           pendingSellShares,
           existingRemainingShares,
           verifiedUnits: latestVerification?.units,
+          verifiedAvgCost: latestVerification?.avgCost,
           allPendingFromInvoice,
           allPendingSelfVerified,
           allPendingOrderConfirmed,
@@ -1223,18 +1224,21 @@ export function ImportPage() {
   const reconcileSuggestions = useMemo(() => {
     const map = new Map<string, ReconcileSuggestion>();
     for (const [ticker, group] of tickerGroups) {
+      // "mismatch" is only ever reached inside checkTickerMatch once a
+      // verification was actually found — existingRemainingShares/
+      // verifiedUnits/verifiedAvgCost are read straight off its own result
+      // rather than re-selecting "the latest PositionVerification for this
+      // ticker" a second time here (a real, found duplicate this consolidates
+      // away — see importVerification.ts's verifiedAvgCost echo).
       const status = tickerMatchStatuses.get(ticker);
-      if (!status || status.reason !== "mismatch" || status.alreadyFullyRecorded) continue;
+      if (!status || status.reason !== "mismatch" || status.alreadyFullyRecorded || status.verifiedUnits === undefined) continue;
       const stillPending = [...group.buys, ...group.sells].filter(
         (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
       );
+      // Still needed for cost basis (a quantity checkTickerMatch doesn't
+      // track at all, unlike share counts) — the individual trades, not just
+      // their remainingShares sum, are required to weight entryPrice per lot.
       const existingForTicker = existingTrades.filter((t) => normalizeTicker(t.ticker) === ticker);
-      const verificationCandidates = [
-        ...existingVerifications.filter((v) => normalizeTicker(v.ticker) === ticker),
-        ...group.verifications.map((e) => e.verification),
-      ];
-      if (verificationCandidates.length === 0) continue;
-      const latestVerification = verificationCandidates.reduce((a, b) => (a.capturedAt > b.capturedAt ? a : b));
       const suggestion = suggestRemovalsToReconcile({
         rows: stillPending.map((e) => ({
           key: e.key,
@@ -1243,17 +1247,17 @@ export function ImportPage() {
           price: e.candidate.price,
           confidence: e.candidate.confidence,
         })),
-        existingRemainingShares: existingForTicker.reduce((sum, t) => sum + t.remainingShares, 0),
+        existingRemainingShares: status.existingRemainingShares ?? 0,
         existingCostBasis: Money.sum(
           existingForTicker.map((t) => Money.from(t.entryPrice).multiply(t.remainingShares)),
         ).toNumber(),
-        verifiedUnits: latestVerification.units,
-        verifiedAvgCost: latestVerification.avgCost,
+        verifiedUnits: status.verifiedUnits,
+        verifiedAvgCost: status.verifiedAvgCost,
       });
       if (suggestion) map.set(ticker, suggestion);
     }
     return map;
-  }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications]);
+  }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, existingTrades]);
 
   /**
    * The one case where alreadyFullyRecorded's "discard all pending" is the

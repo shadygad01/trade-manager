@@ -33,6 +33,15 @@ export interface TickerMatchStatus {
   pendingSellShares?: number;
   verifiedUnits?: number;
   /**
+   * Echoed straight from the same latest-verification record `verifiedUnits`
+   * came from — lets a "mismatch" ticker's avg-cost-based reconcile
+   * suggestion (mismatchResolver.suggestRemovalsToReconcile) read it here
+   * instead of re-selecting "the latest PositionVerification for this
+   * ticker" a second time with a separately maintained copy of the same
+   * capturedAt-max reduce.
+   */
+  verifiedAvgCost?: number;
+  /**
    * True on a "mismatch" whose already-committed shares alone (before this
    * batch's pending candidates) already reconcile exactly against the
    * broker's verified count — i.e. the broker independently confirms the
@@ -117,6 +126,7 @@ export function checkTickerMatch(params: {
   pendingSellShares: number;
   existingRemainingShares: number;
   verifiedUnits?: number;
+  verifiedAvgCost?: number;
   allPendingFromInvoice?: boolean;
   allPendingSelfVerified?: boolean;
   allPendingOrderConfirmed?: boolean;
@@ -128,7 +138,14 @@ export function checkTickerMatch(params: {
   const common = { existingRemainingShares, pendingBuyShares, pendingSellShares };
 
   if (!params.hasShares) {
-    return { matched: true, reason: "no-shares-to-verify", netShares, ...common, verifiedUnits: params.verifiedUnits };
+    return {
+      matched: true,
+      reason: "no-shares-to-verify",
+      netShares,
+      ...common,
+      verifiedUnits: params.verifiedUnits,
+      verifiedAvgCost: params.verifiedAvgCost,
+    };
   }
   if (params.verifiedUnits === undefined) {
     if (Math.abs(netShares) < 1e-6) {
@@ -154,13 +171,29 @@ export function checkTickerMatch(params: {
   }
   const matched = Math.abs(netShares - params.verifiedUnits) < 1e-6;
   if (matched) {
-    return { matched: true, reason: "matched", netShares, ...common, verifiedUnits: params.verifiedUnits };
+    return {
+      matched: true,
+      reason: "matched",
+      netShares,
+      ...common,
+      verifiedUnits: params.verifiedUnits,
+      verifiedAvgCost: params.verifiedAvgCost,
+    };
   }
   const alreadyFullyRecorded = Math.abs(existingRemainingShares - params.verifiedUnits) < 1e-6;
   // netShares > verifiedUnits → too many shares → excess likely on buy side.
   // netShares < verifiedUnits → too few shares → shortage likely on sell side (extra sell or missing buy).
   const discrepancySide: "buy" | "sell" = netShares > params.verifiedUnits ? "buy" : "sell";
-  return { matched: false, reason: "mismatch", netShares, ...common, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded, discrepancySide };
+  return {
+    matched: false,
+    reason: "mismatch",
+    netShares,
+    ...common,
+    verifiedUnits: params.verifiedUnits,
+    verifiedAvgCost: params.verifiedAvgCost,
+    alreadyFullyRecorded,
+    discrepancySide,
+  };
 }
 
 /**
