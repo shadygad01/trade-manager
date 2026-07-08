@@ -338,6 +338,98 @@ describe("TickerGroupCard — no-verification banner surfaces the current net sh
     expect(screen.getByText(/most likely in Buy transactions ALREADY RECORDED on the ledger/)).toBeInTheDocument();
     expect(screen.queryByText(/Likely in Sell side/)).not.toBeInTheDocument();
   });
+
+  it("on an unsolvable mismatch, states the exact gap and points at a misread share count or missing transaction (the real ABUK shape)", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number): CandidateEntry {
+      return { key, candidate: { ticker: "ABUK", side, shares, price: 40, date: "2023-02-07", confidence: "high" } };
+    }
+    render(
+      <TickerGroupCard
+        ticker="ABUK"
+        group={{
+          buys: [],
+          sells: [entry("s1", "SELL", 198), entry("s2", "SELL", 600), entry("s3", "SELL", 150)],
+          verifications: [],
+          dividends: [],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "mismatch",
+          netShares: 67,
+          existingRemainingShares: 1015,
+          verifiedUnits: 27,
+          discrepancySide: "buy",
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/The gap is exactly 40 shares too many/)).toBeInTheDocument();
+    expect(screen.getByText(/INSIDE one row's share count/)).toBeInTheDocument();
+  });
+
+  it("with more pending rows than the solver's exhaustive-search cap, softens the wording instead of falsely claiming no subset exists", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number): CandidateEntry {
+      return { key, candidate: { ticker: "ABUK", side, shares, price: 40, date: "2023-02-07", confidence: "high" } };
+    }
+    const sells = Array.from({ length: 17 }, (_, i) => entry(`s${i}`, "SELL", 10 + i));
+    render(
+      <TickerGroupCard
+        ticker="ABUK"
+        group={{ buys: [], sells, verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "mismatch",
+          netShares: 67,
+          existingRemainingShares: 1015,
+          verifiedUnits: 27,
+          discrepancySide: "buy",
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/too many rows for the automatic subset check/)).toBeInTheDocument();
+    expect(screen.queryByText(/no combination of removable pending rows/)).not.toBeInTheDocument();
+  });
 });
 
 describe("TickerGroupCard — portfolio picker for a brand-new ticker in more than one portfolio", () => {

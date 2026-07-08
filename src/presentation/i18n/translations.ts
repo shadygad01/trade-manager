@@ -610,6 +610,12 @@ export const en: Dict = {
     netBreakdownHint:
       "That net = {{existing}} already recorded on the ledger + {{pendingBuy}} pending buys − {{pendingSell}} pending sells = {{net}}.",
     discrepancySideSell: "Likely in Sell side — check for a duplicate or misread sell transaction, or a missing buy.",
+    mismatchGapHint:
+      "The gap is exactly {{gap}} shares {{direction}}, and no combination of removable pending rows explains it — so the wrong number is most likely INSIDE one row's share count (a misread digit — including rows already Added, deletable with the trash icon and re-recordable manually), or a whole {{gap}}-share transaction is missing from the documents uploaded so far. Compare each row against your broker's Orders history to find it.",
+    mismatchGapTooMany: "too many",
+    mismatchGapTooFew: "too few",
+    mismatchGapHintLarge:
+      "The gap is exactly {{gap}} shares {{direction}}. This batch has too many rows for the automatic subset check, so the cause could be a removable duplicate row, a misread share count inside one row, or a whole {{gap}}-share transaction missing from the documents uploaded so far. Compare each row against your broker's Orders history to find it.",
     matchMissingBuyHistory: "Missing buy history",
     matchNeedsScreenshot: "Needs broker screenshot",
     matchMismatch: "Mismatch",
@@ -1229,6 +1235,12 @@ export const ar: Dict = {
     netBreakdownHint:
       "هذا الصافي = {{existing}} مسجّلة بالفعل في السجل + {{pendingBuy}} مشتريات معلّقة − {{pendingSell}} مبيعات معلّقة = {{net}}.",
     discrepancySideSell: "الفرق محتمل في البيع — تحقق من عملية بيع مكررة أو مقروءة بالخطأ، أو شراء ناقص.",
+    mismatchGapHint:
+      "الفجوة بالضبط {{gap}} سهم {{direction}}، ولا يوجد أي تجميع من الصفوف المعلّقة القابلة للإزالة يفسّرها — إذن الرقم الخطأ على الأرجح داخل عدد أسهم أحد الصفوف نفسه (رقم مقروء خطأً — بما في ذلك الصفوف المضافة بالفعل، ويمكن حذفها بأيقونة السلة وإعادة تسجيلها يدويًا)، أو أن معاملة كاملة بحجم {{gap}} سهم ناقصة من المستندات المرفوعة حتى الآن. قارن كل صف بسجل الأوامر عند وسيطك للعثور عليه.",
+    mismatchGapTooMany: "زيادة",
+    mismatchGapTooFew: "نقصًا",
+    mismatchGapHintLarge:
+      "الفجوة بالضبط {{gap}} سهم {{direction}}. هذه الدفعة تحتوي على صفوف أكثر من أن يغطيها الفحص التلقائي للتجميعات، لذا قد يكون السبب صفًا مكررًا قابلًا للإزالة، أو عدد أسهم مقروء خطأً داخل أحد الصفوف، أو معاملة كاملة بحجم {{gap}} سهم ناقصة من المستندات المرفوعة حتى الآن. قارن كل صف بسجل الأوامر عند وسيطك للعثور عليه.",
     matchMissingBuyHistory: "سجل شراء ناقص",
     matchNeedsScreenshot: "يحتاج لقطة شاشة من الوسيط",
     matchMismatch: "عدم تطابق",

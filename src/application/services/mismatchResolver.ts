@@ -17,7 +17,8 @@ export interface ReconcileSuggestion {
   rankedByAvgCost: boolean;
 }
 
-const MAX_ROWS = 16;
+/** Exhaustive-subset search cap — above this the solver doesn't attempt (2^n). Exported so the UI never claims "no subset explains it" for batches the solver never actually searched. */
+export const MAX_RECONCILE_ROWS = 16;
 
 function confidenceRank(c?: ParseConfidence): number {
   if (c === "low") return 0;
@@ -59,7 +60,7 @@ export function suggestRemovalsToReconcile(params: {
   verifiedAvgCost?: number;
 }): ReconcileSuggestion | undefined {
   const { rows } = params;
-  if (rows.length === 0 || rows.length > MAX_ROWS) return undefined;
+  if (rows.length === 0 || rows.length > MAX_RECONCILE_ROWS) return undefined;
 
   const rowNet = (r: ReconcilableRow) => (r.side === "BUY" ? r.shares : -r.shares);
   const pendingNet = rows.reduce((sum, r) => sum + rowNet(r), 0);

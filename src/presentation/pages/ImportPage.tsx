@@ -23,7 +23,7 @@ import {
   findOrphanedFulfilledEvidence,
   findWrongTickerHintsFromOrders,
 } from "@application/services/orderEvidence";
-import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "@application/services/mismatchResolver";
+import { suggestRemovalsToReconcile, MAX_RECONCILE_ROWS, type ReconcileSuggestion } from "@application/services/mismatchResolver";
 import { findLastBalancedDate } from "@application/services/netShareTimeline";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
@@ -1605,6 +1605,12 @@ export function TickerGroupCard({
   // combinatorial "which subset reconciles" solver this scales to any
   // number of pending rows.
   const tickerHasFulfilledOrders = orderEvidences.some((e) => e.evidence.status === "fulfilled");
+  // How many rows the mismatch subset-solver could actually consider — the
+  // "no combination explains it" wording is only honest at or below the
+  // solver's exhaustive-search cap (see MAX_RECONCILE_ROWS).
+  const stillPendingCount = [...group.buys, ...group.sells].filter(
+    (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+  ).length;
   const highlightUnmatchedByOrders =
     tickerHasFulfilledOrders && (matchStatus?.reason === "mismatch" || matchStatus?.reason === "no-verification");
   /**
@@ -1924,6 +1930,26 @@ export function TickerGroupCard({
               {matchStatus.discrepancySide === "buy"
                 ? t("importPage.discrepancySideBuy")
                 : t("importPage.discrepancySideSell")}
+            </p>
+          ) : null}
+          {matchStatus.verifiedUnits !== undefined ? (
+            <p className="mt-1.5 text-cyan-300">
+              {t(
+                // The strong "no combination of removable rows explains it" claim
+                // is only true when the solver actually searched exhaustively —
+                // it skips batches above MAX_RECONCILE_ROWS, so those get the
+                // softer wording instead of a false assertion.
+                stillPendingCount <= MAX_RECONCILE_ROWS
+                  ? "importPage.mismatchGapHint"
+                  : "importPage.mismatchGapHintLarge",
+                {
+                  gap: formatShares(Math.abs(matchStatus.netShares - matchStatus.verifiedUnits)),
+                  direction:
+                    matchStatus.netShares > matchStatus.verifiedUnits
+                      ? t("importPage.mismatchGapTooMany")
+                      : t("importPage.mismatchGapTooFew"),
+                },
+              )}
             </p>
           ) : null}
           {lastBalanced ? (
