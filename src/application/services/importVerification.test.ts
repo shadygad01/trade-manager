@@ -286,4 +286,36 @@ describe("checkTickerMatch", () => {
     expect(result.reason).toBe("no-verification");
     expect(result.discrepancySide).toBe("sell");
   });
+
+  it("points at the Buy side when a sell-only batch leaves a positive net — the surplus is in already-recorded buys (the real AMOC shape)", () => {
+    // Only Sells pending (80) against 300 already on the ledger: net +220.
+    // A pending-rows comparison would blame the Sell side (the only pending
+    // rows), but a positive net on a supposedly closed position means EXTRA
+    // shares — i.e. a duplicate/extra buy already committed to the ledger.
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 0,
+      pendingSellShares: 80,
+      existingRemainingShares: 300,
+      verifiedUnits: undefined,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("no-verification");
+    expect(result.netShares).toBe(220);
+    expect(result.discrepancySide).toBe("buy");
+  });
+
+  it("still points at the Sell side when the net goes negative even with existing shares on the ledger", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 0,
+      pendingSellShares: 80,
+      existingRemainingShares: 50,
+      verifiedUnits: undefined,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("no-verification");
+    expect(result.netShares).toBe(-30);
+    expect(result.discrepancySide).toBe("sell");
+  });
 });

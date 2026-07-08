@@ -290,6 +290,54 @@ describe("TickerGroupCard — no-verification banner surfaces the current net sh
     );
     expect(screen.getByText(/account for 500 shares of that net — discarding them brings it to 250/)).toBeInTheDocument();
   });
+
+  it("with a Buy-side surplus but zero pending buy rows, points at the ALREADY-RECORDED buys and shows the net arithmetic", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number): CandidateEntry {
+      return { key, candidate: { ticker: "AMOC", side, shares, price: 8, date: "2023-02-13", confidence: "medium" } };
+    }
+    render(
+      <TickerGroupCard
+        ticker="AMOC"
+        group={{
+          buys: [],
+          sells: [entry("s1", "SELL", 30), entry("s2", "SELL", 50)],
+          verifications: [],
+          dividends: [],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "no-verification",
+          netShares: 220,
+          existingRemainingShares: 300,
+          discrepancySide: "buy",
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/300 already recorded on the ledger \+ 0 pending buys − 80 pending sells = 220/)).toBeInTheDocument();
+    expect(screen.getByText(/most likely in Buy transactions ALREADY RECORDED on the ledger/)).toBeInTheDocument();
+    expect(screen.queryByText(/Likely in Sell side/)).not.toBeInTheDocument();
+  });
 });
 
 describe("TickerGroupCard — portfolio picker for a brand-new ticker in more than one portfolio", () => {

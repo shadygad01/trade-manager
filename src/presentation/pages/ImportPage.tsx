@@ -1821,12 +1821,24 @@ export function TickerGroupCard({
                 : t("importPage.needsScreenshotSuffixNoOrders"),
             })}
           </p>
+          {Math.abs(matchStatus.existingRemainingShares ?? 0) > 1e-6 ? (
+            <p className="mt-1.5">
+              {t("importPage.netBreakdownHint", {
+                existing: formatShares(matchStatus.existingRemainingShares ?? 0),
+                pendingBuy: formatShares(pendingBuyShares),
+                pendingSell: formatShares(pendingSellShares),
+                net: formatShares(matchStatus.netShares),
+              })}
+            </p>
+          ) : null}
           {matchStatus.discrepancySide ? (
             <p className="mt-1.5 font-medium">
               {"⚠ "}
-              {matchStatus.discrepancySide === "buy"
-                ? t("importPage.discrepancySideBuy")
-                : t("importPage.discrepancySideSell")}
+              {matchStatus.discrepancySide === "buy" && pendingBuyShares < 1e-6
+                ? t("importPage.discrepancySideLedgerBuy", { ticker, net: formatShares(matchStatus.netShares) })
+                : matchStatus.discrepancySide === "buy"
+                  ? t("importPage.discrepancySideBuy")
+                  : t("importPage.discrepancySideSell")}
             </p>
           ) : null}
           {Math.abs(duplicateFlaggedNet) > 1e-6 ? (

@@ -605,6 +605,10 @@ export const en: Dict = {
     cancelled: "Cancelled",
     discardOrderEvidenceTitle: "Remove this order row if it was misread — it's evidence only, nothing was committed from it.",
     discrepancySideBuy: "Likely in Buy side — check for a duplicate or misread buy transaction.",
+    discrepancySideLedgerBuy:
+      "No pending Buy rows remain, so the extra {{net}} shares are most likely in Buy transactions ALREADY RECORDED on the ledger — a duplicate or misread buy committed earlier. Review {{ticker}}'s recorded buys in its portfolio and delete the extra one; the net here will update automatically.",
+    netBreakdownHint:
+      "That net = {{existing}} already recorded on the ledger + {{pendingBuy}} pending buys − {{pendingSell}} pending sells = {{net}}.",
     discrepancySideSell: "Likely in Sell side — check for a duplicate or misread sell transaction, or a missing buy.",
     matchMissingBuyHistory: "Missing buy history",
     matchNeedsScreenshot: "Needs broker screenshot",
@@ -1220,6 +1224,10 @@ export const ar: Dict = {
     cancelled: "ملغى",
     discardOrderEvidenceTitle: "أزل صف الأمر هذا إن كان مقروءًا بالخطأ — إنه دليل فقط، لم يُسجَّل منه شيء.",
     discrepancySideBuy: "الفرق محتمل في الشراء — تحقق من عملية شراء مكررة أو مقروءة بالخطأ.",
+    discrepancySideLedgerBuy:
+      "لا توجد صفوف شراء معلّقة متبقية، إذن الأسهم الزائدة ({{net}}) على الأرجح في معاملات شراء مسجّلة بالفعل في السجل — شراء مكرر أو مقروء خطأً تم تأكيده سابقًا. راجع مشتريات {{ticker}} المسجّلة في محفظتها واحذف الزائد؛ الصافي هنا سيتحدّث تلقائيًا.",
+    netBreakdownHint:
+      "هذا الصافي = {{existing}} مسجّلة بالفعل في السجل + {{pendingBuy}} مشتريات معلّقة − {{pendingSell}} مبيعات معلّقة = {{net}}.",
     discrepancySideSell: "الفرق محتمل في البيع — تحقق من عملية بيع مكررة أو مقروءة بالخطأ، أو شراء ناقص.",
     matchMissingBuyHistory: "سجل شراء ناقص",
     matchNeedsScreenshot: "يحتاج لقطة شاشة من الوسيط",

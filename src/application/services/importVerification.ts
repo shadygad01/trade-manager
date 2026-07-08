@@ -130,8 +130,12 @@ export function checkTickerMatch(params: {
       return { matched: true, reason: "orders-verified", netShares, existingRemainingShares };
     }
     // No broker screenshot and no alternative verification — indicate which
-    // side of the transaction list is heavier so the user knows where to look.
-    const discrepancySide: "buy" | "sell" = params.pendingBuyShares >= params.pendingSellShares ? "buy" : "sell";
+    // side the surplus/shortage sits on so the user knows where to look.
+    // Sign of the NET (which includes already-recorded ledger shares), not a
+    // pending-rows comparison: a batch of only Sells against a too-large
+    // recorded position has its problem on the Buy side (an extra/duplicate
+    // buy already committed), even though Sells are the only pending rows.
+    const discrepancySide: "buy" | "sell" = netShares >= 0 ? "buy" : "sell";
     return { matched: false, reason: "no-verification", netShares, existingRemainingShares, discrepancySide };
   }
   const matched = Math.abs(netShares - params.verifiedUnits) < 1e-6;
