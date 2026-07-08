@@ -10,6 +10,7 @@ import {
   completeCandidateFieldsFromSiblings,
   findCrossSourceVerifiedKeys,
   findAggregateStatementMatches,
+  keysToRaiseToHighConfidence,
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
 } from "./duplicateDetection";
@@ -794,6 +795,37 @@ describe("findAggregateStatementMatches", () => {
       .map((k) => [o1, o2, o3].find((e) => e.key === k)!.candidate.shares)
       .reduce((a, b) => a + b, 0);
     expect(totalMatchedShares).toBe(statement.candidate.shares);
+  });
+});
+
+describe("keysToRaiseToHighConfidence", () => {
+  it("raises a low-confidence row that's in the corroborated set", () => {
+    const entries = [{ key: "a", candidate: buyCandidate({ confidence: "low" as const }) }];
+    expect(keysToRaiseToHighConfidence(entries, new Set(["a"]))).toEqual(["a"]);
+  });
+
+  it("raises a medium-confidence row that's in the corroborated set", () => {
+    const entries = [{ key: "a", candidate: buyCandidate({ confidence: "medium" as const }) }];
+    expect(keysToRaiseToHighConfidence(entries, new Set(["a"]))).toEqual(["a"]);
+  });
+
+  it("does not re-raise a row already at high confidence — avoids a no-op state write", () => {
+    const entries = [{ key: "a", candidate: buyCandidate({ confidence: "high" as const }) }];
+    expect(keysToRaiseToHighConfidence(entries, new Set(["a"]))).toEqual([]);
+  });
+
+  it("leaves a low-confidence row alone when it isn't in the corroborated set", () => {
+    const entries = [{ key: "a", candidate: buyCandidate({ confidence: "low" as const }) }];
+    expect(keysToRaiseToHighConfidence(entries, new Set())).toEqual([]);
+  });
+
+  it("only raises the corroborated rows out of a mixed batch", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ confidence: "low" as const }) },
+      { key: "b", candidate: buyCandidate({ confidence: "medium" as const }) },
+      { key: "c", candidate: buyCandidate({ confidence: "low" as const }) },
+    ];
+    expect(keysToRaiseToHighConfidence(entries, new Set(["a", "b"]))).toEqual(["a", "b"]);
   });
 });
 

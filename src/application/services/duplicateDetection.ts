@@ -611,6 +611,35 @@ export function findAggregateStatementMatches(
 }
 
 /**
+ * Corroboration confidence bump, generalized and made LIVE: a still-pending
+ * Buy/Sell independently confirmed by two different document types
+ * (findCrossSourceVerifiedKeys) or by a Statement aggregate
+ * (findAggregateStatementMatches) is at least as trustworthy as the exact
+ * 1:1 same-signature cross-source pair completeCandidateFieldsFromSiblings
+ * already raises to "high" confidence — same philosophy (corroboration
+ * raises confidence, NEVER lowers it), applied to whatever `corroboratedKeys`
+ * the caller currently considers confirmed rather than only the exact-
+ * signature grouping completeCandidateFieldsFromSiblings can see. Unlike
+ * that function (a one-shot patch applied only at upload/extraction time),
+ * this is meant to be re-evaluated on every render against the live,
+ * currently-computed verification sets — a corroboration that only
+ * completes on a LATER upload (the second document arriving after the
+ * first has sat pending a while), or a Statement aggregate match (which
+ * never shares an exact signature with the group it summarizes, so
+ * completeCandidateFieldsFromSiblings never sees it at all), still gets
+ * reflected instead of staying frozen at its original low/medium read.
+ *
+ * Returns only the keys that actually need raising (current confidence
+ * isn't already "high") — callers use this to skip a no-op state write.
+ */
+export function keysToRaiseToHighConfidence(
+  entries: { key: string; candidate: ParsedTradeCandidate }[],
+  corroboratedKeys: ReadonlySet<string>,
+): string[] {
+  return entries.filter((e) => e.candidate.confidence !== "high" && corroboratedKeys.has(e.key)).map((e) => e.key);
+}
+
+/**
  * The same physical execution read under two different guessed tickers keeps
  * its side, date, share count and (roughly) its price — only the ticker
  * differs. This is the one duplicate shape none of the checks above can see:

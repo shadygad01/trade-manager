@@ -15,6 +15,7 @@ import {
   completeCandidateFieldsFromSiblings,
   findCrossSourceVerifiedKeys,
   findAggregateStatementMatches,
+  keysToRaiseToHighConfidence,
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
 } from "@application/services/duplicateDetection";
@@ -1097,6 +1098,36 @@ export function ImportPage() {
     }
     return map;
   }, [aggregateStatementMatches, pendingCandidates]);
+
+  /**
+   * Corroboration confidence bump, live: a still-pending row confirmed by
+   * two independent document types (crossVerifiedKeys) or by a Statement
+   * aggregate (aggregateConfirmedKeys) is raised to "high" confidence —
+   * same philosophy as completeCandidateFieldsFromSiblings' one-shot patch
+   * at upload time, generalized to (a) also cover the aggregate-match case,
+   * which never shares an exact signature with what it summarizes so that
+   * function can't see it, and (b) re-evaluate live on every render instead
+   * of freezing at whatever was true the moment the file was processed — a
+   * corroboration that only completes once a second document arrives later
+   * (the first sat pending a while before the confirming one was uploaded)
+   * now gets reflected instead of leaving the row stuck showing "Low-
+   * confidence ticker guess" despite the badges right next to it already
+   * proving the transaction is corroborated. See keysToRaiseToHighConfidence
+   * (duplicateDetection.ts) for the actual raise decision; this effect only
+   * decides WHEN to apply it and writes the patch into the session once.
+   */
+  useEffect(() => {
+    const corroboratedKeys = new Set([...crossVerifiedKeys, ...aggregateConfirmedKeys]);
+    const keysToRaise = keysToRaiseToHighConfidence(pendingCandidates, corroboratedKeys);
+    if (keysToRaise.length === 0) return;
+    const raiseSet = new Set(keysToRaise);
+    importSession.update((prev) => ({
+      ...prev,
+      pendingCandidates: prev.pendingCandidates.map((e) =>
+        raiseSet.has(e.key) ? { ...e, candidate: { ...e.candidate, confidence: "high" } } : e,
+      ),
+    }));
+  }, [pendingCandidates, crossVerifiedKeys, aggregateConfirmedKeys]);
 
   /**
    * Pending Buy/Sell rows corroborated by a fulfilled order on the broker's
