@@ -148,3 +148,43 @@ export function checkTickerMatch(params: {
   const discrepancySide: "buy" | "sell" = netShares > params.verifiedUnits ? "buy" : "sell";
   return { matched: false, reason: "mismatch", netShares, existingRemainingShares, verifiedUnits: params.verifiedUnits, alreadyFullyRecorded, discrepancySide };
 }
+
+/**
+ * A ticker is "fully matched" once every buy/sell/dividend/verification row
+ * extracted for it has reached a terminal state (committed, skipped as an
+ * exact duplicate, or manually dismissed) and none is stuck on a row error —
+ * i.e. there's nothing left for the user to look at. ImportPage uses this to
+ * move a resolved ticker's card out of the active working list into a
+ * collapsed "Fully matched" summary, so the active list only ever shows
+ * tickers that still need a decision (an unmatched share count, an
+ * unallocated sell, a failed commit).
+ *
+ * A ticker with zero buy/sell rows (dividend/verification-only) never
+ * resolves this way — there's no "sell = buy" question to answer for it, so
+ * it stays visible like any other still-open card rather than silently
+ * vanishing.
+ */
+export function isTickerFullyResolved(params: {
+  matched: boolean;
+  transactionKeys: readonly string[];
+  dividendKeys: readonly string[];
+  verificationKeys: readonly string[];
+  addedKeys: ReadonlySet<string>;
+  skippedKeys: ReadonlySet<string>;
+  dismissedKeys: ReadonlySet<string>;
+  acceptedKeys: ReadonlySet<string>;
+  rowErrorKeys: ReadonlySet<string>;
+}): boolean {
+  if (!params.matched || params.transactionKeys.length === 0) return false;
+  const transactionsResolved = params.transactionKeys.every(
+    (k) => params.addedKeys.has(k) || params.skippedKeys.has(k) || params.dismissedKeys.has(k),
+  );
+  if (!transactionsResolved) return false;
+  const dividendsResolved = params.dividendKeys.every((k) => params.addedKeys.has(k));
+  if (!dividendsResolved) return false;
+  const verificationsResolved = params.verificationKeys.every((k) => params.acceptedKeys.has(k));
+  if (!verificationsResolved) return false;
+  return [...params.transactionKeys, ...params.dividendKeys, ...params.verificationKeys].every(
+    (k) => !params.rowErrorKeys.has(k),
+  );
+}

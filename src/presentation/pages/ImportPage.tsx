@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
-import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser } from "lucide-react";
+import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser, ChevronDown } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
@@ -16,7 +16,7 @@ import {
   findCrossSourceVerifiedKeys,
   findWrongTickerCandidateKeys,
 } from "@application/services/duplicateDetection";
-import { checkTickerMatch, type TickerMatchStatus } from "@application/services/importVerification";
+import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
 import {
   orderEvidenceContentKey,
   findOrderConfirmedKeys,
@@ -117,6 +117,7 @@ export function ImportPage() {
   const [sellCandidate, setSellCandidate] = useState<{ key: string; ticker: string; portfolioId: string; candidate: ParsedTradeCandidate } | null>(null);
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [distributing, setDistributing] = useState(false);
+  const [completedExpanded, setCompletedExpanded] = useState(false);
 
   const session = useImportSession();
   const { pendingCandidates, pendingVerifications, pendingDividends, pendingOrderEvidences, tickerPortfolio, filesProcessed } = session;
@@ -642,7 +643,7 @@ export function ImportPage() {
       setErrorMessage(t("importPage.stillLoadingError"));
       return;
     }
-    const matchedTickers = tickerGroups
+    const matchedTickers = activeTickerGroups
       .filter(([ticker]) => tickerMatchStatuses.get(ticker)?.matched)
       .map(([ticker]) => ticker);
     if (matchedTickers.length === 0) return;
@@ -1054,9 +1055,52 @@ export function ImportPage() {
     return map;
   }, [tickerGroups, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications, crossVerifiedKeys, orderConfirmedKeys]);
 
-  const unmatchedTickerCount = tickerGroups.filter(([ticker]) => !tickerMatchStatuses.get(ticker)?.matched).length;
-  const matchedTickerCount = tickerGroups.length - unmatchedTickerCount;
-  const allTickersMatched = tickerGroups.length > 0 && unmatchedTickerCount === 0;
+  /**
+   * A ticker is "fully matched" once every buy/sell/dividend/verification row
+   * extracted for it has reached a terminal state (committed, skipped as an
+   * exact duplicate, or manually dismissed) and none is stuck on a row error
+   * — i.e. there's nothing left here for the user to look at. Once true, its
+   * card moves out of the active working list into the collapsed "Fully
+   * matched" summary below, so the active list only ever shows tickers that
+   * still need a decision (an unmatched share count, an unallocated sell, a
+   * failed commit). A ticker with zero buy/sell rows (dividend/verification-
+   * only) never resolves this way — there's no "sell = buy" question to
+   * answer for it, so it stays visible like any other still-open card.
+   */
+  const rowErrorKeys = useMemo(() => new Set(Object.keys(rowErrors)), [rowErrors]);
+
+  const tickerResolution = useMemo(() => {
+    const map = new Map<string, { resolved: boolean; transactionCount: number }>();
+    for (const [ticker, group] of tickerGroups) {
+      const transactionKeys = [...group.buys, ...group.sells].map((e) => e.key);
+      const resolved = isTickerFullyResolved({
+        matched: Boolean(tickerMatchStatuses.get(ticker)?.matched),
+        transactionKeys,
+        dividendKeys: group.dividends.map((e) => e.key),
+        verificationKeys: group.verifications.map((e) => e.key),
+        addedKeys,
+        skippedKeys,
+        dismissedKeys,
+        acceptedKeys,
+        rowErrorKeys,
+      });
+      map.set(ticker, { resolved, transactionCount: transactionKeys.length });
+    }
+    return map;
+  }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, acceptedKeys, rowErrorKeys]);
+
+  const activeTickerGroups = useMemo(
+    () => tickerGroups.filter(([ticker]) => !tickerResolution.get(ticker)?.resolved),
+    [tickerGroups, tickerResolution],
+  );
+  const completedTickerGroups = useMemo(
+    () => tickerGroups.filter(([ticker]) => tickerResolution.get(ticker)?.resolved),
+    [tickerGroups, tickerResolution],
+  );
+
+  const unmatchedTickerCount = activeTickerGroups.filter(([ticker]) => !tickerMatchStatuses.get(ticker)?.matched).length;
+  const matchedTickerCount = activeTickerGroups.length - unmatchedTickerCount;
+  const allTickersMatched = activeTickerGroups.length > 0 && unmatchedTickerCount === 0;
 
   /**
    * The one duplicate shape every per-ticker check above is blind to: the
@@ -1358,11 +1402,13 @@ export function ImportPage() {
             <div>
               <h3 className="text-sm font-semibold text-slate-200">{t("importPage.step2Title")}</h3>
               <p className="mt-1 text-xs text-slate-400">
-                {allTickersMatched
-                  ? t("importPage.allMatchedStatus")
-                  : matchedTickerCount > 0
-                    ? t("importPage.someMatchedStatus", { matched: matchedTickerCount, total: tickerGroups.length })
-                    : t("importPage.noneMatchedStatus", { unmatched: unmatchedTickerCount, total: tickerGroups.length })}
+                {activeTickerGroups.length === 0
+                  ? t("importPage.allDoneStatus")
+                  : allTickersMatched
+                    ? t("importPage.allMatchedStatus")
+                    : matchedTickerCount > 0
+                      ? t("importPage.someMatchedStatus", { matched: matchedTickerCount, total: activeTickerGroups.length })
+                      : t("importPage.noneMatchedStatus", { unmatched: unmatchedTickerCount, total: activeTickerGroups.length })}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1375,24 +1421,58 @@ export function ImportPage() {
                   {t("importPage.clearSuspectedDuplicates", { n: pendingDuplicateCandidateKeys.length })}
                 </button>
               ) : null}
-              <button
-                onClick={() => void confirmAndDistributeAll()}
-                disabled={matchedTickerCount === 0 || distributing || !initialDataLoaded}
-                title={
-                  matchedTickerCount === 0
-                    ? t("importPage.noTickerVerified")
-                    : allTickersMatched
-                      ? undefined
-                      : t("importPage.confirmSubsetTitle", { matched: matchedTickerCount, total: tickerGroups.length })
-                }
-                className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:hover:bg-slate-700"
-              >
-                {distributing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                {allTickersMatched ? t("importPage.confirmDistributeAll") : t("importPage.confirmAllVerified", { n: matchedTickerCount })}
-              </button>
+              {activeTickerGroups.length > 0 ? (
+                <button
+                  onClick={() => void confirmAndDistributeAll()}
+                  disabled={matchedTickerCount === 0 || distributing || !initialDataLoaded}
+                  title={
+                    matchedTickerCount === 0
+                      ? t("importPage.noTickerVerified")
+                      : allTickersMatched
+                        ? undefined
+                        : t("importPage.confirmSubsetTitle", { matched: matchedTickerCount, total: activeTickerGroups.length })
+                  }
+                  className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:hover:bg-slate-700"
+                >
+                  {distributing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+                  {allTickersMatched ? t("importPage.confirmDistributeAll") : t("importPage.confirmAllVerified", { n: matchedTickerCount })}
+                </button>
+              ) : null}
             </div>
           </div>
-          {tickerGroups.map(([ticker, group]) => {
+
+          {completedTickerGroups.length > 0 ? (
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+              <button
+                onClick={() => setCompletedExpanded((v) => !v)}
+                className="flex w-full items-center justify-between gap-2 text-start"
+              >
+                <span className="flex items-center gap-2 text-sm font-medium text-emerald-300">
+                  <ShieldCheck size={15} />
+                  {t("importPage.completedSectionTitle", { n: completedTickerGroups.length })}
+                </span>
+                <ChevronDown
+                  size={16}
+                  className={`shrink-0 text-emerald-400 transition-transform ${completedExpanded ? "rotate-180" : ""}`}
+                />
+              </button>
+              {completedExpanded ? (
+                <ul className="mt-3 space-y-1.5 text-sm text-emerald-200/90">
+                  {completedTickerGroups.map(([ticker, group]) => {
+                    const companyName = group.buys[0]?.candidate.companyName ?? group.sells[0]?.candidate.companyName ?? "";
+                    const count = tickerResolution.get(ticker)?.transactionCount ?? 0;
+                    return (
+                      <li key={ticker} className="rounded-md bg-emerald-500/10 px-3 py-1.5">
+                        {t("importPage.completedTickerEntry", { ticker, company: companyName, count })}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+
+          {activeTickerGroups.map(([ticker, group]) => {
             const existingIds = existingPortfoliosByTicker.get(ticker);
             const existingNames = existingIds ? [...existingIds].map((id) => portfolios.find((p) => p.id === id)?.name ?? "?") : [];
             return (

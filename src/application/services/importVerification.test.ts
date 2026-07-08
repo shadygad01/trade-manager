@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkTickerMatch } from "./importVerification";
+import { checkTickerMatch, isTickerFullyResolved } from "./importVerification";
 
 describe("checkTickerMatch", () => {
   it("matches when net pending shares exactly equal the verified units", () => {
@@ -317,5 +317,120 @@ describe("checkTickerMatch", () => {
     expect(result.reason).toBe("no-verification");
     expect(result.netShares).toBe(-30);
     expect(result.discrepancySide).toBe("sell");
+  });
+});
+
+describe("isTickerFullyResolved", () => {
+  it("is false while the ticker isn't matched yet, even if every row is otherwise resolved", () => {
+    expect(
+      isTickerFullyResolved({
+        matched: false,
+        transactionKeys: ["buy-1"],
+        dividendKeys: [],
+        verificationKeys: [],
+        addedKeys: new Set(["buy-1"]),
+        skippedKeys: new Set(),
+        dismissedKeys: new Set(),
+        acceptedKeys: new Set(),
+        rowErrorKeys: new Set(),
+      }),
+    ).toBe(false);
+  });
+
+  it("is false for a ticker with no buy/sell rows at all (dividend/verification-only) — no 'sell = buy' question to answer", () => {
+    expect(
+      isTickerFullyResolved({
+        matched: true,
+        transactionKeys: [],
+        dividendKeys: ["div-1"],
+        verificationKeys: [],
+        addedKeys: new Set(["div-1"]),
+        skippedKeys: new Set(),
+        dismissedKeys: new Set(),
+        acceptedKeys: new Set(),
+        rowErrorKeys: new Set(),
+      }),
+    ).toBe(false);
+  });
+
+  it("is true once a matched ticker's only buy has committed and there's nothing else pending", () => {
+    expect(
+      isTickerFullyResolved({
+        matched: true,
+        transactionKeys: ["buy-1"],
+        dividendKeys: [],
+        verificationKeys: [],
+        addedKeys: new Set(["buy-1"]),
+        skippedKeys: new Set(),
+        dismissedKeys: new Set(),
+        acceptedKeys: new Set(),
+        rowErrorKeys: new Set(),
+      }),
+    ).toBe(true);
+  });
+
+  it("is false while a sell candidate still needs to be allocated", () => {
+    expect(
+      isTickerFullyResolved({
+        matched: true,
+        transactionKeys: ["buy-1", "sell-1"],
+        dividendKeys: [],
+        verificationKeys: [],
+        addedKeys: new Set(["buy-1"]),
+        skippedKeys: new Set(),
+        dismissedKeys: new Set(),
+        acceptedKeys: new Set(),
+        rowErrorKeys: new Set(),
+      }),
+    ).toBe(false);
+  });
+
+  it("counts a skipped exact-duplicate buy and a manually dismissed row as resolved, not just an added one", () => {
+    expect(
+      isTickerFullyResolved({
+        matched: true,
+        transactionKeys: ["buy-1", "buy-2", "sell-1"],
+        dividendKeys: [],
+        verificationKeys: [],
+        addedKeys: new Set(["sell-1"]),
+        skippedKeys: new Set(["buy-1"]),
+        dismissedKeys: new Set(["buy-2"]),
+        acceptedKeys: new Set(),
+        rowErrorKeys: new Set(),
+      }),
+    ).toBe(true);
+  });
+
+  it("is false while a dividend or verification row hasn't committed/accepted yet", () => {
+    const base = {
+      matched: true,
+      transactionKeys: ["buy-1"],
+      addedKeys: new Set(["buy-1"]),
+      skippedKeys: new Set<string>(),
+      dismissedKeys: new Set<string>(),
+      rowErrorKeys: new Set<string>(),
+    };
+    expect(
+      isTickerFullyResolved({ ...base, dividendKeys: ["div-1"], verificationKeys: [], acceptedKeys: new Set() }),
+    ).toBe(false);
+    expect(
+      isTickerFullyResolved({ ...base, dividendKeys: [], verificationKeys: ["v-1"], acceptedKeys: new Set() }),
+    ).toBe(false);
+  });
+
+  it("is false when any row — including an added one — is stuck on a row error", () => {
+    expect(
+      isTickerFullyResolved({
+        matched: true,
+        transactionKeys: ["buy-1"],
+        dividendKeys: [],
+        verificationKeys: [],
+        addedKeys: new Set(["buy-1"]),
+        skippedKeys: new Set(),
+        dismissedKeys: new Set(),
+        acceptedKeys: new Set(),
+        rowErrorKeys: new Set(["buy-1"]),
+      }),
+    ).toBe(false);
   });
 });

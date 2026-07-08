@@ -539,6 +539,13 @@ export const en: Dict = {
       return `{{unmatched}} of ${tickerWord} still ${needWord} to match a broker position screenshot before anything can be allocated to a portfolio.`;
     },
     clearSuspectedDuplicates: "Clear suspected duplicates ({{n}})",
+    allDoneStatus: "Every ticker has been fully matched and distributed — nothing left to confirm here.",
+    completedSectionTitle: "Fully matched ({{n}})",
+    completedTickerEntry: (v: TranslationVars) => {
+      const n = Number(v.count);
+      const txWord = enPlural(n, "{{count}} transaction", "{{count}} transactions");
+      return v.company ? `{{ticker}} ({{company}}) fully matched — ${txWord}` : `{{ticker}} fully matched — ${txWord}`;
+    },
     noTickerVerified: "No ticker is verified yet.",
     confirmSubsetTitle: "Confirms every verified ticker now ({{matched}} of {{total}}) — the rest stay pending until fixed.",
     confirmDistributeAll: "Confirm — Distribute to Portfolios",
@@ -1164,6 +1171,15 @@ export const ar: Dict = {
       return `{{unmatched}} من ${tickerWord} لا يزال بحاجة إلى مطابقة لقطة شاشة مركز الوسيط قبل أن يمكن تخصيص أي شيء لمحفظة.`;
     },
     clearSuspectedDuplicates: "حذف المكررات المشتبه بها ({{n}})",
+    allDoneStatus: "كل الأسهم اتطابقت وتوزّعت بالكامل — مفيش حاجة محتاجة تأكيد هنا دلوقتي.",
+    completedSectionTitle: "مطابقة بالكامل ({{n}})",
+    completedTickerEntry: (v: TranslationVars) => {
+      const n = Number(v.count);
+      const txWord = arPlural(n, "لا معاملات", "معاملة واحدة", "معاملتان", "{{count}} معاملة");
+      return v.company
+        ? `تم مطابقة سهم {{ticker}} ({{company}}) بالكامل — ${txWord}`
+        : `تم مطابقة سهم {{ticker}} بالكامل — ${txWord}`;
+    },
     noTickerVerified: "لا يوجد رمز مؤكّد بعد.",
     confirmSubsetTitle: "يؤكد كل رمز مؤكَّد الآن ({{matched}} من {{total}}) — يبقى الباقي معلّقًا حتى يُصلَح.",
     confirmDistributeAll: "تأكيد — التوزيع على المحافظ",
