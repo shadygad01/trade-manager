@@ -32,6 +32,7 @@ import { tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers
 import { isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import { useTrackingStartDate, trackingStartDateStore } from "@presentation/lib/trackingStartDateStore";
 import type { ParsedTradeCandidate, ParsedOrderEvidence, Upload } from "@domain/entities/Upload";
+import type { Trade } from "@domain/entities/Trade";
 import {
   importSession,
   useImportSession,
@@ -261,6 +262,26 @@ export function ImportPage() {
       const set = map.get(key) ?? new Set<string>();
       set.add(t.portfolioId);
       map.set(key, set);
+    }
+    return map;
+  }, [existingTrades]);
+
+  /**
+   * Every already-recorded (real, committed) Trade for a ticker, grouped for
+   * TickerGroupCard's "Recorded on the ledger" panel — the direct-delete
+   * tool for a blocked ticker whose problem is a duplicate/misread buy
+   * already on the ledger rather than anything still pending (see
+   * deleteExistingTrade). Global across portfolios like
+   * existingPortfoliosByTicker, since the panel's job is to help the user
+   * find the offending row wherever it actually is.
+   */
+  const existingTradesByTicker = useMemo(() => {
+    const map = new Map<string, Trade[]>();
+    for (const t of existingTrades) {
+      const key = normalizeTicker(t.ticker);
+      const list = map.get(key) ?? [];
+      list.push(t);
+      map.set(key, list);
     }
     return map;
   }, [existingTrades]);
@@ -539,6 +560,28 @@ export function ImportPage() {
       clearRowError(entry.key);
     } catch (e) {
       setRowError(entry.key, e);
+    }
+  }
+
+  /**
+   * Deletes a trade already sitting on the real ledger for this ticker —
+   * not one this Import session added (deleteAutoAddedTrade covers that),
+   * but one recorded in an earlier session/import that's now the likely
+   * cause of a mismatch (a duplicate buy, a misread quantity). Surfaced
+   * directly on a blocked ticker's card (see TickerGroupCard's "Recorded on
+   * the ledger" panel) so fixing a duplicate never requires leaving Import
+   * for the Trades page and hunting for the right row by hand. Keyed by the
+   * trade's own id in the same rowErrors map deleteAutoAddedTrade uses.
+   */
+  async function deleteExistingTrade(tradeId: string) {
+    if (!confirm(t("importPage.deleteTradeConfirm"))) {
+      return;
+    }
+    try {
+      await deleteTrade(repos, tradeId);
+      clearRowError(tradeId);
+    } catch (e) {
+      setRowError(tradeId, e);
     }
   }
 
@@ -1519,6 +1562,8 @@ export function ImportPage() {
                 }
                 mergeSuggestion={mergeSuggestions.get(ticker)}
                 knownTickerSuggestion={tickerForCompanyNameFallback(ticker)}
+                existingTradesForTicker={existingTradesByTicker.get(ticker) ?? []}
+                onDeleteExistingTrade={(tradeId) => void deleteExistingTrade(tradeId)}
               />
             );
           })}
@@ -1599,6 +1644,8 @@ export function TickerGroupCard({
   existingPortfolioHint,
   mergeSuggestion,
   knownTickerSuggestion,
+  existingTradesForTicker,
+  onDeleteExistingTrade,
 }: {
   ticker: string;
   group: {
@@ -1666,6 +1713,16 @@ export function TickerGroupCard({
   mergeSuggestion: string | undefined;
   /** The real EGX symbol this group's company-name-fallback "ticker" maps to (see tickerForCompanyNameFallback) — drives the one-click rename banner. */
   knownTickerSuggestion?: string;
+  /**
+   * Every real, already-committed Trade for this ticker (any portfolio) —
+   * drives the "Recorded on the ledger" panel shown on a blocked ticker,
+   * letting a duplicate/misread buy be found and deleted right here instead
+   * of on the Trades page. Distinct from addedTradeIds, which only covers
+   * trades this Import session itself just created.
+   */
+  existingTradesForTicker?: Trade[];
+  /** Deletes one already-recorded trade directly from this panel (see ImportPage's deleteExistingTrade). Guarded server-side the same way the Trades page's own delete is — refused if any shares were already closed against it. */
+  onDeleteExistingTrade?: (tradeId: string) => void;
 }) {
   const t = useT();
   const matched = matchStatus?.matched ?? false;
@@ -2042,6 +2099,41 @@ export function TickerGroupCard({
       ) : !portfolioResolved ? (
         <div className="border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
           {t("importPage.newTickerAmbiguousBanner")}
+        </div>
+      ) : null}
+
+      {!matched && (existingTradesForTicker?.length ?? 0) > 0 ? (
+        <div className="border-b border-slate-800 bg-slate-950/40 px-4 py-2 text-xs">
+          <p className="text-slate-400">{t("importPage.existingTradesPanelTitle", { n: existingTradesForTicker!.length })}</p>
+          <ul className="mt-1.5 space-y-1">
+            {existingTradesForTicker!.map((tr) => {
+              const deletable = tr.remainingShares === tr.shares;
+              return (
+                <li key={tr.id} className="flex items-center justify-between gap-2 rounded px-1 py-0.5 text-slate-400">
+                  <span className="tabular-nums">
+                    {formatShares(tr.shares)} sh @ {formatMoney(tr.entryPrice)} · {formatDate(tr.executionDate)}
+                  </span>
+                  {deletable ? (
+                    <button
+                      onClick={() => onDeleteExistingTrade?.(tr.id)}
+                      title={t("importPage.deleteTradeTitle")}
+                      className="shrink-0 rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  ) : (
+                    <span title={t("importPage.cannotDeleteHasSells")} className="shrink-0 text-slate-700">
+                      <Trash2 size={12} />
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {(() => {
+            const failedId = existingTradesForTicker!.find((tr) => rowErrors[tr.id])?.id;
+            return failedId ? <p className="mt-1 text-rose-400">{rowErrors[failedId]}</p> : null;
+          })()}
         </div>
       ) : null}
 

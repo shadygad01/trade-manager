@@ -653,6 +653,13 @@ export const en: Dict = {
     removed: "Removed",
     deleteTradeTitle: "Delete this trade and refund its cost",
     deleteTradeConfirm: "Delete this trade? Its cost will be refunded to the portfolio's cash balance. This can't be undone.",
+    existingTradesPanelTitle: (v: TranslationVars) =>
+      enPlural(
+        Number(v.n),
+        "Recorded on the ledger ({{n}} trade) — a duplicate or misread buy here is a common cause of a mismatch like this:",
+        "Recorded on the ledger ({{n}} trades) — a duplicate or misread buy here is a common cause of a mismatch like this:",
+      ),
+    cannotDeleteHasSells: "Has shares sold against it — can't be deleted",
     discardDuplicateTitle: "Discard this duplicate row — it was never committed, so there's nothing to refund",
     discard: "Discard",
     discardGenericTitle: "Remove this row from the pending list — nothing was committed, so there's nothing to refund. Useful when you suspect this specific row is the extra/wrong one behind a Mismatch.",
@@ -1287,6 +1294,15 @@ export const ar: Dict = {
     removed: "أُزيل",
     deleteTradeTitle: "حذف هذه الصفقة ورد تكلفتها",
     deleteTradeConfirm: "حذف هذه الصفقة؟ سترد تكلفتها إلى رصيد نقد المحفظة. لا يمكن التراجع عن هذا.",
+    existingTradesPanelTitle: (v: TranslationVars) =>
+      arPlural(
+        Number(v.n),
+        "مسجّلة على الدفتر بالفعل — سبب شائع لعدم التطابق ده صفقة شراء مكررة أو مقروءة غلط:",
+        "مسجّلة على الدفتر بالفعل (صفقة واحدة) — سبب شائع لعدم التطابق ده صفقة شراء مكررة أو مقروءة غلط:",
+        "مسجّلتان على الدفتر بالفعل — سبب شائع لعدم التطابق ده صفقة شراء مكررة أو مقروءة غلط:",
+        "مسجّلة على الدفتر بالفعل ({{n}} صفقات) — سبب شائع لعدم التطابق ده صفقة شراء مكررة أو مقروءة غلط:",
+      ),
+    cannotDeleteHasSells: "عليها أسهم مباعة — مينفعش تتمسح",
     discardDuplicateTitle: "تجاهل هذا الصف المكرر — لم يُسجَّل أبدًا، لذا لا شيء لرده",
     discard: "تجاهل",
     discardGenericTitle: "إزالة هذا الصف من القائمة المعلّقة — لم يُسجَّل شيء، لذا لا شيء لرده. مفيد عندما تشتبه أن هذا الصف تحديدًا هو الزائد/الخاطئ وراء عدم التطابق.",

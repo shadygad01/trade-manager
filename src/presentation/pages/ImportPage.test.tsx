@@ -136,6 +136,124 @@ describe("TickerGroupCard — a pending Sell exceeding the ledger's available sh
   });
 });
 
+describe("TickerGroupCard — 'Recorded on the ledger' panel (find/delete an already-committed duplicate without leaving Import)", () => {
+  const existingTrades = [
+    { id: "t-open", ticker: "SKPC", shares: 500, remainingShares: 500, entryPrice: 2.79, executionDate: "2023-01-11", executionTime: "10:34", portfolioId: "p-smc", fees: 0, taxes: 0, strategyTags: [], createdAt: "" },
+    { id: "t-partially-sold", ticker: "SKPC", shares: 200, remainingShares: 50, entryPrice: 2.9, executionDate: "2023-01-05", executionTime: "10:33", portfolioId: "p-smc", fees: 0, taxes: 0, strategyTags: [], createdAt: "" },
+  ];
+
+  it("lists every already-recorded trade for a blocked ticker with a delete action, and disables delete for a lot that's already been partially sold", async () => {
+    const user = userEvent.setup();
+    const onDeleteExistingTrade = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [sellEntry("s1")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: -70, existingRemainingShares: 12 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+        existingTradesForTicker={existingTrades}
+        onDeleteExistingTrade={onDeleteExistingTrade}
+      />,
+    );
+
+    expect(screen.getByText(/Recorded on the ledger/)).toBeInTheDocument();
+    const deleteButtons = screen.getAllByTitle("Delete this trade and refund its cost");
+    expect(deleteButtons).toHaveLength(1); // only the untouched (500 sh) lot is deletable
+    expect(screen.getByTitle("Has shares sold against it — can't be deleted")).toBeInTheDocument();
+
+    await user.click(deleteButtons[0]);
+    expect(onDeleteExistingTrade).toHaveBeenCalledWith("t-open");
+  });
+
+  it("does not render the panel once the ticker is matched, even with existing trades present", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [buyEntry("b1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 500, verifiedUnits: 500 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+        existingTradesForTicker={existingTrades}
+        onDeleteExistingTrade={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/Recorded on the ledger/)).not.toBeInTheDocument();
+  });
+
+  it("surfaces a delete failure inline (e.g. shares were sold from it after the panel loaded)", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [sellEntry("s1")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: -70, existingRemainingShares: 12 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{ "t-open": "Cannot delete a trade with shares already sold." }}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+        existingTradesForTicker={existingTrades}
+        onDeleteExistingTrade={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Cannot delete a trade with shares already sold.")).toBeInTheDocument();
+  });
+});
+
 describe("TickerGroupCard — no-verification banner surfaces the current net share total", () => {
   it("shows the exact net so a user chasing a closed position can tell how far it is from 0", () => {
     render(
