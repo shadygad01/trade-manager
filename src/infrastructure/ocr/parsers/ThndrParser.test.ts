@@ -120,6 +120,33 @@ describe("ThndrParser.parseStatementText", () => {
     expect(orhd).toMatchObject({ ticker: "ORHD", confidence: "high" });
   });
 
+  /**
+   * Real user-reported gap: before FIRE was added to KNOWN_EGX_TICKERS, a
+   * Statement row's company-name fallback ("FIRST INVESTMENT COMPANY & REAL
+   * ES...", the full registered name) and an Orders-screen header's 4-letter
+   * fallback ("FIRE", the code printed above the company name on every
+   * Thndr screen) resolved to two DIFFERENT unmapped pseudo-tickers — so the
+   * two documents could never cross-verify each other no matter how correct
+   * the reconciliation matching logic itself was. Mapping the real ticker
+   * makes both paths converge on the identical "high"-confidence symbol.
+   */
+  it("resolves 'First Investment & Real Estate Development' to FIRE consistently from both a Statement row and an Orders-screen header", () => {
+    const statementRow = parser.parseStatementText("6/12/2022 Sell First Investment Company & Real Estate Development (4539@1.0800)")[0];
+    expect(statementRow).toMatchObject({ ticker: "FIRE", confidence: "high" });
+
+    // The real screenshot's header truncates the company name with "…" —
+    // resolveHeaderTickerImpl's prefix-match path still lands on the right
+    // ticker at "medium" confidence; either way, both documents now agree
+    // on the ticker itself, which is what actually unblocks cross-document
+    // verification (confidence gets raised live to "high" once they do —
+    // see keysToRaiseToHighConfidence).
+    const header = "FIRE\nFirst Investment Company & Real Es…\n";
+    const ordersResult = parser.parseOrdersScreenText(
+      `${header}All orders Sell • 4539 shares @ EGP 1.080 06 Dec 22 – 11:14AM Fulfilled`,
+    );
+    expect(ordersResult.candidates[0]).toMatchObject({ ticker: "FIRE", confidence: "medium" });
+  });
+
   it("strips T+1 / Same Day settlement qualifiers so they never fabricate bogus ticker groups", () => {
     const text = `
       4/1/2023 Sell T+1 Aspire Cpaital Holding (3,300@0.2990 ) 982.96 31,648.505

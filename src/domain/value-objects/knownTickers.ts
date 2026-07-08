@@ -32,6 +32,7 @@ export const KNOWN_EGX_TICKERS: readonly { ticker: string; companyName: string }
   { ticker: "SUGR", companyName: "DELTA SUGAR" },
   { ticker: "MASR", companyName: "MEDINET MASR HOUSING" },
   { ticker: "RMDA", companyName: "RAMEDA PHARMACEUTICAL COMPANY" },
+  { ticker: "FIRE", companyName: "FIRST INVESTMENT & REAL ESTATE DEVELOPMENT" },
 ];
 
 /**

@@ -6,6 +6,7 @@ describe("tickerForCompanyNameFallback", () => {
     expect(tickerForCompanyNameFallback("DELTA SUGAR")).toBe("SUGR");
     expect(tickerForCompanyNameFallback("MEDINET MASR HOUSING")).toBe("MASR");
     expect(tickerForCompanyNameFallback("Orascom Development Egypt")).toBe("ORHD");
+    expect(tickerForCompanyNameFallback("First Investment & Real Estate Development")).toBe("FIRE");
   });
 
   it("never matches a real ticker symbol — only multi-word company names qualify as fallbacks", () => {
