@@ -20,6 +20,8 @@ interface SellAllocationFormProps {
     taxes?: number;
     executionDate?: string;
     executionTime?: string;
+    /** Broker-assigned unique execution ID for this sell (e.g. Thndr's Invoice "Transaction No.") carried over from the parsed candidate, if the source document had one — see TradeAllocation.transactionNumber. */
+    transactionNumber?: string;
   };
 }
 
@@ -173,6 +175,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
         allocations,
         executionDate,
         executionTime,
+        transactionNumber: initial?.transactionNumber,
       };
 
       const result = await recordSell(repos, input);

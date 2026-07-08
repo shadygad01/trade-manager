@@ -25,6 +25,8 @@ export interface TradeAllocation {
   notes?: string;
   exitReason?: string;
   createdAt: string;
+  /** Broker-assigned unique execution ID for this sell order (e.g. Thndr's Invoice "Transaction No.") when the import that created it carried one — every allocation row from the same sell order shares the same value, same as sellGroupId. See duplicateDetection.ts's sameExecution. */
+  transactionNumber?: string;
 }
 
 export function createTradeAllocation(input: {
@@ -41,6 +43,7 @@ export function createTradeAllocation(input: {
   executionTime: string;
   notes?: string;
   exitReason?: string;
+  transactionNumber?: string;
 }): TradeAllocation {
   if (input.sharesClosed <= 0) {
     throw new Error("TradeAllocation.sharesClosed must be positive");
@@ -63,6 +66,7 @@ export function createTradeAllocation(input: {
     notes: input.notes,
     exitReason: input.exitReason,
     createdAt: new Date().toISOString(),
+    transactionNumber: input.transactionNumber,
   };
 }
 

@@ -414,9 +414,10 @@ export function ImportPage() {
 
             // Cross-document field completion: the same transaction read
             // from two documents (statement + invoice, invoice + orders
-            // screenshot) completes each other's missing fees/taxes/time —
-            // strictly additive, never overwriting a value a document
-            // actually carried (see completeCandidateFieldsFromSiblings).
+            // screenshot) completes each other's missing fees/taxes/time/
+            // transactionNumber — strictly additive, never overwriting a
+            // value a document actually carried (see
+            // completeCandidateFieldsFromSiblings).
             const combinedCandidates = [...prev.pendingCandidates, ...newCandidates];
             const fieldCompletions = completeCandidateFieldsFromSiblings(combinedCandidates);
             const completedCandidates =
@@ -498,6 +499,7 @@ export function ImportPage() {
         executionDate: entry.candidate.date,
         executionTime: entry.candidate.time ?? "00:00",
         notes: "Imported from screenshot/PDF",
+        transactionNumber: entry.candidate.transactionNumber,
       });
       importSession.update((prev) => ({
         ...prev,
@@ -1539,6 +1541,7 @@ export function ImportPage() {
               taxes: sellCandidate.candidate.taxes ?? 0,
               executionDate: sellCandidate.candidate.date,
               executionTime: sellCandidate.candidate.time,
+              transactionNumber: sellCandidate.candidate.transactionNumber,
             }}
             onDone={(created) => {
               importSession.update((prev) => ({

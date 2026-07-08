@@ -301,6 +301,21 @@ function parseInvoiceTextImpl(text: string): ParsedTradeCandidate[] {
   const feesMatch = normalized.match(/Total Fees\s+([\d,]+(?:\.\d+)?)\s*EGP/i);
   const fees = feesMatch ? parseFloat(feesMatch[1].replace(/,/g, "")) : 0;
 
+  // "Transaction No.  Quantity  Price  Value" header directly followed by
+  // that row's values — the broker's own unique execution ID (e.g.
+  // "N000248458443"), printed nowhere else on any other Thndr document
+  // shape. Scoped to the text after the "Transaction No." label (never
+  // searched for document-wide, since a bare letter+digits token could
+  // coincidentally appear elsewhere) and matched as the first
+  // letter-prefixed alphanumeric token found there — robust to exactly how
+  // many header words (Quantity/Price/Value) separate the label from the
+  // actual row, which OCR doesn't reproduce consistently.
+  const afterTransactionLabelIdx = normalized.search(/Transaction No\.?/i);
+  const transactionNumber =
+    afterTransactionLabelIdx >= 0
+      ? normalized.slice(afterTransactionLabelIdx).match(/\b([A-Za-z]\d{6,})\b/)?.[1]
+      : undefined;
+
   // Context recovery: if the Average Price cell was misread (zero/garbage)
   // but Total Quantity and Total Cost survived, the price is fully
   // determined by them — recompute instead of dropping the transaction.
@@ -328,6 +343,7 @@ function parseInvoiceTextImpl(text: string): ParsedTradeCandidate[] {
       fees,
       date,
       source: "invoice",
+      transactionNumber,
     },
   ];
 }

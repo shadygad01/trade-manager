@@ -36,6 +36,18 @@ export interface ParsedTradeCandidate {
    * cross-verification rule) but never with each other.
    */
   source?: "statement" | "invoice" | "orders-screen" | "csv";
+  /**
+   * Broker-assigned unique execution identifier (e.g. Thndr's Invoice
+   * "Transaction No.", like "N000248458443") — the single most reliable
+   * signal two reads describe the same real-world execution, since it's
+   * printed verbatim rather than derived/positionally guessed. Currently
+   * only the Invoice document shape prints one; other Thndr formats (the
+   * statement, the Orders screens) never carry a per-row identifier at all.
+   * When present on both sides of a comparison, duplicate/cross-document
+   * matching prefers this over ticker/date/shares/price — see
+   * duplicateDetection.ts's sameExecution().
+   */
+  transactionNumber?: string;
 }
 
 /**

@@ -44,6 +44,33 @@ describe("recordBuy", () => {
     expect(events[0].relatedTradeIds).toEqual([trade.id]);
   });
 
+  it("persists a broker-assigned transaction number onto the trade when the source document carried one", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "HRHO",
+      shares: 39,
+      entryPrice: 26.98,
+      executionDate: "2026-06-24",
+      executionTime: "10:30",
+      transactionNumber: "N000248458443",
+    });
+    expect(trade.transactionNumber).toBe("N000248458443");
+  });
+
+  it("leaves transactionNumber undefined for a manually-entered buy", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 10,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    expect(trade.transactionNumber).toBeUndefined();
+  });
+
   it("auto-assigns sector from the known-ticker lookup when none is given", async () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
     const { trade } = await recordBuy(repos, {
@@ -369,6 +396,40 @@ describe("recordSell", () => {
 
     const portfolio = await repos.portfolios.getById("p1");
     expect(portfolio?.cash).toBeCloseTo(10_000 - (100 * 50 + 20) + (100 * 60 - 10));
+  });
+
+  it("persists a broker-assigned transaction number onto every allocation row from one sell order", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const buy1 = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 30,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    const buy2 = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 15,
+      entryPrice: 48,
+      executionDate: "2026-01-06",
+      executionTime: "10:30",
+    });
+
+    const { allocations } = await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [
+        { tradeId: buy1.trade.id, shares: 30, exitPrice: 60 },
+        { tradeId: buy2.trade.id, shares: 15, exitPrice: 60 },
+      ],
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+      transactionNumber: "N000000000099",
+    });
+
+    expect(allocations.every((a) => a.transactionNumber === "N000000000099")).toBe(true);
   });
 
   it("emits PartialSell when a trade is only partially closed", async () => {

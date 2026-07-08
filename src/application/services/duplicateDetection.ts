@@ -32,6 +32,23 @@ export function pricesWithinOcrNoise(a: number, b: number): boolean {
 }
 
 /**
+ * When both sides carry a broker-assigned transaction number (currently only
+ * Thndr's Invoice format prints one — see ParsedTradeCandidate.transactionNumber),
+ * it settles "same real execution?" decisively, without relying on
+ * date/shares/price ever having been read consistently: an exact string
+ * match is certainly the same order, and a defined mismatch is certainly a
+ * DIFFERENT one — even if every other field happens to coincide (e.g. two
+ * genuinely separate same-day, same-share-count buys of the same stock at a
+ * similar price, which the heuristic-only checks below can't tell apart).
+ * Returns undefined — "inconclusive, fall back to the heuristic" — whenever
+ * either side lacks one.
+ */
+export function sameExecution(a?: string, b?: string): boolean | undefined {
+  if (!a || !b) return undefined;
+  return a === b;
+}
+
+/**
  * A parsed candidate can look like a duplicate of a trade already on the
  * ledger in two ways: an "exact" match (same ticker/date/shares/price — the
  * same file or an overlapping statement re-imported), or a "possible" match
@@ -39,26 +56,39 @@ export function pricesWithinOcrNoise(a: number, b: number): boolean {
  * parsed from two different document formats, one commission-inclusive, one
  * not; see ThndrParser's price-from-value derivation). Never auto-skip
  * either case — this only flags it for the user to decide.
+ *
+ * A candidate/existing-row transaction-number match short-circuits straight
+ * to "exact" regardless of date/shares/price (see sameExecution); a
+ * transaction-number MISMATCH removes that row from consideration entirely,
+ * even when its date/shares/price would otherwise look like a match.
  */
 function findMatch(
-  candidate: { ticker: string; date: string; shares: number },
+  candidate: { ticker: string; date: string; shares: number; transactionNumber?: string },
   candidatePrice: number,
-  existing: { id: string; ticker: string; date: string; shares: number; price: number }[]
+  existing: { id: string; ticker: string; date: string; shares: number; price: number; transactionNumber?: string }[]
 ): DuplicateMatch | undefined {
   const ticker = normalizeTicker(candidate.ticker);
-  const looseMatches = existing.filter(
-    (e) => normalizeTicker(e.ticker) === ticker && e.date === candidate.date && e.shares === candidate.shares
-  );
-  if (looseMatches.length === 0) return undefined;
+  const sameTicker = existing.filter((e) => normalizeTicker(e.ticker) === ticker);
 
-  const exact = looseMatches.find((e) => round4(e.price) === round4(candidatePrice));
+  if (candidate.transactionNumber) {
+    const byId = sameTicker.find((e) => sameExecution(e.transactionNumber, candidate.transactionNumber));
+    if (byId) return { matchType: "exact", matchedId: byId.id, matchedPrice: byId.price };
+  }
+
+  const looseMatches = sameTicker.filter((e) => e.date === candidate.date && e.shares === candidate.shares);
+  const eligible = candidate.transactionNumber
+    ? looseMatches.filter((e) => sameExecution(e.transactionNumber, candidate.transactionNumber) !== false)
+    : looseMatches;
+  if (eligible.length === 0) return undefined;
+
+  const exact = eligible.find((e) => round4(e.price) === round4(candidatePrice));
   if (exact) return { matchType: "exact", matchedId: exact.id, matchedPrice: exact.price };
 
   // Report the closest-priced loose match, not whichever row happens to come
   // first — callers judge "same real trade?" by how far the prices sit apart
   // (pricesWithinOcrNoise), so the decision must be deterministic and made
   // against the best candidate, independent of DB row order.
-  const closest = [...looseMatches].sort(
+  const closest = [...eligible].sort(
     (a, b) => Math.abs(a.price - candidatePrice) - Math.abs(b.price - candidatePrice)
   )[0];
   return { matchType: "possible", matchedId: closest.id, matchedPrice: closest.price };
@@ -66,9 +96,16 @@ function findMatch(
 
 export function findDuplicateBuyMatch(candidate: ParsedTradeCandidate, existingTrades: Trade[]): DuplicateMatch | undefined {
   return findMatch(
-    { ticker: candidate.ticker, date: candidate.date, shares: candidate.shares },
+    { ticker: candidate.ticker, date: candidate.date, shares: candidate.shares, transactionNumber: candidate.transactionNumber },
     candidate.price,
-    existingTrades.map((t) => ({ id: t.id, ticker: t.ticker, date: t.executionDate, shares: t.shares, price: t.entryPrice }))
+    existingTrades.map((t) => ({
+      id: t.id,
+      ticker: t.ticker,
+      date: t.executionDate,
+      shares: t.shares,
+      price: t.entryPrice,
+      transactionNumber: t.transactionNumber,
+    }))
   );
 }
 
@@ -87,9 +124,13 @@ export function findDuplicateSellMatch(
   existingAllocations: TradeAllocation[]
 ): DuplicateMatch | undefined {
   const ticker = normalizeTicker(candidate.ticker);
-  const groups = new Map<string, { id: string; price: number; totalShares: number }>();
+  // Grouped by ticker only (not date) — the transaction-number identity
+  // check below must be able to find a match even if one side's date was
+  // misread; the date requirement is applied afterward, only on the path
+  // that falls back to the date/shares heuristic.
+  const groups = new Map<string, { id: string; price: number; totalShares: number; date: string; transactionNumber?: string }>();
   for (const a of existingAllocations) {
-    if (normalizeTicker(a.ticker) !== ticker || a.executionDate !== candidate.date) continue;
+    if (normalizeTicker(a.ticker) !== ticker) continue;
     // sellGroupId identifies one real sell order regardless of how many lots
     // it was allocated across. Legacy rows recorded before sellGroupId existed
     // must be re-unified by date+exact price, or a 39-share sell split 24+15
@@ -100,11 +141,19 @@ export function findDuplicateSellMatch(
     if (g) {
       g.totalShares += a.sharesClosed;
     } else {
-      groups.set(key, { id: a.id, price: a.exitPrice, totalShares: a.sharesClosed });
+      groups.set(key, { id: a.id, price: a.exitPrice, totalShares: a.sharesClosed, date: a.executionDate, transactionNumber: a.transactionNumber });
     }
   }
 
-  const matching = [...groups.values()].filter((g) => g.totalShares === candidate.shares);
+  if (candidate.transactionNumber) {
+    const byId = [...groups.values()].find((g) => sameExecution(g.transactionNumber, candidate.transactionNumber));
+    if (byId) return { matchType: "exact", matchedId: byId.id, matchedPrice: byId.price };
+  }
+
+  const looseMatches = [...groups.values()].filter((g) => g.date === candidate.date && g.totalShares === candidate.shares);
+  const matching = candidate.transactionNumber
+    ? looseMatches.filter((g) => sameExecution(g.transactionNumber, candidate.transactionNumber) !== false)
+    : looseMatches;
   if (matching.length === 0) return undefined;
 
   const exact = matching.find((g) => round4(g.price) === round4(candidate.price));
@@ -185,6 +234,20 @@ function siblingPricesClose(a: number, b: number): boolean {
   return Math.abs(a - b) <= Math.max(a, b) * SIBLING_DUPLICATE_PRICE_TOLERANCE;
 }
 
+/**
+ * The candidate-level counterpart to sameExecution: prefers a decisive
+ * transaction-number verdict when both sides carry one, falling back to
+ * price proximity only when that's inconclusive. This is what keeps two
+ * genuinely DIFFERENT invoice-sourced trades that happen to share a
+ * signature (same ticker+side+date+shares) and a similar price — a real,
+ * if rare, scenario (two separate same-day orders) — from being silently
+ * merged into one by the sibling/cross-document checks below.
+ */
+function sameCandidateExecution(a: ParsedTradeCandidate, b: ParsedTradeCandidate): boolean {
+  const decisive = sameExecution(a.transactionNumber, b.transactionNumber);
+  return decisive !== undefined ? decisive : siblingPricesClose(a.price, b.price);
+}
+
 /** Invoices are labeled, standardized PDFs — the most trustworthy read of a transaction when one exists in a duplicate group. */
 function isInvoiceSourced(c: ParsedTradeCandidate): boolean {
   return c.source === "invoice";
@@ -222,7 +285,7 @@ export function suggestDuplicatePendingCandidateKeysToDelete(
       // a re-read. A false merge silently loses a real transaction; an
       // extra pending row just waits for the user — so when in doubt,
       // leave it pending instead of suggesting deletion.
-      if (!siblingPricesClose(e.candidate.price, survivor.candidate.price)) continue;
+      if (!sameCandidateExecution(e.candidate, survivor.candidate)) continue;
       keysToDelete.push(e.key);
     }
   }
@@ -239,10 +302,17 @@ export function suggestDuplicatePendingCandidateKeysToDelete(
  * value is NEVER overwritten, and nothing is merged across reads whose
  * prices disagree (they may be different real trades). Returns only the
  * keys that gain at least one field.
+ *
+ * Also backfills transactionNumber: a statement row never prints one, but
+ * when the same execution is also read from an invoice in the same batch,
+ * the resulting committed Trade should still carry the invoice's ID —
+ * otherwise a LATER re-import of just the statement (without the invoice
+ * alongside it again) has nothing to match against but the price/date/shares
+ * heuristic, throwing away the stronger signal this batch already had.
  */
 export function completeCandidateFieldsFromSiblings(
   entries: { key: string; candidate: ParsedTradeCandidate }[]
-): Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time">>> {
+): Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber">>> {
   const bySignature = new Map<string, { key: string; candidate: ParsedTradeCandidate }[]>();
   for (const e of entries) {
     const sig = pendingCandidateSignature(e.candidate);
@@ -251,7 +321,7 @@ export function completeCandidateFieldsFromSiblings(
     bySignature.set(sig, list);
   }
 
-  const completions = new Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time">>>();
+  const completions = new Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber">>>();
   for (const group of bySignature.values()) {
     if (group.length < 2) continue;
     for (const target of group) {
@@ -259,7 +329,7 @@ export function completeCandidateFieldsFromSiblings(
       // document type — the same reason findCrossSourceVerifiedKeys never
       // pairs it with a typed non-invoice read. Don't auto-enrich it either.
       if (target.candidate.source === undefined) continue;
-      const patch: Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time">> = {};
+      const patch: Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber">> = {};
       // Invoice-sourced donors first — labeled fields beat OCR-positional ones.
       const donors = group
         .filter(
@@ -267,7 +337,7 @@ export function completeCandidateFieldsFromSiblings(
             d.key !== target.key &&
             d.candidate.source !== undefined &&
             d.candidate.source !== target.candidate.source &&
-            siblingPricesClose(d.candidate.price, target.candidate.price),
+            sameCandidateExecution(d.candidate, target.candidate),
         )
         .sort((a, b) => Number(isInvoiceSourced(b.candidate)) - Number(isInvoiceSourced(a.candidate)));
       for (const donor of donors) {
@@ -277,6 +347,12 @@ export function completeCandidateFieldsFromSiblings(
           patch.taxes = donor.candidate.taxes;
         if (target.candidate.time === undefined && donor.candidate.time !== undefined && patch.time === undefined)
           patch.time = donor.candidate.time;
+        if (
+          target.candidate.transactionNumber === undefined &&
+          donor.candidate.transactionNumber !== undefined &&
+          patch.transactionNumber === undefined
+        )
+          patch.transactionNumber = donor.candidate.transactionNumber;
       }
       if (Object.keys(patch).length > 0) completions.set(target.key, patch);
     }
@@ -339,7 +415,7 @@ export function findCrossSourceVerifiedKeys(entries: { key: string; candidate: P
         (o) =>
           o.key !== e.key &&
           o.candidate.source !== e.candidate.source &&
-          siblingPricesClose(o.candidate.price, e.candidate.price),
+          sameCandidateExecution(o.candidate, e.candidate),
       );
       if (corroborated) verifiedKeys.add(e.key);
     }

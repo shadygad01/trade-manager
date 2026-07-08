@@ -255,7 +255,27 @@ describe("ThndrParser.parseStatementText — per-trade Invoice PDF", () => {
       date: "2026-06-24",
       confidence: "high",
       source: "invoice",
+      transactionNumber: "N000248458443",
     });
+  });
+
+  it("still reads the transaction number when OCR renders extra/collapsed whitespace around the header row", () => {
+    const noisy = invoiceText.replace(
+      "Transaction No.        Quantity    Price        Value",
+      "Transaction No.Quantity Price Value",
+    );
+    const [candidate] = parser.parseStatementText(noisy);
+    expect(candidate.transactionNumber).toBe("N000248458443");
+  });
+
+  it("leaves transactionNumber undefined when the Transaction No. row is missing entirely", () => {
+    const withoutTxnRow = invoiceText.replace(
+      "Transaction No.        Quantity    Price        Value\n    N000248458443          39          26.98 EGP    1,052.22 EGP\n",
+      "",
+    );
+    const [candidate] = parser.parseStatementText(withoutTxnRow);
+    expect(candidate).toBeDefined();
+    expect(candidate.transactionNumber).toBeUndefined();
   });
 
   it("recovers a misread (zero) Average Price from Total Cost / Total Quantity", () => {

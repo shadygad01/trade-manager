@@ -91,6 +91,54 @@ describe("findDuplicateBuyMatch", () => {
     });
     expect(findDuplicateBuyMatch(buyCandidate(), [trade])).toBeUndefined();
   });
+
+  it("flags an exact match by transaction number alone, even with a wildly different price/date (a misread field elsewhere)", () => {
+    const trade = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 999, // wouldn't match on price at all
+      executionDate: "2020-01-01", // wouldn't match on date at all
+      executionTime: "10:00",
+      transactionNumber: "N000248458443",
+    });
+    const candidate = buyCandidate({ transactionNumber: "N000248458443" });
+    expect(findDuplicateBuyMatch(candidate, [trade])).toEqual({ matchType: "exact", matchedId: "t1", matchedPrice: 999 });
+  });
+
+  it("never matches two rows carrying different transaction numbers, even when ticker/date/shares/price all coincide", () => {
+    // Two genuinely separate real buys (same stock, same day, same share
+    // count, near-identical price) — the exact false-positive a
+    // price/date/shares-only heuristic can't tell apart from a re-import.
+    const trade = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-06-01",
+      executionTime: "10:00",
+      transactionNumber: "N000000000001",
+    });
+    const candidate = buyCandidate({ price: 50, transactionNumber: "N000000000002" });
+    expect(findDuplicateBuyMatch(candidate, [trade])).toBeUndefined();
+  });
+
+  it("falls back to the price/date/shares heuristic when only one side carries a transaction number", () => {
+    const trade = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-06-01",
+      executionTime: "10:00",
+      // no transactionNumber recorded on this trade (manually entered, or imported before this field existed)
+    });
+    const candidate = buyCandidate({ transactionNumber: "N000248458443" });
+    expect(findDuplicateBuyMatch(candidate, [trade])).toEqual({ matchType: "exact", matchedId: "t1", matchedPrice: 50 });
+  });
 });
 
 describe("findDuplicateSellMatch — legacy allocations without sellGroupId", () => {
@@ -202,6 +250,40 @@ describe("findDuplicateSellMatch", () => {
     ];
     const candidate = buyCandidate({ ticker: "HRHO", side: "SELL", shares: 45, price: 27.75, date: "2026-02-02" });
     expect(findDuplicateSellMatch(candidate, allocations)).toEqual({ matchType: "possible", matchedId: "a1", matchedPrice: 27.6 });
+  });
+
+  it("flags an exact match by transaction number alone, even with a wildly different price/date", () => {
+    const allocation = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "sg1",
+      portfolioId: "p1",
+      tradeId: "t1",
+      ticker: "COMI",
+      sharesClosed: 40,
+      exitPrice: 999,
+      executionDate: "2020-01-01",
+      executionTime: "11:00",
+      transactionNumber: "N000248458443",
+    });
+    const candidate = buyCandidate({ side: "SELL", transactionNumber: "N000248458443" });
+    expect(findDuplicateSellMatch(candidate, [allocation])).toEqual({ matchType: "exact", matchedId: "a1", matchedPrice: 999 });
+  });
+
+  it("never matches two sell orders carrying different transaction numbers, even at the same date/shares/price", () => {
+    const allocation = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "sg1",
+      portfolioId: "p1",
+      tradeId: "t1",
+      ticker: "COMI",
+      sharesClosed: 100,
+      exitPrice: 50,
+      executionDate: "2026-06-01",
+      executionTime: "11:00",
+      transactionNumber: "N000000000001",
+    });
+    const candidate = buyCandidate({ side: "SELL", price: 50, transactionNumber: "N000000000002" });
+    expect(findDuplicateSellMatch(candidate, [allocation])).toBeUndefined();
   });
 });
 
@@ -331,6 +413,29 @@ describe("suggestDuplicatePendingCandidateKeysToDelete", () => {
     ];
     expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["st"]);
   });
+
+  it("does NOT merge two genuinely different invoice-sourced trades that happen to share ticker/side/date/shares and a close price, when their transaction numbers differ", () => {
+    // Two real, separate buys of the same stock on the same day for the same
+    // share count at a similar price — exactly the false-positive the price
+    // heuristic alone would wrongly collapse into one. A defined, differing
+    // transaction number is ground truth that they are NOT the same order.
+    const entries = [
+      { key: "inv1", candidate: buyCandidate({ price: 50.1, source: "invoice", transactionNumber: "N000000000001" }) },
+      { key: "inv2", candidate: buyCandidate({ price: 50.0, source: "invoice", transactionNumber: "N000000000002" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("merges two reads sharing the same transaction number even when their price gap exceeds the normal sibling tolerance", () => {
+    const entries = [
+      { key: "inv1", candidate: buyCandidate({ price: 50.0, source: "invoice", transactionNumber: "N000000000001" }) },
+      // >2% apart — outside SIBLING_DUPLICATE_PRICE_TOLERANCE — but the
+      // matching transaction number proves it's the same real order (e.g. a
+      // re-read of the same invoice with one OCR digit dropped).
+      { key: "inv2", candidate: buyCandidate({ price: 48.0, source: "invoice", transactionNumber: "N000000000001" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["inv2"]);
+  });
 });
 
 describe("completeCandidateFieldsFromSiblings", () => {
@@ -376,6 +481,26 @@ describe("completeCandidateFieldsFromSiblings", () => {
       { key: "c", candidate: buyCandidate({ fees: 9.99 }) },
     ];
     expect(completeCandidateFieldsFromSiblings(entries).size).toBe(0);
+  });
+
+  it("backfills transactionNumber from an invoice sibling onto a statement row that never prints one", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, transactionNumber: "N000248458443" }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ transactionNumber: "N000248458443" });
+  });
+
+  it("never overwrites a statement row's own transaction number with a sibling's different one", () => {
+    // Extremely unlikely in practice (a statement never actually prints an
+    // ID), but the "strictly additive, never overwrite" contract must hold
+    // for every field, not just the ones already covered.
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const, transactionNumber: "OWN" }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, transactionNumber: "OTHER" }) },
+    ];
+    const completions = completeCandidateFieldsFromSiblings(entries);
+    expect(completions.has("st")).toBe(false);
   });
 });
 

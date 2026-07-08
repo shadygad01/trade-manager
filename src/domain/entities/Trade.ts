@@ -24,6 +24,8 @@ export interface Trade {
   notes?: string;
   strategyTags: string[];
   createdAt: string;
+  /** Broker-assigned unique execution ID (e.g. Thndr's Invoice "Transaction No.") when the import that created this trade carried one — the most reliable signal for matching a later re-import against this exact trade (see duplicateDetection.ts's sameExecution). Undefined for manually-entered trades and for every import format that doesn't print one. */
+  transactionNumber?: string;
 }
 
 export function createTrade(input: {
@@ -40,6 +42,7 @@ export function createTrade(input: {
   executionTime: string;
   notes?: string;
   strategyTags?: string[];
+  transactionNumber?: string;
 }): Trade {
   if (input.shares <= 0) {
     throw new Error("Trade.shares must be positive");
@@ -63,6 +66,7 @@ export function createTrade(input: {
     notes: input.notes,
     strategyTags: input.strategyTags ?? [],
     createdAt: new Date().toISOString(),
+    transactionNumber: input.transactionNumber,
   };
 }
 

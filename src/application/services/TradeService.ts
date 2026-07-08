@@ -41,6 +41,8 @@ export interface RecordBuyInput {
   executionTime: string;
   notes?: string;
   strategyTags?: string[];
+  /** Broker-assigned unique execution ID (e.g. Thndr's Invoice "Transaction No.") when the source document carried one — see Trade.transactionNumber. */
+  transactionNumber?: string;
 }
 
 export interface RecordBuyResult {
@@ -74,6 +76,7 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
     executionTime: input.executionTime,
     notes: input.notes,
     strategyTags: input.strategyTags,
+    transactionNumber: input.transactionNumber,
   });
   await repos.trades.save(trade);
 
@@ -282,6 +285,8 @@ export interface RecordSellInput {
   allocations: RecordSellAllocationInput[];
   executionDate: string;
   executionTime: string;
+  /** Broker-assigned unique execution ID for the sell order this allocates (e.g. Thndr's Invoice "Transaction No.") — applied to every resulting allocation row, same as sellGroupId. See TradeAllocation.transactionNumber. */
+  transactionNumber?: string;
 }
 
 export interface RecordSellResult {
@@ -340,6 +345,7 @@ export async function recordSell(repos: AppRepositories, input: RecordSellInput)
       executionTime: input.executionTime,
       notes: line.notes,
       exitReason: line.exitReason,
+      transactionNumber: input.transactionNumber,
     });
     await repos.allocations.save(allocation);
     createdAllocations.push(allocation);
