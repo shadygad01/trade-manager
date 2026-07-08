@@ -14,6 +14,7 @@ import {
   suggestDuplicatePendingCandidateKeysToDelete,
   completeCandidateFieldsFromSiblings,
   findCrossSourceVerifiedKeys,
+  findAggregateStatementMatches,
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
 } from "@application/services/duplicateDetection";
@@ -268,6 +269,37 @@ export function ImportPage() {
     session.skippedKeys,
     session.dismissedKeys,
   ]);
+
+  /**
+   * Statement Aggregate Reconciliation: a Statement row that sums several
+   * same-day executions from a higher-detail source (Orders, an Invoice, a
+   * CSV export) into one printed quantity (see
+   * findAggregateStatementMatches) is confirmation of that execution group,
+   * not a separate transaction — committing it alongside the group it
+   * summarizes would double-count real shares exactly the way an un-skipped
+   * ledger duplicate would. Auto-skipped here on the same terms as the exact-
+   * duplicate effect above: only once every match condition (ticker, side,
+   * day, exact share sum, compatible price) is satisfied, and only for a
+   * Statement row that doesn't already have a direct 1:1 cross-source match
+   * (see findCrossSourceVerifiedKeys, computed fresh here rather than reused
+   * from the render-time crossVerifiedKeys memo so this effect stays
+   * self-contained like its sibling above). The matched execution rows
+   * themselves are never skipped — they commit normally and are surfaced as
+   * "Confirmed by Statement" via aggregateConfirmedKeys below.
+   */
+  useEffect(() => {
+    if (!initialDataLoaded) return;
+    const state = importSession.getState();
+    const stillPending = state.pendingCandidates.filter(
+      (e) => !state.addedKeys.includes(e.key) && !state.skippedKeys.includes(e.key) && !state.dismissedKeys.includes(e.key),
+    );
+    const crossSourceVerified = findCrossSourceVerifiedKeys(stillPending);
+    const aggregateMatches = findAggregateStatementMatches(stillPending, crossSourceVerified);
+    if (aggregateMatches.size === 0) return;
+    const keysToSkip = [...aggregateMatches.keys()];
+    importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDataLoaded, pendingCandidates, session.addedKeys, session.skippedKeys, session.dismissedKeys]);
 
   /**
    * A ticker that already has trades recorded somewhere shouldn't make the
@@ -1022,6 +1054,51 @@ export function ImportPage() {
   }, [pendingCandidates, session.discardedCandidates, addedKeys, skippedKeys, dismissedKeys]);
 
   /**
+   * Statement Aggregate Reconciliation: Statement candidate key -> the
+   * execution row keys (from Orders/an Orders screenshot/an Invoice/a CSV
+   * export) whose shares sum exactly to it (see
+   * findAggregateStatementMatches). Only searched for a Statement row
+   * without a direct 1:1 cross-source match already (crossVerifiedKeys) —
+   * Case 1 (one Statement row, one execution of the identical share count)
+   * is already resolved by the dual-source rule above; this only covers
+   * Case 2, a Statement row summarizing more than one execution.
+   *
+   * Deliberately NOT filtered by skippedKeys, unlike the other per-row
+   * derivations above: the Statement row's own "skipped" state is the
+   * OUTPUT of this exact match (see the aggregate auto-skip effect above),
+   * so excluding skipped rows here would make the match — and therefore the
+   * skip and the execution rows' "Confirmed by Statement" badge — disappear
+   * the instant it succeeds. Same self-referential trap crossVerifiedKeys
+   * avoids by re-including session.discardedCandidates after cleanup.
+   */
+  const aggregateStatementMatches = useMemo(() => {
+    const stillPending = pendingCandidates.filter((e) => !addedKeys.has(e.key) && !dismissedKeys.has(e.key));
+    return findAggregateStatementMatches(stillPending, crossVerifiedKeys);
+  }, [pendingCandidates, addedKeys, dismissedKeys, crossVerifiedKeys]);
+
+  /** Every execution row confirmed as part of a Statement aggregate — drives the "Confirmed by Statement" badge and lets the ticker verify without a broker screenshot the same way crossVerifiedKeys/orderConfirmedKeys already do. */
+  const aggregateConfirmedKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const executionKeys of aggregateStatementMatches.values()) {
+      for (const key of executionKeys) keys.add(key);
+    }
+    return keys;
+  }, [aggregateStatementMatches]);
+
+  /** Per-execution-row breakdown text ("BUY 5,000 sh + BUY 3,000 sh") for the "Confirmed by Statement" badge's tooltip — the group of rows a Statement row aggregated this one with. */
+  const aggregateGroupDetailByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    if (aggregateStatementMatches.size === 0) return map;
+    const byKey = new Map(pendingCandidates.map((e) => [e.key, e] as const));
+    for (const executionKeys of aggregateStatementMatches.values()) {
+      const rows = executionKeys.map((k) => byKey.get(k)).filter((e): e is CandidateEntry => e !== undefined);
+      const summary = rows.map((e) => `${e.candidate.side} ${formatShares(e.candidate.shares)}`).join(" + ");
+      for (const key of executionKeys) map.set(key, summary);
+    }
+    return map;
+  }, [aggregateStatementMatches, pendingCandidates]);
+
+  /**
    * Pending Buy/Sell rows corroborated by a fulfilled order on the broker's
    * own account-wide "Orders" timeline screenshot (same ticker/side/share
    * count, price within tolerance — see findOrderConfirmedKeys). Drives the
@@ -1086,11 +1163,17 @@ export function ImportPage() {
         remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
       const allPendingSelfVerified =
         remainingBuysAndSells.length > 0 &&
-        remainingBuysAndSells.every((e) => e.candidate.source === "invoice" || crossVerifiedKeys.has(e.key));
+        remainingBuysAndSells.every(
+          (e) => e.candidate.source === "invoice" || crossVerifiedKeys.has(e.key) || aggregateConfirmedKeys.has(e.key),
+        );
       const allPendingOrderConfirmed =
         remainingBuysAndSells.length > 0 &&
         remainingBuysAndSells.every(
-          (e) => e.candidate.source === "invoice" || crossVerifiedKeys.has(e.key) || orderConfirmedKeys.has(e.key),
+          (e) =>
+            e.candidate.source === "invoice" ||
+            crossVerifiedKeys.has(e.key) ||
+            aggregateConfirmedKeys.has(e.key) ||
+            orderConfirmedKeys.has(e.key),
         );
       const existingRemainingShares = existingTrades
         .filter((t) => normalizeTicker(t.ticker) === ticker)
@@ -1120,7 +1203,17 @@ export function ImportPage() {
       );
     }
     return map;
-  }, [tickerGroups, addedKeys, skippedKeys, dismissedKeys, existingTrades, existingVerifications, crossVerifiedKeys, orderConfirmedKeys]);
+  }, [
+    tickerGroups,
+    addedKeys,
+    skippedKeys,
+    dismissedKeys,
+    existingTrades,
+    existingVerifications,
+    crossVerifiedKeys,
+    aggregateConfirmedKeys,
+    orderConfirmedKeys,
+  ]);
 
   /**
    * A ticker is "fully matched" once every buy/sell/dividend/verification row
@@ -1582,6 +1675,8 @@ export function ImportPage() {
                 addedAllocationIds={session.addedAllocationIds}
                 suspectedDuplicateKeys={pendingDuplicateCandidateKeySet}
                 crossVerifiedKeys={crossVerifiedKeys}
+                aggregateConfirmedKeys={aggregateConfirmedKeys}
+                aggregateGroupDetailByKey={aggregateGroupDetailByKey}
                 orderConfirmedKeys={orderConfirmedKeys}
                 onDiscardOrderEvidence={(entry) => discardOrderEvidence(entry.key)}
                 wrongTickerHints={wrongTickerHints}
@@ -1667,6 +1762,8 @@ export function TickerGroupCard({
   addedAllocationIds,
   suspectedDuplicateKeys,
   crossVerifiedKeys,
+  aggregateConfirmedKeys,
+  aggregateGroupDetailByKey,
   orderConfirmedKeys,
   onDiscardOrderEvidence,
   wrongTickerHints,
@@ -1725,6 +1822,10 @@ export function TickerGroupCard({
   suspectedDuplicateKeys: Set<string>;
   /** Keys of pending rows whose transaction was read from two different document types (see findCrossSourceVerifiedKeys) — drives the "Two documents agree" badge. */
   crossVerifiedKeys?: Set<string>;
+  /** Keys of pending rows confirmed as part of a Statement aggregate (see findAggregateStatementMatches) — drives the "Confirmed by Statement" badge. */
+  aggregateConfirmedKeys?: Set<string>;
+  /** Entry key -> a formatted breakdown ("BUY 5,000 sh + BUY 3,000 sh") of the execution group a Statement row aggregated it with — the "Confirmed by Statement" badge's tooltip detail. */
+  aggregateGroupDetailByKey?: Map<string, string>;
   /** Keys of pending rows corroborated by a fulfilled order on the broker's Orders timeline screenshot (see findOrderConfirmedKeys) — drives the "Matches Orders history" badge, and its absence the "No matching order" hint on a mismatch. */
   orderConfirmedKeys?: Set<string>;
   /** Discards one misread order-evidence row (see ImportPage's discardOrderEvidence). */
@@ -2203,6 +2304,8 @@ export function TickerGroupCard({
               wrongTickerHint={wrongTickerHints?.get(entry.key)}
               dateMisreadHint={dateMisreadHints?.get(entry.key)}
               crossSourceVerified={crossVerifiedKeys?.has(entry.key) ?? false}
+              aggregateConfirmed={aggregateConfirmedKeys?.has(entry.key) ?? false}
+              aggregateMatchDetail={aggregateGroupDetailByKey?.get(entry.key)}
               orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
               noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
               onDelete={() => onDeleteAutoAdded(entry)}
@@ -2237,6 +2340,8 @@ export function TickerGroupCard({
               wrongTickerHint={wrongTickerHints?.get(entry.key)}
               dateMisreadHint={dateMisreadHints?.get(entry.key)}
               crossSourceVerified={crossVerifiedKeys?.has(entry.key) ?? false}
+              aggregateConfirmed={aggregateConfirmedKeys?.has(entry.key) ?? false}
+              aggregateMatchDetail={aggregateGroupDetailByKey?.get(entry.key)}
               orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
               noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
               onDiscardPending={() => onDiscardPending(entry)}
@@ -2441,6 +2546,8 @@ export function AutoCommitRow({
   wrongTickerHint,
   dateMisreadHint,
   crossSourceVerified = false,
+  aggregateConfirmed = false,
+  aggregateMatchDetail,
   orderConfirmed = false,
   noMatchingOrder = false,
   onDelete,
@@ -2467,6 +2574,10 @@ export function AutoCommitRow({
   dateMisreadHint?: string;
   /** True when this exact transaction was read from two different document types (statement + invoice, statement + orders screenshot, …) — the dual-source verification rule (see findCrossSourceVerifiedKeys). */
   crossSourceVerified?: boolean;
+  /** True when this row is part of an execution group a Statement row's aggregate quantity confirmed (see findAggregateStatementMatches) — the Statement row itself never renders as a separate candidate once matched, so this row carries the confirmation instead. */
+  aggregateConfirmed?: boolean;
+  /** Formatted breakdown ("BUY 5,000 sh + BUY 3,000 sh") of the execution group this row belongs to — the aggregateConfirmed badge's tooltip detail. */
+  aggregateMatchDetail?: string;
   /** True when a fulfilled order on the broker's Orders timeline screenshot corroborates this exact row (see findOrderConfirmedKeys). */
   orderConfirmed?: boolean;
   /** True on a mismatch when this ticker's Orders history was uploaded and no fulfilled order matches this row — the likely extra/wrong row behind the mismatch. */
@@ -2563,6 +2674,18 @@ export function AutoCommitRow({
               className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
             >
               <ShieldCheck size={11} /> {t("importPage.twoDocumentsAgree")}
+            </span>
+          ) : null}
+          {aggregateConfirmed ? (
+            <span
+              title={
+                aggregateMatchDetail
+                  ? t("importPage.aggregateConfirmedTitleDetail", { detail: aggregateMatchDetail })
+                  : t("importPage.aggregateConfirmedTitle")
+              }
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
+            >
+              <ShieldCheck size={11} /> {t("importPage.aggregateConfirmed")}
             </span>
           ) : null}
           {orderConfirmed ? (
@@ -2666,6 +2789,8 @@ export function CandidateRow({
   wrongTickerHint,
   dateMisreadHint,
   crossSourceVerified = false,
+  aggregateConfirmed = false,
+  aggregateMatchDetail,
   orderConfirmed = false,
   noMatchingOrder = false,
   onDiscardPending,
@@ -2690,6 +2815,10 @@ export function CandidateRow({
   dateMisreadHint?: string;
   /** True when this exact transaction was read from two different document types (see AutoCommitRow's twin prop). */
   crossSourceVerified?: boolean;
+  /** True when this row is part of an execution group a Statement row's aggregate quantity confirmed (see AutoCommitRow's twin prop). */
+  aggregateConfirmed?: boolean;
+  /** Formatted breakdown of the execution group this row belongs to (see AutoCommitRow's twin prop). */
+  aggregateMatchDetail?: string;
   /** True when a fulfilled order on the broker's Orders timeline screenshot corroborates this exact row (see AutoCommitRow's twin prop). */
   orderConfirmed?: boolean;
   /** True on a mismatch when this ticker's Orders history was uploaded and no fulfilled order matches this row (see AutoCommitRow's twin prop). */
@@ -2780,6 +2909,18 @@ export function CandidateRow({
               className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
             >
               <ShieldCheck size={11} /> {t("importPage.twoDocumentsAgree")}
+            </span>
+          ) : null}
+          {aggregateConfirmed ? (
+            <span
+              title={
+                aggregateMatchDetail
+                  ? t("importPage.aggregateConfirmedTitleDetail", { detail: aggregateMatchDetail })
+                  : t("importPage.aggregateConfirmedTitle")
+              }
+              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
+            >
+              <ShieldCheck size={11} /> {t("importPage.aggregateConfirmed")}
             </span>
           ) : null}
           {orderConfirmed ? (

@@ -9,6 +9,7 @@ import {
   suggestDuplicatePendingCandidateKeysToDelete,
   completeCandidateFieldsFromSiblings,
   findCrossSourceVerifiedKeys,
+  findAggregateStatementMatches,
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
 } from "./duplicateDetection";
@@ -676,6 +677,123 @@ describe("findCrossSourceVerifiedKeys", () => {
       { key: "new", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "orders-screen" as const }) },
     ];
     expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+});
+
+describe("findAggregateStatementMatches", () => {
+  it("Case 1: a Statement row matches exactly one same-day execution of the identical share count", () => {
+    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const order = { key: "o1", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([statement, order]);
+    expect(result.get("st")).toEqual(["o1"]);
+  });
+
+  it("Case 2: a Statement row aggregates two executions whose shares sum exactly (8,000 = 5,000 + 3,000)", () => {
+    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([statement, o1, o2]);
+    expect(new Set(result.get("st"))).toEqual(new Set(["o1", "o2"]));
+  });
+
+  it("Case 2: a Statement row aggregates three executions whose shares sum exactly (10,000 = 2,000 + 3,000 + 5,000)", () => {
+    const statement = { key: "st", candidate: buyCandidate({ shares: 10000, price: 6.5, date: "2026-02-01", source: "statement" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 2000, price: 6.5, date: "2026-02-01", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 6.5, date: "2026-02-01", source: "invoice" as const }) };
+    const o3 = { key: "o3", candidate: buyCandidate({ shares: 5000, price: 6.5, date: "2026-02-01", source: "csv" as const }) };
+    const result = findAggregateStatementMatches([statement, o1, o2, o3]);
+    expect(new Set(result.get("st"))).toEqual(new Set(["o1", "o2", "o3"]));
+  });
+
+  it("prefers the smallest exact matching group when more than one subset would sum exactly", () => {
+    // 8,000 could be 5,000+3,000 or 4,000+4,000+... — a lone 8,000 row must
+    // win over any multi-row combination if one exists in the pool.
+    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const solo = { key: "solo", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([statement, solo, o1, o2]);
+    expect(result.get("st")).toEqual(["solo"]);
+  });
+
+  it("leaves a Statement row unmatched when no exact combination exists — never guesses a partial/approximate sum", () => {
+    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 2500, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([statement, o1, o2]);
+    expect(result.has("st")).toBe(false);
+  });
+
+  it("rejects a subset that sums exactly but whose weighted-average price disagrees with the Statement row", () => {
+    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 5.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 5.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([statement, o1, o2]);
+    expect(result.has("st")).toBe(false);
+  });
+
+  it("requires the same side — a Sell Statement row never matches Buy executions even with an exact share sum", () => {
+    const statement = {
+      key: "st",
+      candidate: buyCandidate({ side: "SELL" as const, shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }),
+    };
+    const o1 = { key: "o1", candidate: buyCandidate({ side: "BUY" as const, shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ side: "BUY" as const, shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([statement, o1, o2]);
+    expect(result.has("st")).toBe(false);
+  });
+
+  it("requires the same day — an exact share sum on a different date never matches", () => {
+    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-15", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([statement, o1, o2]);
+    expect(result.has("st")).toBe(false);
+  });
+
+  it("never uses another Statement row as an execution — a Statement only ever aggregates higher-detail sources", () => {
+    const statement = { key: "st1", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const otherStatement = { key: "st2", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const result = findAggregateStatementMatches([statement, otherStatement]);
+    expect(result.has("st1")).toBe(false);
+  });
+
+  it("skips a Statement row already resolved by direct 1:1 cross-source verification (alreadyVerifiedKeys)", () => {
+    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([statement, o1, o2], new Set(["st"]));
+    expect(result.has("st")).toBe(false);
+  });
+
+  it("never lets two different Statement rows aggregate the same execution — each execution is consumed once", () => {
+    const st1 = { key: "st1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const st2 = { key: "st2", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
+    const result = findAggregateStatementMatches([st1, st2, o1, o2]);
+    // st1 (5,000) is processed first (smallest-shares-first) and claims o1
+    // outright — st2 (8,000) is left with only o2 (3,000) in the pool, which
+    // can't sum to 8,000, so it's correctly unmatched rather than reusing o1.
+    expect(result.get("st1")).toEqual(["o1"]);
+    expect(result.has("st2")).toBe(false);
+  });
+
+  it("no candidate is ever double-counted: a Statement row plus its matched group never produce more committed trades than the underlying executions", () => {
+    const statement = { key: "st", candidate: buyCandidate({ shares: 10000, price: 6.5, date: "2026-02-01", source: "statement" as const }) };
+    const o1 = { key: "o1", candidate: buyCandidate({ shares: 2000, price: 6.5, date: "2026-02-01", source: "orders-screen" as const }) };
+    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 6.5, date: "2026-02-01", source: "invoice" as const }) };
+    const o3 = { key: "o3", candidate: buyCandidate({ shares: 5000, price: 6.5, date: "2026-02-01", source: "csv" as const }) };
+    const result = findAggregateStatementMatches([statement, o1, o2, o3]);
+    const matchedKeys = result.get("st")!;
+    // Every key returned actually belongs to the execution pool, never to the
+    // Statement row itself — committing the matched group plus skipping the
+    // Statement row accounts for exactly 10,000 shares once, not twice.
+    expect(matchedKeys).not.toContain("st");
+    const totalMatchedShares = matchedKeys
+      .map((k) => [o1, o2, o3].find((e) => e.key === k)!.candidate.shares)
+      .reduce((a, b) => a + b, 0);
+    expect(totalMatchedShares).toBe(statement.candidate.shares);
   });
 });
 

@@ -273,7 +273,7 @@ export function pendingCandidateSignature(candidate: { ticker: string; side: "BU
  */
 const SIBLING_DUPLICATE_PRICE_TOLERANCE = 0.02;
 
-function siblingPricesClose(a: number, b: number): boolean {
+export function siblingPricesClose(a: number, b: number): boolean {
   return Math.abs(a - b) <= Math.max(a, b) * SIBLING_DUPLICATE_PRICE_TOLERANCE;
 }
 
@@ -490,6 +490,124 @@ export function findCrossSourceVerifiedKeys(entries: { key: string; candidate: P
     }
   }
   return verifiedKeys;
+}
+
+/** Subset-sum search cap for findAggregateStatementMatches — bounds the pool of same-ticker/side/day executions a Statement row is searched against, mirroring mismatchResolver's MAX_RECONCILE_ROWS cap on combinatorial searches. */
+export const MAX_AGGREGATE_MATCH_POOL = 30;
+
+interface AggregatePoolItem {
+  key: string;
+  shares: number;
+  price: number;
+}
+
+/**
+ * Smallest-cardinality exact subset of `items` whose shares sum to `target`,
+ * or undefined when none exists. A 0/1-knapsack subset-sum DP keyed by
+ * reachable share totals (not by row combinations), so its cost is
+ * polynomial in the target share count rather than exponential in the row
+ * count — the "avoid exponential brute force" requirement for aggregate
+ * reconciliation. Snapshots the reachable-sums map before each item so an
+ * item is never used twice within one subset.
+ */
+function smallestExactSharesSubset(items: AggregatePoolItem[], target: number): string[] | undefined {
+  if (target <= 0) return undefined;
+  const bestByTotal = new Map<number, string[]>([[0, []]]);
+  for (const item of items) {
+    for (const [total, keys] of [...bestByTotal.entries()]) {
+      const nextTotal = total + item.shares;
+      if (nextTotal > target) continue;
+      const existing = bestByTotal.get(nextTotal);
+      if (!existing || keys.length + 1 < existing.length) {
+        bestByTotal.set(nextTotal, [...keys, item.key]);
+      }
+    }
+  }
+  return bestByTotal.get(target);
+}
+
+function aggregateGroupKey(c: { ticker: string; side: "BUY" | "SELL"; date: string }): string {
+  return `${normalizeTicker(c.ticker)}|${c.side}|${c.date}`;
+}
+
+/**
+ * Statement Aggregate Reconciliation, Case 2: a broker Statement sometimes
+ * prints one row summarizing several same-day executions from a
+ * higher-detail source (an Orders/Transactions screen, an Invoice, a CSV
+ * export — any typed, non-statement candidate) instead of one row per
+ * execution. findCrossSourceVerifiedKeys already resolves Case 1 (one
+ * Statement row confirming exactly one execution of the identical share
+ * count) via plain signature matching; this only runs for a Statement row
+ * that did NOT already resolve that way (see `alreadyVerifiedKeys`), and
+ * searches for a GROUP of same ticker+side+day executions whose shares sum
+ * EXACTLY to the Statement row's. A Statement never splits a real trade, only
+ * aggregates several, so only Statement→group is searched, never a group of
+ * Statement rows against one execution.
+ *
+ * Matching conditions, all required: same ticker, same side, same date
+ * (a Statement's settlement qualifiers like "T+1"/"Same Day" are already
+ * stripped to the execution date at parse time — see ThndrParser — so this
+ * is a plain equality, no separate tolerance to add); the matched group's
+ * shares-weighted average price within the same cross-document tolerance
+ * `sameCandidateExecution` already trusts (`siblingPricesClose`) — a
+ * Statement's printed price for an aggregate row is itself a commission-
+ * inclusive blend across the underlying executions, so comparing against a
+ * single raw execution price would be too strict; and exact quantity
+ * equality after aggregation (the subset-sum search below only ever
+ * considers a target it can hit exactly — no partial/approximate sums).
+ *
+ * Prefers the smallest exact matching group (fewest executions) via
+ * `smallestExactSharesSubset`. Each execution is consumed by at most one
+ * Statement row — rows are processed smallest-shares-first and matched keys
+ * are removed from the pool before the next row searches — so the same real
+ * execution can never back two different Statement rows' aggregates, and a
+ * Statement row that finds no exact combination is left unmatched for the
+ * user to review, exactly as today.
+ *
+ * Returns Statement candidate key -> the execution keys it aggregates.
+ * Callers (ImportPage) treat a matched Statement row as confirmed by (not a
+ * duplicate trade alongside) its execution group: the Statement row is
+ * skipped from commit the same way an exact ledger duplicate already is,
+ * while the execution group commits normally and is marked verified.
+ */
+export function findAggregateStatementMatches(
+  entries: { key: string; candidate: ParsedTradeCandidate }[],
+  alreadyVerifiedKeys: ReadonlySet<string> = new Set(),
+): Map<string, string[]> {
+  const statementEntries = entries.filter((e) => e.candidate.source === "statement" && !alreadyVerifiedKeys.has(e.key));
+  if (statementEntries.length === 0) return new Map();
+
+  const poolByGroup = new Map<string, AggregatePoolItem[]>();
+  for (const e of entries) {
+    if (e.candidate.source === undefined || e.candidate.source === "statement") continue;
+    const key = aggregateGroupKey(e.candidate);
+    const list = poolByGroup.get(key) ?? [];
+    list.push({ key: e.key, shares: e.candidate.shares, price: e.candidate.price });
+    poolByGroup.set(key, list);
+  }
+
+  const consumed = new Set<string>();
+  const result = new Map<string, string[]>();
+  const orderedStatementEntries = [...statementEntries].sort((a, b) => a.candidate.shares - b.candidate.shares);
+
+  for (const stmt of orderedStatementEntries) {
+    const groupKey = aggregateGroupKey(stmt.candidate);
+    const available = (poolByGroup.get(groupKey) ?? []).filter((i) => !consumed.has(i.key));
+    if (available.length === 0 || available.length > MAX_AGGREGATE_MATCH_POOL) continue;
+
+    const matchedKeys = smallestExactSharesSubset(available, stmt.candidate.shares);
+    if (!matchedKeys || matchedKeys.length === 0) continue;
+
+    const matchedKeySet = new Set(matchedKeys);
+    const matchedItems = available.filter((i) => matchedKeySet.has(i.key));
+    const totalShares = matchedItems.reduce((sum, i) => sum + i.shares, 0);
+    const weightedAvgPrice = matchedItems.reduce((sum, i) => sum + i.price * i.shares, 0) / totalShares;
+    if (!siblingPricesClose(weightedAvgPrice, stmt.candidate.price)) continue;
+
+    for (const key of matchedKeys) consumed.add(key);
+    result.set(stmt.key, matchedKeys);
+  }
+  return result;
 }
 
 /**
