@@ -177,7 +177,13 @@ function parseStatementTextImpl(text: string): ParsedTradeCandidate[] {
   const normalized = text.replace(/\s+/g, " ");
 
   for (const m of normalized.matchAll(statementRowPattern)) {
-    const [, dateStr, typeStr, description, qtyStr, priceStr, valueStr] = m;
+    const [, dateStr, typeStr, rawDescription, qtyStr, priceStr, valueStr] = m;
+
+    // "Sell T+1 Ibn sina farma" / "Buy Same Day TMG Holding": T+1 and
+    // Same Day are settlement qualifiers printed between the side and the
+    // company name, not part of the name — left in, they fabricate bogus
+    // ticker groups like "T+1 EGYPT GAS" or "SAME DAY TMG HOLDING".
+    const description = rawDescription.replace(/^(?:T\s*\+\s*1|Same\s*Day)\s+/i, "");
 
     if (NON_STOCK_INSTRUMENTS.has(normalizeCompanyKey(description))) continue;
 

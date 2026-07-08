@@ -111,6 +111,25 @@ describe("ThndrParser.parseStatementText", () => {
     expect(orhd).toMatchObject({ ticker: "ORHD", confidence: "high" });
   });
 
+  it("strips T+1 / Same Day settlement qualifiers so they never fabricate bogus ticker groups", () => {
+    const text = `
+      4/1/2023 Sell T+1 Aspire Cpaital Holding (3,300@0.2990 ) 982.96 31,648.505
+      4/1/2023 Buy Same Day Housing & Development Bank (350@17.0371 ) -5,968.5 25,680.005
+      25/1/2023 Buy Egypt Gas (100@38.6200 ) -3,867.9 33,654.472
+      25/1/2023 Sell T+1 Egypt Gas (100@38.9000 ) 3,880.00 37,534.472
+    `;
+    const candidates = parser.parseStatementText(text);
+    expect(candidates).toHaveLength(4);
+    for (const c of candidates) {
+      expect(c.ticker).not.toMatch(/^T\s*\+?\s*1/i);
+      expect(c.ticker).not.toMatch(/same\s*day/i);
+    }
+    // The prefixed and unprefixed rows of the same company land in ONE group.
+    expect(candidates[2].ticker).toBe(candidates[3].ticker);
+    const plainHdb = parser.parseStatementText("4/1/2023 Buy Housing & Development Bank (350@17.0371 ) -5,968.5")[0];
+    expect(candidates[1].ticker).toBe(plainHdb.ticker);
+  });
+
   it("resolves the same real stock to one ticker regardless of a trailing bracketed symbol OCR'd with a different bracket glyph", () => {
     // Real observed failure: the exact same company split into two Import
     // ticker groups — "Egyptian International Pharmaceuticals (EIPICO)" from
