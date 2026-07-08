@@ -1,8 +1,11 @@
-import type { ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParseConfidence, ParsedDividendCandidate, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
+import { KNOWN_EGX_TICKERS } from "@domain/value-objects/knownTickers";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { BrokerParser, OrderRowText, OrderRowsParseResult, OrdersScreenParseResult, OrdersTimelineParseResult } from "./BrokerParser";
 import { defaultTrackedSince, isWithinTrackedRange, partitionByRange } from "./trackedDateRange";
+
+const KNOWN_TICKER_SET = new Set(KNOWN_EGX_TICKERS.map((t) => t.ticker));
 
 /**
  * Second BrokerParser implementation (after ThndrParser), proving the
@@ -75,9 +78,27 @@ function parseRows(text: string): ParsedTradeCandidate[] {
     if (!date || !ticker || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(price) || price <= 0) continue;
 
     const sideRaw = columns.side !== undefined ? cells[columns.side] : "";
+    // "Sell" is the only value this format actually distinguishes on — a
+    // blank/missing side column or an unrecognized value (a status word
+    // like "Executed" rather than a direction) both default to BUY, an
+    // established, intentionally lenient contract this parser already
+    // relies on. What it must NOT do is report that guess with the same
+    // confidence as an explicit "Buy"/"Sell" cell — see confidence below.
+    const sideExplicit = /buy|sell/i.test(sideRaw);
     const side: "BUY" | "SELL" = /sell/i.test(sideRaw) ? "SELL" : "BUY";
     const fees = columns.fees !== undefined ? parseCsvNumber(cells[columns.fees]) : undefined;
     const taxes = columns.taxes !== undefined ? parseCsvNumber(cells[columns.taxes]) : undefined;
+    const tickerKnown = KNOWN_TICKER_SET.has(normalizeTicker(ticker));
+
+    // A structured column match is more reliable than a fuzzy OCR guess, but
+    // only when the two fields that actually determine WHAT happened are
+    // both trustworthy: a ticker this app recognizes, and a side the row
+    // stated explicitly rather than defaulted. Unlike ThndrParser's OCR
+    // paths, this was previously unconditional "high" regardless of either —
+    // which let a garbled ticker cell or a silently-defaulted side outrank
+    // even an anchored OCR read in every downstream confidence-ranked check
+    // (mismatchResolver's confidenceRank, findWrongTickerCandidateKeys).
+    const confidence: ParseConfidence = tickerKnown && sideExplicit ? "high" : tickerKnown || sideExplicit ? "medium" : "low";
 
     candidates.push({
       ticker: normalizeTicker(ticker),
@@ -87,9 +108,7 @@ function parseRows(text: string): ParsedTradeCandidate[] {
       date,
       fees: Number.isFinite(fees) ? fees : undefined,
       taxes: Number.isFinite(taxes) ? taxes : undefined,
-      // A structured column match (not a fuzzy company-name guess) is the
-      // most reliable ticker resolution the OCR subsystem can produce.
-      confidence: "high",
+      confidence,
       source: "csv",
     });
   }

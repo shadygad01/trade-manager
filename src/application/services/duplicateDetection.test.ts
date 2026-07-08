@@ -140,6 +140,52 @@ describe("findDuplicateBuyMatch", () => {
     const candidate = buyCandidate({ transactionNumber: "N000248458443" });
     expect(findDuplicateBuyMatch(candidate, [trade])).toEqual({ matchType: "exact", matchedId: "t1", matchedPrice: 50 });
   });
+
+  it("does not flag a genuinely new same-day buy as a duplicate of an already-committed trade when both carry a real, differing execution time", () => {
+    const trade = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-06-01",
+      executionTime: "10:00",
+    });
+    const candidate = buyCandidate({ time: "14:30" });
+    expect(findDuplicateBuyMatch(candidate, [trade])).toBeUndefined();
+  });
+
+  it("still flags a duplicate against an already-committed trade when only one side carries a time, or the committed row's time is the unset placeholder", () => {
+    const tradeNoTime = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-06-01",
+      executionTime: "00:00", // never OCR'd — the placeholder ImportPage falls back to, not a real midnight execution
+    });
+    expect(findDuplicateBuyMatch(buyCandidate({ time: "14:30" }), [tradeNoTime])).toEqual({
+      matchType: "exact",
+      matchedId: "t1",
+      matchedPrice: 50,
+    });
+
+    const tradeWithTime = createTrade({
+      id: "t2",
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-06-01",
+      executionTime: "10:00",
+    });
+    expect(findDuplicateBuyMatch(buyCandidate(), [tradeWithTime])).toEqual({
+      matchType: "exact",
+      matchedId: "t2",
+      matchedPrice: 50,
+    });
+  });
 });
 
 describe("findDuplicateSellMatch — legacy allocations without sellGroupId", () => {
@@ -201,6 +247,22 @@ describe("findDuplicateSellMatch", () => {
     });
     const candidate = buyCandidate({ side: "SELL", shares: 40, price: 55, date: "2026-06-10" });
     expect(findDuplicateSellMatch(candidate, [allocation])).toEqual({ matchType: "exact", matchedId: "a1", matchedPrice: 55 });
+  });
+
+  it("does not flag a genuinely new same-day sell as a duplicate when both sides carry a real, differing execution time", () => {
+    const allocation = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "sg1",
+      portfolioId: "p1",
+      tradeId: "t1",
+      ticker: "COMI",
+      sharesClosed: 40,
+      exitPrice: 55,
+      executionDate: "2026-06-10",
+      executionTime: "11:00",
+    });
+    const candidate = buyCandidate({ side: "SELL", shares: 40, price: 55, date: "2026-06-10", time: "15:45" });
+    expect(findDuplicateSellMatch(candidate, [allocation])).toBeUndefined();
   });
 
   it("matches one sell order split across multiple buy lots (shared sellGroupId) by its total shares", () => {
@@ -465,8 +527,11 @@ describe("completeCandidateFieldsFromSiblings", () => {
       { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32, time: "10:30" }) },
     ];
     const completions = completeCandidateFieldsFromSiblings(entries);
-    expect(completions.get("st")).toEqual({ fees: 4.32, time: "10:30" });
-    expect(completions.has("inv")).toBe(false);
+    expect(completions.get("st")).toEqual({ fees: 4.32, time: "10:30", confidence: "high" });
+    // "inv" has no missing fields to backfill, but is itself corroborated by
+    // "st" (a different-source, same-execution sibling), so it also gets its
+    // confidence raised — corroboration is symmetric, not one-directional.
+    expect(completions.get("inv")).toEqual({ confidence: "high" });
   });
 
   it("prefers the invoice-sourced donor when several siblings carry the same field", () => {
@@ -475,7 +540,17 @@ describe("completeCandidateFieldsFromSiblings", () => {
       { key: "os", candidate: buyCandidate({ price: 50.0, source: "orders-screen" as const, fees: 9.99 }) },
       { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32 }) },
     ];
-    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ fees: 4.32 });
+    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ fees: 4.32, confidence: "high" });
+  });
+
+  it("raises confidence to high when a different-source sibling corroborates the same execution, but never lowers it", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const, confidence: "low" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, confidence: "high" as const }) },
+    ];
+    const completions = completeCandidateFieldsFromSiblings(entries);
+    expect(completions.get("st")).toEqual({ confidence: "high" });
+    expect(completions.has("inv")).toBe(false);
   });
 
   it("never completes from a sibling whose price sits clearly apart (possibly a different real trade)", () => {
@@ -508,7 +583,7 @@ describe("completeCandidateFieldsFromSiblings", () => {
       { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const }) },
       { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, transactionNumber: "N000248458443" }) },
     ];
-    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ transactionNumber: "N000248458443" });
+    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ transactionNumber: "N000248458443", confidence: "high" });
   });
 
   it("never overwrites a statement row's own transaction number with a sibling's different one", () => {

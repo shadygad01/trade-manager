@@ -22,6 +22,15 @@ describe("parsePrice", () => {
   it("falls back to plain parse when the 3-decimal shape doesn't match", () => {
     expect(parsePrice("123")).toBe(123);
   });
+
+  it("still recovers a comma-for-decimal misread when a trailing digit was dropped (fewer than 3 digits after the separator)", () => {
+    // A real thousands separator always groups in runs of exactly 3 digits,
+    // so 1-2 trailing digits after the last separator can only be a
+    // misread decimal point, never a thousands group — same as the 3-digit
+    // case above, just with an OCR-dropped digit.
+    expect(parsePrice("76,50")).toBe(76.5);
+    expect(parsePrice("76,5")).toBe(76.5);
+  });
 });
 
 describe("normalizeCompanyKey", () => {
@@ -701,6 +710,24 @@ describe("ThndrParser.parsePositionVerification", () => {
   it("returns an empty array when no ticker can be resolved", () => {
     const text = "My current position Units 74 Average cost EGP 23.73";
     expect(parser.parsePositionVerification(text)).toHaveLength(0);
+  });
+
+  it("drops a misread average cost when it doesn't reconcile against units × avgCost ≈ Purchase Value", () => {
+    // A real Purchase Value of 1,756.02 (74 units) implies avgCost 23.73;
+    // "273" here is a plausible OCR misread (a dropped decimal point) that
+    // would otherwise silently corrupt mismatchResolver's ranking.
+    const text = `
+      ORHD
+      Orascom Development Egypt
+      My current position
+      Units 74
+      Average cost EGP 273
+      Purchase Value EGP 1,756.02
+      Market value 2,826.80
+    `;
+    const [result] = parser.parsePositionVerification(text);
+    expect(result.units).toBe(74);
+    expect(result.avgCost).toBeUndefined();
   });
 
   it("rejects a 2-3 letter OCR noise fragment near the header instead of fabricating a ticker from it", () => {

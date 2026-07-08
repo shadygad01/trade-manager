@@ -28,6 +28,23 @@ function pricesClose(a: number, b: number, tolerance: number): boolean {
 }
 
 /**
+ * Both `ParsedOrderEvidence.time` (the dated "Transactions" shape) and
+ * `ParsedTradeCandidate.time` are only ever set when OCR actually read a
+ * real timestamp — unlike Trade.executionTime, there's no "00:00" unknown
+ * placeholder at this layer, so a plain defined-and-differing check is
+ * enough. Two rows that both carry a real, differing time are provably two
+ * different real orders, the same signal duplicateDetection's
+ * sameCandidateExecution/timesConflict already apply elsewhere — without it,
+ * two same-day same-side same-total orders could cross-confirm/misfile
+ * against each other via the wrong pairing (orderEvidenceContentKey already
+ * folds time into its own cross-file dedup key, so this brings the matching
+ * logic in line with what the dedup key already treats as meaningful).
+ */
+function timesConflict(a?: string, b?: string): boolean {
+  return a !== undefined && b !== undefined && a !== b;
+}
+
+/**
  * Content identity for cross-file dedup of order-history rows: consecutive
  * scrolled screenshots of the same screen overlap by a few rows. The
  * undated "Orders" timeline shape has nothing but its own numbers to key on;
@@ -56,6 +73,7 @@ export function orderEvidenceContentKey(e: ParsedOrderEvidence): string {
  */
 function evidenceNumbersMatch(evidence: ParsedOrderEvidence, candidate: ParsedTradeCandidate): boolean {
   if (evidence.side !== candidate.side) return false;
+  if (timesConflict(evidence.time, candidate.time)) return false;
   if (evidence.date) {
     return evidence.date === candidate.date && pricesClose(evidence.totalValue, candidate.shares * candidate.price, ORDER_MATCH_PRICE_TOLERANCE);
   }

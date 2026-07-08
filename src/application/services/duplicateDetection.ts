@@ -48,6 +48,27 @@ export function sameExecution(a?: string, b?: string): boolean | undefined {
   return a === b;
 }
 
+// Trade.executionTime/TradeAllocation.executionTime are non-optional fields
+// that fall back to this placeholder when OCR never captured a real time
+// (see ImportPage's `entry.candidate.time ?? "00:00"`) — never a genuine
+// midnight execution in this domain, so it must never be treated as "the
+// same time" or "a conflicting time," only as "unknown."
+const UNKNOWN_TIME = "00:00";
+
+/**
+ * Two rows that BOTH carry a real, differing execution time are provably two
+ * different real orders — the same signal sameCandidateExecution already
+ * applies within one import batch, extended here to matching against
+ * already-committed ledger rows. Without this, a genuinely new same-day
+ * trade of the same ticker/shares/price as one already recorded (an
+ * ordinary accumulation pattern, not a re-import) would be misjudged as an
+ * exact duplicate and silently auto-skipped during commit.
+ */
+function timesConflict(a?: string, b?: string): boolean {
+  if (!a || !b || a === UNKNOWN_TIME || b === UNKNOWN_TIME) return false;
+  return a !== b;
+}
+
 /**
  * A parsed candidate can look like a duplicate of a trade already on the
  * ledger in two ways: an "exact" match (same ticker/date/shares/price — the
@@ -60,12 +81,13 @@ export function sameExecution(a?: string, b?: string): boolean | undefined {
  * A candidate/existing-row transaction-number match short-circuits straight
  * to "exact" regardless of date/shares/price (see sameExecution); a
  * transaction-number MISMATCH removes that row from consideration entirely,
- * even when its date/shares/price would otherwise look like a match.
+ * even when its date/shares/price would otherwise look like a match. A
+ * conflicting execution time (see timesConflict) does the same.
  */
 function findMatch(
-  candidate: { ticker: string; date: string; shares: number; transactionNumber?: string },
+  candidate: { ticker: string; date: string; shares: number; time?: string; transactionNumber?: string },
   candidatePrice: number,
-  existing: { id: string; ticker: string; date: string; shares: number; price: number; transactionNumber?: string }[]
+  existing: { id: string; ticker: string; date: string; shares: number; price: number; executionTime?: string; transactionNumber?: string }[]
 ): DuplicateMatch | undefined {
   const ticker = normalizeTicker(candidate.ticker);
   const sameTicker = existing.filter((e) => normalizeTicker(e.ticker) === ticker);
@@ -75,7 +97,9 @@ function findMatch(
     if (byId) return { matchType: "exact", matchedId: byId.id, matchedPrice: byId.price };
   }
 
-  const looseMatches = sameTicker.filter((e) => e.date === candidate.date && e.shares === candidate.shares);
+  const looseMatches = sameTicker.filter(
+    (e) => e.date === candidate.date && e.shares === candidate.shares && !timesConflict(candidate.time, e.executionTime)
+  );
   const eligible = candidate.transactionNumber
     ? looseMatches.filter((e) => sameExecution(e.transactionNumber, candidate.transactionNumber) !== false)
     : looseMatches;
@@ -96,7 +120,13 @@ function findMatch(
 
 export function findDuplicateBuyMatch(candidate: ParsedTradeCandidate, existingTrades: Trade[]): DuplicateMatch | undefined {
   return findMatch(
-    { ticker: candidate.ticker, date: candidate.date, shares: candidate.shares, transactionNumber: candidate.transactionNumber },
+    {
+      ticker: candidate.ticker,
+      date: candidate.date,
+      shares: candidate.shares,
+      time: candidate.time,
+      transactionNumber: candidate.transactionNumber,
+    },
     candidate.price,
     existingTrades.map((t) => ({
       id: t.id,
@@ -104,6 +134,7 @@ export function findDuplicateBuyMatch(candidate: ParsedTradeCandidate, existingT
       date: t.executionDate,
       shares: t.shares,
       price: t.entryPrice,
+      executionTime: t.executionTime,
       transactionNumber: t.transactionNumber,
     }))
   );
@@ -128,7 +159,10 @@ export function findDuplicateSellMatch(
   // check below must be able to find a match even if one side's date was
   // misread; the date requirement is applied afterward, only on the path
   // that falls back to the date/shares heuristic.
-  const groups = new Map<string, { id: string; price: number; totalShares: number; date: string; transactionNumber?: string }>();
+  const groups = new Map<
+    string,
+    { id: string; price: number; totalShares: number; date: string; executionTime?: string; transactionNumber?: string }
+  >();
   for (const a of existingAllocations) {
     if (normalizeTicker(a.ticker) !== ticker) continue;
     // sellGroupId identifies one real sell order regardless of how many lots
@@ -141,7 +175,14 @@ export function findDuplicateSellMatch(
     if (g) {
       g.totalShares += a.sharesClosed;
     } else {
-      groups.set(key, { id: a.id, price: a.exitPrice, totalShares: a.sharesClosed, date: a.executionDate, transactionNumber: a.transactionNumber });
+      groups.set(key, {
+        id: a.id,
+        price: a.exitPrice,
+        totalShares: a.sharesClosed,
+        date: a.executionDate,
+        executionTime: a.executionTime,
+        transactionNumber: a.transactionNumber,
+      });
     }
   }
 
@@ -150,7 +191,9 @@ export function findDuplicateSellMatch(
     if (byId) return { matchType: "exact", matchedId: byId.id, matchedPrice: byId.price };
   }
 
-  const looseMatches = [...groups.values()].filter((g) => g.date === candidate.date && g.totalShares === candidate.shares);
+  const looseMatches = [...groups.values()].filter(
+    (g) => g.date === candidate.date && g.totalShares === candidate.shares && !timesConflict(candidate.time, g.executionTime)
+  );
   const matching = candidate.transactionNumber
     ? looseMatches.filter((g) => sameExecution(g.transactionNumber, candidate.transactionNumber) !== false)
     : looseMatches;
@@ -321,10 +364,20 @@ export function suggestDuplicatePendingCandidateKeysToDelete(
  * otherwise a LATER re-import of just the statement (without the invoice
  * alongside it again) has nothing to match against but the price/date/shares
  * heuristic, throwing away the stronger signal this batch already had.
+ *
+ * Also raises confidence to "high" whenever a target has at least one
+ * different-source, same-execution donor — the same corroboration
+ * findCrossSourceVerifiedKeys uses to badge a row "confirmed by two
+ * documents," applied here to the field mismatch/wrong-ticker heuristics
+ * actually rank by (mismatchResolver's confidenceRank,
+ * findWrongTickerCandidateKeys' wrongTickerConfidenceRank) so a row two
+ * independent documents agree on stops being outranked by an uncorroborated
+ * single-document read that merely happened to OCR cleanly. Confidence is
+ * only ever raised, never lowered.
  */
 export function completeCandidateFieldsFromSiblings(
   entries: { key: string; candidate: ParsedTradeCandidate }[]
-): Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber">>> {
+): Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber" | "confidence">>> {
   const bySignature = new Map<string, { key: string; candidate: ParsedTradeCandidate }[]>();
   for (const e of entries) {
     const sig = pendingCandidateSignature(e.candidate);
@@ -333,7 +386,10 @@ export function completeCandidateFieldsFromSiblings(
     bySignature.set(sig, list);
   }
 
-  const completions = new Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber">>>();
+  const completions = new Map<
+    string,
+    Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber" | "confidence">>
+  >();
   for (const group of bySignature.values()) {
     if (group.length < 2) continue;
     for (const target of group) {
@@ -341,7 +397,7 @@ export function completeCandidateFieldsFromSiblings(
       // document type — the same reason findCrossSourceVerifiedKeys never
       // pairs it with a typed non-invoice read. Don't auto-enrich it either.
       if (target.candidate.source === undefined) continue;
-      const patch: Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber">> = {};
+      const patch: Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time" | "transactionNumber" | "confidence">> = {};
       // Invoice-sourced donors first — labeled fields beat OCR-positional ones.
       const donors = group
         .filter(
@@ -366,6 +422,7 @@ export function completeCandidateFieldsFromSiblings(
         )
           patch.transactionNumber = donor.candidate.transactionNumber;
       }
+      if (donors.length > 0 && target.candidate.confidence !== "high") patch.confidence = "high";
       if (Object.keys(patch).length > 0) completions.set(target.key, patch);
     }
   }

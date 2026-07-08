@@ -365,9 +365,15 @@ export function normalizeDigits(s: string): string {
 // Thndr always renders prices with exactly 3 decimals (e.g. "76.500"), but
 // OCR sometimes reads the decimal point as a comma. Whichever separator
 // precedes the final 3 digits is the decimal point; an earlier comma (rare
-// for share prices) is a thousands separator.
+// for share prices) is a thousands separator. A real thousands separator
+// always groups in runs of exactly 3 digits, so a trailing run of only 1 or
+// 2 digits after the final separator can never be one — it's unambiguously
+// a decimal point too, just with a digit OCR dropped off the end (e.g.
+// "76,5" or "76,50" instead of "76,500"). Without this, that case fell
+// through to being parsed as a thousands-separated integer instead (e.g.
+// "76,50" -> 7650, a 100x error).
 export function parsePrice(raw: string): number {
-  const m = /^([\d,]*\d)[.,](\d{3})$/.exec(raw.trim());
+  const m = /^([\d,]*\d)[.,](\d{1,3})$/.exec(raw.trim());
   if (m) return parseFloat(`${m[1].replace(/,/g, "")}.${m[2]}`);
   return parseFloat(raw.replace(/,/g, ""));
 }
@@ -954,7 +960,23 @@ function parsePositionVerificationTextImpl(text: string): Omit<PositionVerificat
   const units = parseFloat(normalizeDigits(numbers[0]).replace(/,/g, ""));
   if (!units) return null;
 
-  const avgCost = numbers[1] != null ? parseFloat(normalizeDigits(numbers[1]).replace(/,/g, "")) : undefined;
+  let avgCost = numbers[1] != null ? parseFloat(normalizeDigits(numbers[1]).replace(/,/g, "")) : undefined;
+
+  // Cross-validation guard, same shape as the statement row's Value-vs-price
+  // check above: the position card's 3rd value (Purchase Value) should equal
+  // units * avgCost. avgCost feeds mismatchResolver's suggestRemovalsToReconcile
+  // ranking directly, so an OCR-misread digit here (a dropped/added digit,
+  // decimal shifted) would silently corrupt which pending rows get suggested
+  // for removal. A misreadable avgCost that fails this check is dropped
+  // entirely rather than trusted — the position's units alone (already
+  // validated by requiring a real leading digit) still verifies holdings.
+  if (avgCost !== undefined && numbers[2] != null) {
+    const purchaseValue = parseFloat(normalizeDigits(numbers[2]).replace(/,/g, ""));
+    if (!Number.isNaN(purchaseValue) && purchaseValue > 0) {
+      const derived = purchaseValue / units;
+      if (Math.abs(derived - avgCost) / avgCost > 0.25) avgCost = undefined;
+    }
+  }
 
   return {
     ticker: normalizeTicker(ticker),

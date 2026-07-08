@@ -54,10 +54,28 @@ describe("CsvStatementParser.parseStatementText", () => {
     expect(candidate.side).toBe("BUY");
   });
 
-  it("marks every parsed row as high confidence (structured column match, not a fuzzy guess)", () => {
+  it("marks a row high confidence when both the ticker is recognized and the side was stated explicitly", () => {
     const text = ["Date,Ticker,Type,Quantity,Price", "2026-02-19,COMI,Buy,100,50.5"].join("\n");
     const [candidate] = parser.parseStatementText(text);
     expect(candidate.confidence).toBe("high");
+  });
+
+  it("downgrades confidence when the ticker isn't recognized, even though the column match itself is structured", () => {
+    const text = ["Date,Ticker,Type,Quantity,Price", "2026-02-19,ZZZZ,Buy,100,50.5"].join("\n");
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.confidence).toBe("medium");
+  });
+
+  it("downgrades confidence when the side was defaulted rather than stated explicitly, even for a known ticker", () => {
+    const text = ["Date,Ticker,Type,Quantity,Price", "2026-02-19,COMI,Executed,100,50.5"].join("\n");
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.confidence).toBe("medium");
+  });
+
+  it("marks a row low confidence when neither the ticker nor the side is trustworthy", () => {
+    const text = ["Date,Ticker,Type,Quantity,Price", "2026-02-19,ZZZZ,Executed,100,50.5"].join("\n");
+    const [candidate] = parser.parseStatementText(text);
+    expect(candidate.confidence).toBe("low");
   });
 
   it("returns nothing when required columns are missing", () => {

@@ -75,6 +75,19 @@ describe("findOrderConfirmedKeys", () => {
     );
     expect(keys.size).toBe(2);
   });
+
+  it("does not let an order confirm a candidate whose real, differing time proves it's a different execution", () => {
+    const keys = findOrderConfirmedKeys(
+      [{ key: "a", candidate: candidate({ time: "2:15PM" }) }],
+      [evidence({ time: "10:05AM" })],
+    );
+    expect(keys.size).toBe(0);
+  });
+
+  it("still confirms when only one side carries a time", () => {
+    const keys = findOrderConfirmedKeys([{ key: "a", candidate: candidate({ time: "2:15PM" }) }], [evidence()]);
+    expect(keys.has("a")).toBe(true);
+  });
 });
 
 describe("findOrderConfirmedKeys — dated Transactions-list evidence", () => {
@@ -109,6 +122,14 @@ describe("findOrderConfirmedKeys — dated Transactions-list evidence", () => {
     const keys = findOrderConfirmedKeys(
       [{ key: "a", candidate: candidate({ ticker: "JUFO", side: "SELL", date: "2023-01-17", shares: 10, price: 8.2 }) }],
       [txnEvidence()],
+    );
+    expect(keys.size).toBe(0);
+  });
+
+  it("does not confirm a same-day candidate whose real, differing time proves it's a different order", () => {
+    const keys = findOrderConfirmedKeys(
+      [{ key: "a", candidate: candidate({ ticker: "JUFO", side: "SELL", date: "2023-01-17", shares: 90, price: 8.2, time: "3:20PM" }) }],
+      [txnEvidence({ time: "9:00AM" })],
     );
     expect(keys.size).toBe(0);
   });
