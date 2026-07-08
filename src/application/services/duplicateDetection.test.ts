@@ -7,6 +7,7 @@ import {
   isDividendAlreadyRecorded,
   suggestDuplicateDividendIdsToDelete,
   suggestDuplicatePendingCandidateKeysToDelete,
+  completeCandidateFieldsFromSiblings,
   findCrossSourceVerifiedKeys,
   findWrongTickerCandidateKeys,
 } from "./duplicateDetection";
@@ -309,6 +310,73 @@ describe("suggestDuplicatePendingCandidateKeysToDelete", () => {
     const entries = [{ key: "a", candidate: buyCandidate() }];
     expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
   });
+
+  it("does NOT suggest deleting a same-signature sibling whose price sits clearly apart — possibly a different real trade", () => {
+    // Same ticker/side/date/shares but 50.00 vs 46.00 (~8% apart): two
+    // distinct same-day orders, not two reads of one execution. A false
+    // merge loses a real trade; leaving both pending just waits for the user.
+    const entries = [
+      { key: "a", candidate: buyCandidate({ price: 50.0 }) },
+      { key: "b", candidate: buyCandidate({ price: 46.0 }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("keeps the invoice-sourced read as survivor even when the price heuristic favors the other read", () => {
+    // Buy heuristic alone would keep the higher-priced statement read —
+    // but the invoice's labeled price + fees are ground truth.
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.2, source: "statement" }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice", fees: 4.32 }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["st"]);
+  });
+});
+
+describe("completeCandidateFieldsFromSiblings", () => {
+  it("copies missing fees/taxes/time from a price-close sibling of a different source, never overwriting present values", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32, time: "10:30" }) },
+    ];
+    const completions = completeCandidateFieldsFromSiblings(entries);
+    expect(completions.get("st")).toEqual({ fees: 4.32, time: "10:30" });
+    expect(completions.has("inv")).toBe(false);
+  });
+
+  it("prefers the invoice-sourced donor when several siblings carry the same field", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const }) },
+      { key: "os", candidate: buyCandidate({ price: 50.0, source: "orders-screen" as const, fees: 9.99 }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32 }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ fees: 4.32 });
+  });
+
+  it("never completes from a sibling whose price sits clearly apart (possibly a different real trade)", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 46.0, source: "invoice" as const, fees: 4.32 }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).size).toBe(0);
+  });
+
+  it("never enriches a legacy untyped candidate — its real document type is unknowable", () => {
+    const entries = [
+      { key: "old", candidate: buyCandidate({ price: 50.0 }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32 }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).has("old")).toBe(false);
+  });
+
+  it("never completes from a same-source sibling or an untyped legacy one", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ source: "statement" as const }) },
+      { key: "b", candidate: buyCandidate({ source: "statement" as const, fees: 4.32 }) },
+      { key: "c", candidate: buyCandidate({ fees: 9.99 }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).size).toBe(0);
+  });
 });
 
 describe("findCrossSourceVerifiedKeys", () => {
@@ -370,6 +438,14 @@ describe("findCrossSourceVerifiedKeys", () => {
     const entries = [
       { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
       { key: "b", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+
+  it("does not cross-verify two documents that share a signature but disagree on price — possibly two different real trades", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, shares: 10, date: "2026-01-14", source: "statement" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 46.0, shares: 10, date: "2026-01-14", source: "invoice" as const }) },
     ];
     expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
   });

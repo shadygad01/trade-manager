@@ -172,6 +172,24 @@ export function pendingCandidateSignature(candidate: { ticker: string; side: "BU
   return `${normalizeTicker(candidate.ticker)}|${candidate.side}|${candidate.date}|${candidate.shares}`;
 }
 
+/**
+ * Two reads of the SAME real execution land within a couple of percent of
+ * each other (commission-inclusive vs raw execution price, or minor OCR
+ * noise) — while two genuinely different same-day trades of the same share
+ * count normally sit further apart. Slightly wider than pricesWithinOcrNoise
+ * because cross-format reads legitimately differ by the commission itself.
+ */
+const SIBLING_DUPLICATE_PRICE_TOLERANCE = 0.02;
+
+function siblingPricesClose(a: number, b: number): boolean {
+  return Math.abs(a - b) <= Math.max(a, b) * SIBLING_DUPLICATE_PRICE_TOLERANCE;
+}
+
+/** Invoices are labeled, standardized PDFs — the most trustworthy read of a transaction when one exists in a duplicate group. */
+function isInvoiceSourced(c: ParsedTradeCandidate): boolean {
+  return c.source === "invoice";
+}
+
 export function suggestDuplicatePendingCandidateKeysToDelete(
   entries: { key: string; candidate: ParsedTradeCandidate }[]
 ): string[] {
@@ -187,12 +205,83 @@ export function suggestDuplicatePendingCandidateKeysToDelete(
   for (const group of bySignature.values()) {
     if (group.length < 2) continue;
     const side = group[0].candidate.side;
-    const sorted = [...group].sort((a, b) =>
-      side === "BUY" ? b.candidate.price - a.candidate.price : a.candidate.price - b.candidate.price
-    );
-    for (const e of sorted.slice(1)) keysToDelete.push(e.key);
+    const sorted = [...group].sort((a, b) => {
+      // An invoice-sourced read wins the survivor slot outright: its price
+      // and fees come from labeled fields on a standardized PDF, not from
+      // positional OCR guessing — only between two non-invoice reads does
+      // the price-plausibility heuristic decide.
+      const invoiceRank = Number(isInvoiceSourced(b.candidate)) - Number(isInvoiceSourced(a.candidate));
+      if (invoiceRank !== 0) return invoiceRank;
+      return side === "BUY" ? b.candidate.price - a.candidate.price : a.candidate.price - b.candidate.price;
+    });
+    const survivor = sorted[0];
+    for (const e of sorted.slice(1)) {
+      // Uncertain-match guard: a same-signature sibling whose price sits
+      // clearly apart from the survivor's may be a genuinely different
+      // trade (two distinct same-day orders of the same share count), not
+      // a re-read. A false merge silently loses a real transaction; an
+      // extra pending row just waits for the user — so when in doubt,
+      // leave it pending instead of suggesting deletion.
+      if (!siblingPricesClose(e.candidate.price, survivor.candidate.price)) continue;
+      keysToDelete.push(e.key);
+    }
   }
   return keysToDelete;
+}
+
+/**
+ * Cross-document field completion: when the same real transaction (same
+ * signature, price within sibling tolerance) was read from more than one
+ * document and one read carries a field the other misses — fees/taxes from
+ * an invoice, execution time from an orders screenshot — copy the missing
+ * field onto the read that lacks it instead of leaving the eventual
+ * committed trade with a default. Strictly additive: an already-present
+ * value is NEVER overwritten, and nothing is merged across reads whose
+ * prices disagree (they may be different real trades). Returns only the
+ * keys that gain at least one field.
+ */
+export function completeCandidateFieldsFromSiblings(
+  entries: { key: string; candidate: ParsedTradeCandidate }[]
+): Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time">>> {
+  const bySignature = new Map<string, { key: string; candidate: ParsedTradeCandidate }[]>();
+  for (const e of entries) {
+    const sig = pendingCandidateSignature(e.candidate);
+    const list = bySignature.get(sig) ?? [];
+    list.push(e);
+    bySignature.set(sig, list);
+  }
+
+  const completions = new Map<string, Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time">>>();
+  for (const group of bySignature.values()) {
+    if (group.length < 2) continue;
+    for (const target of group) {
+      // A legacy untyped candidate (pre-source session) could be from any
+      // document type — the same reason findCrossSourceVerifiedKeys never
+      // pairs it with a typed non-invoice read. Don't auto-enrich it either.
+      if (target.candidate.source === undefined) continue;
+      const patch: Partial<Pick<ParsedTradeCandidate, "fees" | "taxes" | "time">> = {};
+      // Invoice-sourced donors first — labeled fields beat OCR-positional ones.
+      const donors = group
+        .filter(
+          (d) =>
+            d.key !== target.key &&
+            d.candidate.source !== undefined &&
+            d.candidate.source !== target.candidate.source &&
+            siblingPricesClose(d.candidate.price, target.candidate.price),
+        )
+        .sort((a, b) => Number(isInvoiceSourced(b.candidate)) - Number(isInvoiceSourced(a.candidate)));
+      for (const donor of donors) {
+        if (target.candidate.fees === undefined && donor.candidate.fees !== undefined && patch.fees === undefined)
+          patch.fees = donor.candidate.fees;
+        if (target.candidate.taxes === undefined && donor.candidate.taxes !== undefined && patch.taxes === undefined)
+          patch.taxes = donor.candidate.taxes;
+        if (target.candidate.time === undefined && donor.candidate.time !== undefined && patch.time === undefined)
+          patch.time = donor.candidate.time;
+      }
+      if (Object.keys(patch).length > 0) completions.set(target.key, patch);
+    }
+  }
+  return completions;
 }
 
 /**
@@ -238,8 +327,21 @@ export function findCrossSourceVerifiedKeys(entries: { key: string; candidate: P
     const definedSources = new Set(group.map((e) => e.candidate.source).filter((s): s is NonNullable<typeof s> => s !== undefined));
     const hasLegacyUntyped = group.some((e) => e.candidate.source === undefined);
     const dualSourced = definedSources.size >= 2 || (definedSources.has("invoice") && hasLegacyUntyped);
-    if (dualSourced) {
-      for (const e of group) verifiedKeys.add(e.key);
+    if (!dualSourced) continue;
+    // Uncertain-match guard: sharing a signature is not enough — the two
+    // documents must also agree on price (within the same tolerance the
+    // sibling-duplicate check trusts). Two genuinely different same-day
+    // trades of the same share count would otherwise "verify" each other,
+    // and a false verification badge is worse than a row that waits for a
+    // real corroborating document.
+    for (const e of group) {
+      const corroborated = group.some(
+        (o) =>
+          o.key !== e.key &&
+          o.candidate.source !== e.candidate.source &&
+          siblingPricesClose(o.candidate.price, e.candidate.price),
+      );
+      if (corroborated) verifiedKeys.add(e.key);
     }
   }
   return verifiedKeys;

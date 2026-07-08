@@ -12,6 +12,7 @@ import {
   dividendContentKey,
   buildExistingDividendKeys,
   suggestDuplicatePendingCandidateKeysToDelete,
+  completeCandidateFieldsFromSiblings,
   findCrossSourceVerifiedKeys,
   findWrongTickerCandidateKeys,
 } from "@application/services/duplicateDetection";
@@ -410,9 +411,24 @@ export function ImportPage() {
               newOrderEvidences.push({ key: `${fileSeq}-o${oi}`, evidence });
             });
 
+            // Cross-document field completion: the same transaction read
+            // from two documents (statement + invoice, invoice + orders
+            // screenshot) completes each other's missing fees/taxes/time —
+            // strictly additive, never overwriting a value a document
+            // actually carried (see completeCandidateFieldsFromSiblings).
+            const combinedCandidates = [...prev.pendingCandidates, ...newCandidates];
+            const fieldCompletions = completeCandidateFieldsFromSiblings(combinedCandidates);
+            const completedCandidates =
+              fieldCompletions.size === 0
+                ? combinedCandidates
+                : combinedCandidates.map((e) => {
+                    const patch = fieldCompletions.get(e.key);
+                    return patch ? { ...e, candidate: { ...e.candidate, ...patch } } : e;
+                  });
+
             return {
               ...prev,
-              pendingCandidates: [...prev.pendingCandidates, ...newCandidates],
+              pendingCandidates: completedCandidates,
               pendingVerifications: [...prev.pendingVerifications, ...newVerifications],
               pendingDividends: [...prev.pendingDividends, ...newDividends],
               pendingOrderEvidences: [...prev.pendingOrderEvidences, ...newOrderEvidences],
