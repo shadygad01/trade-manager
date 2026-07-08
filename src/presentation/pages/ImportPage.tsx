@@ -216,16 +216,29 @@ export function ImportPage() {
   }
 
   /**
-   * A pending Sell that's an exact duplicate of a sell already allocated on
-   * the ledger (same ticker/date/total shares/price — e.g. the same sell
-   * order previously allocated across one or more buy lots, then re-imported)
-   * has nothing left to do: allocating it again would double-count the exit.
-   * Auto-mark it skipped, mirroring commitTickerGroup's silent skip for
-   * exact-duplicate Buys. This never allocates anything itself (ADR-002 —
-   * which lots a sell closes stays a manual decision); it only closes a row
-   * whose real-world transaction is already fully recorded. Gated on
-   * initialDataLoaded so a briefly-empty allocations read can't mislabel
-   * (or fail to label) a row off stale data.
+   * A pending Buy or Sell that's an exact duplicate of a trade/allocation
+   * already on the ledger (same ticker/date/shares/price — e.g. the same
+   * file, or the same real execution, re-imported) has nothing left to do:
+   * committing it again would double-count real shares. This must run
+   * BEFORE tickerMatchStatuses, not only at commit time inside
+   * commitTickerGroup: an un-skipped duplicate still counts toward
+   * pendingBuyShares/pendingSellShares in the net-share reconciliation,
+   * which can hold a ticker at "Mismatch"/"Blocked — needs verification"
+   * forever even when the ledger and a broker "My Position" screenshot
+   * already agree exactly — commitTickerGroup's own skip only ever runs for
+   * a ticker `tickerMatchStatuses` already reports as matched, so it can
+   * never break that particular chicken-and-egg deadlock on its own (a real
+   * gap found and reproduced during the reconciliation investigation: a
+   * ticker whose only pending row was an exact re-import of an
+   * already-fully-recorded, already-broker-verified position stayed
+   * permanently "Mismatch"). Auto-marking the duplicate skipped here
+   * resolves it the same way the Sell side already did on its own before
+   * this was generalized to cover Buys too. This never commits anything
+   * itself (ADR-002 — which lots a sell closes stays a manual decision for
+   * a genuinely new Sell); it only closes a row whose real-world
+   * transaction is already fully recorded. Gated on initialDataLoaded so a
+   * briefly-empty trades/allocations read can't mislabel (or fail to label)
+   * a row off stale data.
    */
   useEffect(() => {
     if (!initialDataLoaded) return;
@@ -234,7 +247,6 @@ export function ImportPage() {
     const keysToSkip = state.pendingCandidates
       .filter(
         (e) =>
-          e.candidate.side === "SELL" &&
           !state.addedKeys.includes(e.key) &&
           !state.skippedKeys.includes(e.key) &&
           !state.dismissedKeys.includes(e.key) &&
@@ -247,7 +259,15 @@ export function ImportPage() {
     if (keysToSkip.length === 0) return;
     importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialDataLoaded, pendingCandidates, existingAllocations, session.addedKeys, session.skippedKeys, session.dismissedKeys]);
+  }, [
+    initialDataLoaded,
+    pendingCandidates,
+    existingTrades,
+    existingAllocations,
+    session.addedKeys,
+    session.skippedKeys,
+    session.dismissedKeys,
+  ]);
 
   /**
    * A ticker that already has trades recorded somewhere shouldn't make the
