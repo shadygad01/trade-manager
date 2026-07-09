@@ -5,6 +5,7 @@ import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2,
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
+import { recordImportedRawTransactions } from "@application/services/importRecording";
 import {
   findDuplicateBuyMatch,
   findDuplicateSellMatch,
@@ -438,6 +439,24 @@ export function ImportPage() {
             parsedAt: new Date().toISOString(),
           };
           await repos.uploads.save(upload);
+
+          // Migration dual-write: additionally record every parsed candidate
+          // as an immutable RawTransaction (see importRecording.ts) — the
+          // eventual sole source of truth. Best-effort and isolated from the
+          // existing commit flow below on purpose: this is shadow data for
+          // the new architecture, not yet read by anything, and must never
+          // be able to break today's working Import behavior if it fails.
+          try {
+            await recordImportedRawTransactions(repos, {
+              sourceUploadId: upload.id,
+              candidates: result.candidates,
+              verifications: result.verifications,
+              dividends: result.dividends,
+              orderEvidences: result.orderEvidences,
+            });
+          } catch (err) {
+            console.error("recordImportedRawTransactions failed (shadow write, non-fatal):", err);
+          }
 
           const fileSeq = seq;
           seq += 1;
