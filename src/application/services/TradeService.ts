@@ -8,6 +8,9 @@ import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { KNOWN_EGX_TICKERS, tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
 import { getTrackingStartDate, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
+import { retractRawTransaction, renameRawTransactionsTicker, type CommitEngineRepos } from "./commitEngine";
+import { canonicalKey } from "./ledgerRebuild";
+import type { BuyExecutionPayload } from "@domain/entities/RawTransaction";
 
 function companyNameForTicker(ticker: string): string | undefined {
   return KNOWN_EGX_TICKERS.find((t) => t.ticker === ticker)?.companyName;
@@ -118,7 +121,7 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
  * silently corrupt realized P/L — this is refused outright rather than
  * attempted, matching this app's ledger-never-lies philosophy (ADR-002).
  */
-export async function deleteTrade(repos: AppRepositories, tradeId: string): Promise<void> {
+export async function deleteTrade(repos: AppRepositories & Partial<CommitEngineRepos>, tradeId: string): Promise<void> {
   const trade = await repos.trades.getById(tradeId);
   if (!trade) {
     throw new Error(`Trade not found: ${tradeId}`);
@@ -149,6 +152,40 @@ export async function deleteTrade(repos: AppRepositories, tradeId: string): Prom
   }
 
   await repos.trades.delete(tradeId);
+
+  // Migration dual-write: retract the matching RawTransaction (if this repos
+  // bundle is wired up for the new architecture — see presentation/lib/data.ts)
+  // so a deleted trade can't resurrect itself the next time this ticker's
+  // portfolio assignment/commit runs. Best-effort and isolated for the same
+  // reason as every other shadow write in this migration (see ImportPage.tsx's
+  // recordImportedRawTransactions/assignPortfolio calls) — a failure here must
+  // never turn a successful, already-applied legacy delete into a thrown error.
+  if (repos.rawTransactions && repos.committedLedger) {
+    const commitRepos: CommitEngineRepos = { rawTransactions: repos.rawTransactions, committedLedger: repos.committedLedger };
+    await retractMatchingRawTransaction(commitRepos, trade).catch((err) => {
+      console.error("Raw transaction retraction failed (shadow write, non-fatal):", err);
+    });
+  }
+}
+
+/**
+ * Finds the BuyExecution RawTransaction that corresponds to a legacy Trade —
+ * same correlation key (ticker/side/date/shares/price) backfillRawTransactions
+ * and systemValidation already use to line up old and new records — and
+ * retracts it. A Trade only ever reaches deleteTrade with zero shares closed
+ * against it, so there is at most one live (non-retracted) match.
+ */
+async function retractMatchingRawTransaction(repos: CommitEngineRepos, trade: Trade): Promise<void> {
+  const ticker = normalizeTicker(trade.ticker);
+  const key = canonicalKey({ side: "BUY", ticker, date: trade.executionDate, shares: trade.shares, price: trade.entryPrice });
+  const all = await repos.rawTransactions.getAll();
+  const match = all.find((t) => {
+    if (t.kind !== "BuyExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== ticker) return false;
+    const payload = t.payload as BuyExecutionPayload;
+    return canonicalKey({ side: "BUY", ticker, date: payload.executionDate, shares: payload.shares, price: payload.price }) === key;
+  });
+  if (!match) return;
+  await retractRawTransaction(repos, match.id, "Trade deleted in the pre-migration UI");
 }
 
 /**
@@ -213,7 +250,7 @@ export interface RenameTickerResult {
  * untouched) — this is purely a ticker-identity fix.
  */
 export async function renameTickerEverywhere(
-  repos: AppRepositories,
+  repos: AppRepositories & Partial<CommitEngineRepos>,
   oldTickerRaw: string,
   newTickerRaw: string
 ): Promise<RenameTickerResult> {
@@ -257,6 +294,21 @@ export async function renameTickerEverywhere(
       ...v,
       ticker: newTicker,
       companyName: companyNameForTicker(newTicker) ?? v.companyName,
+    });
+  }
+
+  // Migration dual-write: also corrects every still-live RawTransaction
+  // currently resolving to oldTicker (if this repos bundle is wired up for
+  // the new architecture — see presentation/lib/data.ts). Without this, a
+  // renamed ticker's raw transactions stay permanently orphaned under the
+  // old ticker — immutable, and never matched by assignPortfolio again —
+  // since RawTransaction has no update method to correct them in place.
+  // Best-effort and isolated for the same reason as every other shadow
+  // write in this migration.
+  if (repos.rawTransactions && repos.committedLedger) {
+    const commitRepos: CommitEngineRepos = { rawTransactions: repos.rawTransactions, committedLedger: repos.committedLedger };
+    await renameRawTransactionsTicker(commitRepos, oldTicker, newTicker).catch((err) => {
+      console.error("Raw transaction ticker correction failed (shadow write, non-fatal):", err);
     });
   }
 

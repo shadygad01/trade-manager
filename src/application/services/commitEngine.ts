@@ -1,5 +1,11 @@
 import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
-import { createRawTransaction, type RawTransaction, type PortfolioAssignmentPayload } from "@domain/entities/RawTransaction";
+import {
+  createRawTransaction,
+  type RawTransaction,
+  type PortfolioAssignmentPayload,
+  type CorrectionPayload,
+  type RetractionPayload,
+} from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { verifyAll } from "./verificationEngine";
 import { generateLedgerEvents } from "./ledgerEngine";
@@ -17,10 +23,13 @@ import { generateAllocations } from "./allocationEngine";
  * whole ticker's commit until it's resolved.
  *
  * Scope note: this reads the CURRENT raw-transaction set as-is except for
- * PortfolioAssignment, which IS resolved (see resolveCurrentPortfolioId) —
- * folding the rest of the Correction/Retraction vocabulary into "the
- * current view of a fact" is a later increment, not yet wired in here.
- * Documented rather than silently assumed correct.
+ * PortfolioAssignment (see resolveCurrentPortfolioId), a Correction's
+ * `ticker` patch (see resolveCurrentTicker), and any Retraction (see
+ * isRetracted) — those three are resolved/folded before a transaction is
+ * ever considered relevant to a ticker's commit. Folding the REST of the
+ * Correction vocabulary (date/price/fees/etc.) into "the current view of a
+ * fact" is a later increment, not yet wired in here. Documented rather than
+ * silently assumed correct.
  */
 
 export interface CommitEngineRepos {
@@ -49,6 +58,34 @@ function resolveCurrentPortfolioId(all: RawTransaction[], transaction: RawTransa
   return (latest.payload as PortfolioAssignmentPayload).portfolioId;
 }
 
+/**
+ * Same fold rule as resolveCurrentPortfolioId, generalized to a second
+ * field: a transaction's own `ticker` is set once at write time and never
+ * changes (immutability) — a later correction (e.g. fixing an OCR-garbled
+ * ticker) is its own separate Correction raw transaction referencing the
+ * original by id, not an edit to it. `excludeCorrectionId` resolves what the
+ * ticker was immediately BEFORE one specific correction landed, so a caller
+ * reacting to that correction's arrival can tell which two tickers' caches
+ * need re-deriving (see appendAndMaybeCommit's Correction branch).
+ */
+function resolveCurrentTicker(all: RawTransaction[], transaction: RawTransaction, excludeCorrectionId?: string): string | undefined {
+  const corrections = all.filter(
+    (t) =>
+      t.kind === "Correction" &&
+      t.id !== excludeCorrectionId &&
+      (t.payload as CorrectionPayload).targetId === transaction.id &&
+      (t.payload as CorrectionPayload).patch.ticker !== undefined
+  );
+  if (corrections.length === 0) return transaction.ticker;
+  const latest = corrections.reduce((a, b) => (b.seq > a.seq ? b : a));
+  return (latest.payload as CorrectionPayload).patch.ticker;
+}
+
+/** Whether any Retraction targets `transactionId` — a retracted row is never a subject of commit or assignment again, permanently. */
+function isRetracted(all: RawTransaction[], transactionId: string): boolean {
+  return all.some((t) => t.kind === "Retraction" && (t.payload as RetractionPayload).targetId === transactionId);
+}
+
 async function relevantTradeTransactions(repos: CommitEngineRepos, portfolioId: string, ticker: string) {
   const normalizedTicker = normalizeTicker(ticker);
   // Can't use getByPortfolio here: a transaction's OWN portfolioId field may
@@ -58,7 +95,9 @@ async function relevantTradeTransactions(repos: CommitEngineRepos, portfolioId: 
   const all = await repos.rawTransactions.getAll();
   return all.filter((t) => {
     if (NON_SUBJECT_KINDS.has(t.kind)) return false;
-    if (t.ticker === undefined || normalizeTicker(t.ticker) !== normalizedTicker) return false;
+    if (isRetracted(all, t.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(all, t);
+    if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== normalizedTicker) return false;
     return resolveCurrentPortfolioId(all, t) === portfolioId;
   });
 }
@@ -125,6 +164,42 @@ export async function appendAndMaybeCommit(repos: CommitEngineRepos, transaction
     if (target?.ticker !== undefined && (await shouldCommit(repos, portfolioId, target.ticker))) {
       await commitTicker(repos, portfolioId, target.ticker);
     }
+  } else if (appended.kind === "Correction") {
+    // A ticker correction moves its target between two tickers' relevant
+    // sets — unlike the shouldCommit-gated branches below, both the ticker
+    // it just left and the ticker it just joined must re-derive their cache
+    // immediately (never left stale), regardless of whether every other
+    // pending row on either ticker has reached a terminal verdict yet.
+    const { targetId, patch } = appended.payload as CorrectionPayload;
+    if (patch.ticker !== undefined) {
+      const target = await repos.rawTransactions.getById(targetId);
+      if (target) {
+        const all = await repos.rawTransactions.getAll();
+        const resolvedPortfolioId = resolveCurrentPortfolioId(all, target);
+        if (resolvedPortfolioId !== undefined) {
+          const priorTicker = resolveCurrentTicker(all, target, appended.id);
+          const currentTicker = resolveCurrentTicker(all, target);
+          const affectedTickers = new Set([priorTicker, currentTicker].filter((t): t is string => t !== undefined));
+          for (const affectedTicker of affectedTickers) {
+            await commitTicker(repos, resolvedPortfolioId, affectedTicker);
+          }
+        }
+      }
+    }
+  } else if (appended.kind === "Retraction") {
+    // Same reasoning as Correction above: a retraction must force its
+    // ticker's cache to drop the retracted row right away, even if the rest
+    // of the ticker's batch isn't otherwise terminal.
+    const { targetId } = appended.payload as RetractionPayload;
+    const target = await repos.rawTransactions.getById(targetId);
+    if (target?.ticker !== undefined) {
+      const all = await repos.rawTransactions.getAll();
+      const resolvedPortfolioId = resolveCurrentPortfolioId(all, target);
+      const resolvedTicker = resolveCurrentTicker(all, target);
+      if (resolvedPortfolioId !== undefined && resolvedTicker !== undefined) {
+        await commitTicker(repos, resolvedPortfolioId, resolvedTicker);
+      }
+    }
   } else if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
     if (await shouldCommit(repos, appended.portfolioId, appended.ticker)) {
       await commitTicker(repos, appended.portfolioId, appended.ticker);
@@ -144,16 +219,56 @@ export async function appendAndMaybeCommit(repos: CommitEngineRepos, transaction
 export async function assignPortfolio(repos: CommitEngineRepos, ticker: string, portfolioId: string): Promise<void> {
   const normalizedTicker = normalizeTicker(ticker);
   const all = await repos.rawTransactions.getAll();
-  const unassigned = all.filter(
-    (t) =>
-      !NON_SUBJECT_KINDS.has(t.kind) &&
-      t.ticker !== undefined &&
-      normalizeTicker(t.ticker) === normalizedTicker &&
-      resolveCurrentPortfolioId(all, t) === undefined
-  );
+  const unassigned = all.filter((t) => {
+    if (NON_SUBJECT_KINDS.has(t.kind)) return false;
+    if (isRetracted(all, t.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(all, t);
+    if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== normalizedTicker) return false;
+    return resolveCurrentPortfolioId(all, t) === undefined;
+  });
 
   for (const target of unassigned) {
     const payload: PortfolioAssignmentPayload = { targetId: target.id, portfolioId };
     await appendAndMaybeCommit(repos, createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }));
   }
+}
+
+/**
+ * Retracts one raw transaction — used when the pre-migration UI deletes or
+ * voids a fact directly (e.g. TradeService.deleteTrade), so the new
+ * architecture's next commit for that ticker can't resurrect something the
+ * user just removed. `targetId` must be the RawTransaction's own id, not a
+ * derived LedgerEvent id.
+ */
+export async function retractRawTransaction(repos: CommitEngineRepos, targetId: string, reason?: string): Promise<void> {
+  const payload: RetractionPayload = { targetId, reason };
+  await appendAndMaybeCommit(repos, createRawTransaction({ kind: "Retraction", source: "manual", payload }));
+}
+
+/**
+ * Corrects every still-live raw transaction currently resolving to
+ * `oldTicker` (Buy/Sell executions, evidence, verifications, dividends —
+ * anything ticker-bearing) over to `newTicker` — the raw-transaction twin of
+ * TradeService.renameTickerEverywhere, so a ticker rename in the
+ * pre-migration UI doesn't leave this architecture's copy permanently
+ * orphaned under the old, now-corrected-away ticker.
+ */
+export async function renameRawTransactionsTicker(repos: CommitEngineRepos, oldTicker: string, newTicker: string): Promise<number> {
+  const normalizedOld = normalizeTicker(oldTicker);
+  const normalizedNew = normalizeTicker(newTicker);
+  if (!normalizedNew || normalizedNew === normalizedOld) return 0;
+
+  const all = await repos.rawTransactions.getAll();
+  const targets = all.filter((t) => {
+    if (t.ticker === undefined) return false;
+    if (isRetracted(all, t.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(all, t);
+    return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalizedOld;
+  });
+
+  for (const target of targets) {
+    const payload: CorrectionPayload = { targetId: target.id, patch: { ticker: normalizedNew } };
+    await appendAndMaybeCommit(repos, createRawTransaction({ kind: "Correction", source: "manual", payload }));
+  }
+  return targets.length;
 }

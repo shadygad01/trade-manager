@@ -689,6 +689,21 @@ export function ImportPage() {
   async function commitTickerGroup(ticker: string) {
     const portfolioId = resolvedPortfolioId(ticker);
     if (!portfolioId) return;
+
+    // Migration dual-write: setTickerPortfolio's own assignPortfolio call
+    // only fires when the user explicitly picks from the dropdown —
+    // resolvedPortfolioId can also resolve implicitly (a ticker already
+    // uniquely tied to one portfolio, or a single-portfolio app), in which
+    // case that call never happens and this ticker's RawTransactions would
+    // stay unassigned forever, never reaching the new architecture's commit
+    // trigger. Calling it here too, on every commit regardless of how the
+    // portfolio resolved, closes that gap; it's a harmless no-op once
+    // setTickerPortfolio already assigned everything. Isolated and
+    // non-fatal for the same reason as every other shadow write here.
+    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
+      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
+    });
+
     const state = importSession.getState();
 
     const buys = state.pendingCandidates.filter(

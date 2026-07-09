@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { shouldCommit, commitTicker, appendAndMaybeCommit, assignPortfolio, type CommitEngineRepos } from "./commitEngine";
+import {
+  shouldCommit,
+  commitTicker,
+  appendAndMaybeCommit,
+  assignPortfolio,
+  retractRawTransaction,
+  renameRawTransactionsTicker,
+  type CommitEngineRepos,
+} from "./commitEngine";
 import { createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
 import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
@@ -205,6 +213,105 @@ describe("commitEngine", () => {
       expect(assignments).toHaveLength(1);
       expect((assignments[0].payload as { targetId: string; portfolioId: string }).targetId).toBe(buy.id);
       expect((assignments[0].payload as { targetId: string; portfolioId: string }).portfolioId).toBe("portfolio-a");
+    });
+  });
+
+  describe("retractRawTransaction", () => {
+    it("a retracted transaction drops out of the ticker's relevant set — commitTicker clears the cache entry that resurrected it", async () => {
+      const buy = await appendBuy({ shares: 100 });
+      await appendSell({ shares: 100 });
+      await commitTicker(repos, PORTFOLIO, "COMI");
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toHaveLength(2);
+
+      await retractRawTransaction(repos, buy.id, "deleted in the pre-migration UI");
+
+      // The retraction's own append re-triggers a commit — the cache updates
+      // immediately, without a separate explicit commitTicker call.
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+    });
+
+    it("assignPortfolio never assigns a retracted transaction", async () => {
+      const buy = await rawTransactions.append(
+        createRawTransaction({
+          kind: "BuyExecution",
+          source: "csv",
+          ticker: "COMI",
+          payload: { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" },
+        }),
+      );
+      await retractRawTransaction(repos, buy.id);
+
+      await assignPortfolio(repos, "COMI", PORTFOLIO);
+
+      const assignments = (await rawTransactions.getAll()).filter((t) => t.kind === "PortfolioAssignment");
+      expect(assignments).toHaveLength(0);
+    });
+
+    it("retracting a transaction that was never committed is a harmless no-op", async () => {
+      const buy = await appendBuy({ shares: 100 });
+      await expect(retractRawTransaction(repos, buy.id)).resolves.toBeUndefined();
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+    });
+  });
+
+  describe("renameRawTransactionsTicker", () => {
+    it("moves a closed position's committed cache entries from the old ticker to the new one", async () => {
+      await appendBuy({ ticker: "COMI", shares: 100 });
+      await appendSell({ ticker: "COMI", shares: 100 });
+      await commitTicker(repos, PORTFOLIO, "COMI");
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toHaveLength(2);
+
+      const corrected = await renameRawTransactionsTicker(repos, "COMI", "HRHO");
+      expect(corrected).toBe(2); // the Buy and the Sell
+
+      // Old ticker's cache is cleared, not left stale...
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+      // ...and the new ticker's cache now has what the old one used to.
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "HRHO")).toHaveLength(2);
+    });
+
+    it("a raw transaction still unassigned to any portfolio is corrected too, and stays findable under the new ticker afterward", async () => {
+      await rawTransactions.append(
+        createRawTransaction({
+          kind: "BuyExecution",
+          source: "csv",
+          ticker: "COMI",
+          payload: { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" },
+        }),
+      );
+
+      await renameRawTransactionsTicker(repos, "COMI", "HRHO");
+      await assignPortfolio(repos, "HRHO", PORTFOLIO);
+
+      // Renamed correctly — assignPortfolio finds it under the NEW ticker
+      // (assignPortfolio("COMI", ...) would find nothing, proving the old
+      // ticker no longer resolves this row at all, not just alongside it).
+      const events = await committedLedger.getLedgerEvents(PORTFOLIO, "HRHO");
+      expect(events).toEqual([]); // alone, Needs Review — but reachable, which is what's under test
+      const assignments = (await rawTransactions.getAll()).filter((t) => t.kind === "PortfolioAssignment");
+      expect(assignments).toHaveLength(1);
+    });
+
+    it("renaming to the same ticker (or an empty/blank ticker) is a harmless no-op", async () => {
+      await appendBuy({ ticker: "COMI" });
+      expect(await renameRawTransactionsTicker(repos, "COMI", "COMI")).toBe(0);
+      expect(await renameRawTransactionsTicker(repos, "COMI", "")).toBe(0);
+      expect((await rawTransactions.getAll()).filter((t) => t.kind === "Correction")).toHaveLength(0);
+    });
+
+    it("a retracted transaction is never corrected", async () => {
+      const buy = await rawTransactions.append(
+        createRawTransaction({
+          kind: "BuyExecution",
+          source: "csv",
+          ticker: "COMI",
+          payload: { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" },
+        }),
+      );
+      await retractRawTransaction(repos, buy.id);
+
+      const corrected = await renameRawTransactionsTicker(repos, "COMI", "HRHO");
+      expect(corrected).toBe(0);
     });
   });
 });
