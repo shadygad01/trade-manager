@@ -140,31 +140,31 @@ export function findDuplicateBuyMatch(candidate: ParsedTradeCandidate, existingT
   );
 }
 
+export interface SellOrderGroup {
+  id: string;
+  price: number;
+  totalShares: number;
+  date: string;
+  executionTime?: string;
+  transactionNumber?: string;
+}
+
 /**
  * One real sell order allocated across several buy lots is stored as several
  * TradeAllocation rows (e.g. a 45-share sell closed against a 30-lot and a
- * 15-lot) that share one `sellGroupId`. Matching the candidate against
- * individual rows would never find a 45-share allocation — so the same sell
- * re-imported keeps looking "new" forever. Aggregate rows by their sell
- * order's identity (sellGroupId, guarded by ticker+date) and match the
- * candidate against each order's total shares; two distinct sell orders that
- * happen to share date and price are never merged into a false duplicate.
+ * 15-lot) that share one `sellGroupId`. Aggregates rows by their sell order's
+ * identity (sellGroupId, guarded by ticker+date for legacy rows recorded
+ * before sellGroupId existed) so a 45-share sell split across two lots is
+ * seen as one 45-share order, not two unrelated 30/15 fragments. Optionally
+ * scoped to one ticker (normalizeTicker'd) — omit to group every ticker's
+ * allocations at once (see ledgerRebuild.ts, which needs every existing sell
+ * order across the whole ledger, not just one candidate's ticker).
  */
-export function findDuplicateSellMatch(
-  candidate: ParsedTradeCandidate,
-  existingAllocations: TradeAllocation[]
-): DuplicateMatch | undefined {
-  const ticker = normalizeTicker(candidate.ticker);
-  // Grouped by ticker only (not date) — the transaction-number identity
-  // check below must be able to find a match even if one side's date was
-  // misread; the date requirement is applied afterward, only on the path
-  // that falls back to the date/shares heuristic.
-  const groups = new Map<
-    string,
-    { id: string; price: number; totalShares: number; date: string; executionTime?: string; transactionNumber?: string }
-  >();
+export function groupSellAllocationsByOrder(existingAllocations: TradeAllocation[], ticker?: string): Map<string, SellOrderGroup> {
+  const normalizedTicker = ticker !== undefined ? normalizeTicker(ticker) : undefined;
+  const groups = new Map<string, SellOrderGroup>();
   for (const a of existingAllocations) {
-    if (normalizeTicker(a.ticker) !== ticker) continue;
+    if (normalizedTicker !== undefined && normalizeTicker(a.ticker) !== normalizedTicker) continue;
     // sellGroupId identifies one real sell order regardless of how many lots
     // it was allocated across. Legacy rows recorded before sellGroupId existed
     // must be re-unified by date+exact price, or a 39-share sell split 24+15
@@ -185,6 +185,25 @@ export function findDuplicateSellMatch(
       });
     }
   }
+  return groups;
+}
+
+/**
+ * Matching the candidate against individual TradeAllocation rows would never
+ * find a 45-share sell split across two lots — so the same sell re-imported
+ * keeps looking "new" forever. Aggregates via groupSellAllocationsByOrder
+ * (grouped by ticker only, not date — the transaction-number identity check
+ * below must be able to find a match even if one side's date was misread;
+ * the date requirement is applied afterward, only on the path that falls
+ * back to the date/shares heuristic) and matches the candidate against each
+ * order's total shares; two distinct sell orders that happen to share date
+ * and price are never merged into a false duplicate.
+ */
+export function findDuplicateSellMatch(
+  candidate: ParsedTradeCandidate,
+  existingAllocations: TradeAllocation[]
+): DuplicateMatch | undefined {
+  const groups = groupSellAllocationsByOrder(existingAllocations, candidate.ticker);
 
   if (candidate.transactionNumber) {
     const byId = [...groups.values()].find((g) => sameExecution(g.transactionNumber, candidate.transactionNumber));

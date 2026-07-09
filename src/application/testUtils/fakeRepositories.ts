@@ -5,6 +5,7 @@ import type {
   TimelineRepository,
   JournalRepository,
   VerificationRepository,
+  UploadRepository,
 } from "@domain/repositories";
 import type { Portfolio } from "@domain/entities/Portfolio";
 import type { Trade } from "@domain/entities/Trade";
@@ -12,6 +13,7 @@ import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 import type { JournalEntry } from "@domain/entities/JournalEntry";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
+import type { Upload } from "@domain/entities/Upload";
 import type { AppRepositories } from "@application/services/types";
 
 export function createFakePortfolioRepository(seed: Portfolio[] = []): PortfolioRepository {
@@ -140,6 +142,27 @@ export function createFakeVerificationRepository(seed: PositionVerification[] = 
   };
 }
 
+export function createFakeUploadRepository(seed: Upload[] = []): UploadRepository {
+  const store = new Map(seed.map((u) => [u.id, u]));
+  return {
+    async getAll() {
+      return [...store.values()];
+    },
+    async getByPortfolio(portfolioId) {
+      return [...store.values()].filter((u) => u.portfolioId === portfolioId);
+    },
+    async getByHash(fileHash) {
+      return [...store.values()].find((u) => u.fileHash === fileHash);
+    },
+    async save(upload) {
+      store.set(upload.id, upload);
+    },
+    async delete(id) {
+      store.delete(id);
+    },
+  };
+}
+
 export function createFakeRepositories(seed?: {
   portfolios?: Portfolio[];
   trades?: Trade[];
@@ -147,6 +170,7 @@ export function createFakeRepositories(seed?: {
   timeline?: TimelineEvent[];
   journal?: JournalEntry[];
   verifications?: PositionVerification[];
+  uploads?: Upload[];
 }): AppRepositories {
   return {
     portfolios: createFakePortfolioRepository(seed?.portfolios),
@@ -155,5 +179,6 @@ export function createFakeRepositories(seed?: {
     timeline: createFakeTimelineRepository(seed?.timeline),
     journal: createFakeJournalRepository(seed?.journal),
     verifications: createFakeVerificationRepository(seed?.verifications),
+    uploads: createFakeUploadRepository(seed?.uploads),
   };
 }

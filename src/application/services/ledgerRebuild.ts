@@ -1,0 +1,437 @@
+import type { Upload, ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { Trade } from "@domain/entities/Trade";
+import type { TradeAllocation } from "@domain/entities/TradeAllocation";
+import type { PositionVerification } from "@domain/entities/PositionVerification";
+import { normalizeTicker } from "@domain/value-objects/Ticker";
+import {
+  findAggregateStatementMatches,
+  completeCandidateFieldsFromSiblings,
+  suggestDuplicatePendingCandidateKeysToDelete,
+  pendingCandidateSignature,
+  findDuplicateBuyMatch,
+  findDuplicateSellMatch,
+  groupSellAllocationsByOrder,
+  pricesWithinOcrNoise,
+  type SellOrderGroup,
+} from "./duplicateDetection";
+import { latestByTicker } from "./reconciliation";
+import { buildInventoryFacts, evaluateInventoryConstraint, type InventoryContradiction } from "./constraintValidation";
+import { recordBuy, deleteTrade } from "./TradeService";
+import type { AppRepositories } from "./types";
+
+/**
+ * Ledger Rebuild Engine.
+ *
+ * Reconstructs what the ledger's Trades and sell orders SHOULD be, computed
+ * exclusively from verified source documents (every parsed Upload —
+ * Statements, Invoices, Orders-screen reads, CSV exports — plus Holdings
+ * verification screenshots). The current Trade/TradeAllocation ledger is
+ * NEVER read as an input to this reconstruction — only compared against
+ * afterward, as the "before" side of a diff. This is the inverse of
+ * checkTickerMatch's role (which reconciles one Import batch against the
+ * ledger as it stands); this instead re-derives the ledger's own contents
+ * from scratch and reports where the two disagree.
+ *
+ * Reuses the existing reconciliation toolbox rather than re-implementing it:
+ * findAggregateStatementMatches (Statement-aggregates-never-splits),
+ * completeCandidateFieldsFromSiblings + suggestDuplicatePendingCandidateKeysToDelete
+ * (collapsing repeated reads of the same real execution across documents),
+ * findDuplicateBuyMatch/findDuplicateSellMatch (matching a canonical fact
+ * against the existing ledger), and constraintValidation's Facts/Contradiction
+ * split (holdings reconciliation).
+ *
+ * Allocation-level rebuilding (WHICH buy lot a sell closed) is out of scope
+ * by design: a source document records that N shares of TICKER were sold on
+ * a date at a price, never which specific lot(s) absorbed it — that's a
+ * human decision this app already always asks for (ADR-002, SellAllocationForm),
+ * never inferred by FIFO/average-cost. So sells are reconstructed and diffed
+ * only as aggregate per-order facts; applyLedgerRebuild never creates or
+ * deletes a TradeAllocation.
+ */
+
+export interface CanonicalTrade {
+  key: string;
+  side: "BUY" | "SELL";
+  ticker: string;
+  companyName?: string;
+  shares: number;
+  price: number;
+  fees?: number;
+  taxes?: number;
+  executionDate: string;
+  executionTime?: string;
+  transactionNumber?: string;
+  /** Every Upload whose candidate corroborates this same real execution (after dedup/aggregation) — not just the one survivor row's own file. */
+  sourceUploadIds: string[];
+}
+
+function canonicalKey(c: { side: "BUY" | "SELL"; ticker: string; date: string; shares: number; price: number }): string {
+  return `${normalizeTicker(c.ticker)}|${c.side}|${c.date}|${c.shares}|${c.price}`;
+}
+
+/**
+ * Collapses every parsed candidate across every Upload into the set of
+ * canonical facts that should exist: one entry per real execution, whether
+ * it was read once or corroborated by several documents. See the module
+ * doc comment for which existing functions this reuses and why.
+ */
+export function buildCanonicalTrades(uploads: Upload[]): { buys: CanonicalTrade[]; sells: CanonicalTrade[] } {
+  const allEntries: { key: string; candidate: ParsedTradeCandidate; uploadId: string }[] = [];
+  for (const upload of uploads) {
+    if (upload.status !== "parsed") continue;
+    upload.candidates.forEach((candidate, i) => {
+      allEntries.push({ key: `${upload.id}#${i}`, candidate, uploadId: upload.id });
+    });
+  }
+  if (allEntries.length === 0) return { buys: [], sells: [] };
+
+  // Statement rows that aggregate several other-source executions are
+  // confirmations, not separate real trades — exclude them from
+  // canonicalization entirely; their shares are already covered by the
+  // execution group they summarize.
+  const aggregateMatches = findAggregateStatementMatches(allEntries);
+  const aggregatedStatementKeys = new Set(aggregateMatches.keys());
+  const aggregatingUploadIdByExecutionKey = new Map<string, string[]>();
+  for (const [statementKey, executionKeys] of aggregateMatches) {
+    const statementEntry = allEntries.find((e) => e.key === statementKey);
+    if (!statementEntry) continue;
+    for (const execKey of executionKeys) {
+      const list = aggregatingUploadIdByExecutionKey.get(execKey) ?? [];
+      list.push(statementEntry.uploadId);
+      aggregatingUploadIdByExecutionKey.set(execKey, list);
+    }
+  }
+
+  const remainingEntries = allEntries.filter((e) => !aggregatedStatementKeys.has(e.key));
+
+  const patches = completeCandidateFieldsFromSiblings(remainingEntries);
+  const enrichedEntries = remainingEntries.map((e) => {
+    const patch = patches.get(e.key);
+    return patch ? { ...e, candidate: { ...e.candidate, ...patch } } : e;
+  });
+
+  const deleteKeys = new Set(suggestDuplicatePendingCandidateKeysToDelete(enrichedEntries));
+
+  // Every upload that corroborates the same real execution (its signature
+  // siblings), regardless of which one survived as the canonical row.
+  const uploadIdsBySignature = new Map<string, Set<string>>();
+  for (const e of enrichedEntries) {
+    const sig = pendingCandidateSignature(e.candidate);
+    const set = uploadIdsBySignature.get(sig) ?? new Set<string>();
+    set.add(e.uploadId);
+    uploadIdsBySignature.set(sig, set);
+  }
+
+  const buys: CanonicalTrade[] = [];
+  const sells: CanonicalTrade[] = [];
+  for (const e of enrichedEntries) {
+    if (deleteKeys.has(e.key)) continue;
+    const sig = pendingCandidateSignature(e.candidate);
+    const sourceUploadIds = new Set(uploadIdsBySignature.get(sig) ?? [e.uploadId]);
+    for (const uploadId of aggregatingUploadIdByExecutionKey.get(e.key) ?? []) sourceUploadIds.add(uploadId);
+    const canonical: CanonicalTrade = {
+      key: canonicalKey({ side: e.candidate.side, ticker: e.candidate.ticker, date: e.candidate.date, shares: e.candidate.shares, price: e.candidate.price }),
+      side: e.candidate.side,
+      ticker: normalizeTicker(e.candidate.ticker),
+      companyName: e.candidate.companyName,
+      shares: e.candidate.shares,
+      price: e.candidate.price,
+      fees: e.candidate.fees,
+      taxes: e.candidate.taxes,
+      executionDate: e.candidate.date,
+      executionTime: e.candidate.time,
+      transactionNumber: e.candidate.transactionNumber,
+      sourceUploadIds: [...sourceUploadIds],
+    };
+    (canonical.side === "BUY" ? buys : sells).push(canonical);
+  }
+  return { buys, sells };
+}
+
+export interface TradeFieldChange {
+  field: "price" | "fees" | "taxes" | "executionTime" | "companyName" | "transactionNumber";
+  existing: string | number | undefined;
+  canonical: string | number | undefined;
+}
+
+function diffTradeFields(trade: Trade, canonical: CanonicalTrade): TradeFieldChange[] {
+  const changes: TradeFieldChange[] = [];
+  if (Math.round(trade.entryPrice * 10_000) !== Math.round(canonical.price * 10_000))
+    changes.push({ field: "price", existing: trade.entryPrice, canonical: canonical.price });
+  if ((canonical.fees ?? 0) !== trade.fees) changes.push({ field: "fees", existing: trade.fees, canonical: canonical.fees ?? 0 });
+  if ((canonical.taxes ?? 0) !== trade.taxes) changes.push({ field: "taxes", existing: trade.taxes, canonical: canonical.taxes ?? 0 });
+  if (canonical.executionTime !== undefined && canonical.executionTime !== trade.executionTime)
+    changes.push({ field: "executionTime", existing: trade.executionTime, canonical: canonical.executionTime });
+  if (canonical.companyName !== undefined && canonical.companyName !== trade.companyName)
+    changes.push({ field: "companyName", existing: trade.companyName, canonical: canonical.companyName });
+  if (canonical.transactionNumber !== undefined && canonical.transactionNumber !== trade.transactionNumber)
+    changes.push({ field: "transactionNumber", existing: trade.transactionNumber, canonical: canonical.transactionNumber });
+  return changes;
+}
+
+/** companyName/transactionNumber carry no cash implication — safe to correct in place. price/fees/taxes affect cost basis (and therefore cash already debited) and executionTime has a matching timeline event to keep in sync — never auto-applied; surfaced for a manual delete+re-add instead. */
+const CASH_SAFE_FIELDS = new Set<TradeFieldChange["field"]>(["companyName", "transactionNumber"]);
+
+export interface TradeToAdd {
+  canonical: CanonicalTrade;
+}
+export interface TradeToRemove {
+  trade: Trade;
+  /** Mirrors deleteTrade's own guard — a trade with shares already sold against it can't be auto-removed without corrupting that history. */
+  blockedByAllocations: boolean;
+}
+export interface TradeToModify {
+  trade: Trade;
+  canonical: CanonicalTrade;
+  changes: TradeFieldChange[];
+  /** True only when every changed field is cash-safe (see CASH_SAFE_FIELDS) — the only case applyLedgerRebuild will act on. */
+  autoApplicable: boolean;
+}
+
+export interface SellToAdd {
+  canonical: CanonicalTrade;
+}
+export interface SellExtraneous {
+  group: SellOrderGroup;
+  ticker: string;
+}
+export interface SellModified {
+  group: SellOrderGroup;
+  ticker: string;
+  canonical: CanonicalTrade;
+}
+
+export interface HoldingsMismatch {
+  ticker: string;
+  calculatedRemaining: number;
+  verifiedUnits?: number;
+  verificationCapturedAt?: string;
+  contradiction: InventoryContradiction | undefined;
+}
+
+export interface LedgerRebuildReport {
+  generatedAt: string;
+  tradesToAdd: TradeToAdd[];
+  tradesToRemove: TradeToRemove[];
+  tradesToModify: TradeToModify[];
+  sellsToAdd: SellToAdd[];
+  sellsExtraneous: SellExtraneous[];
+  sellsModified: SellModified[];
+  holdingsMismatches: HoldingsMismatch[];
+}
+
+/** Buy-side diff: matches every canonical Buy against the existing ledger (searched across every portfolio, exactly like duplicateDetection's existing cross-portfolio checks), one-to-one — an existing trade already claimed by one canonical match is never matched again. */
+function diffBuys(canonicalBuys: CanonicalTrade[], existingTrades: Trade[]): { toAdd: TradeToAdd[]; toModify: TradeToModify[]; matchedTradeIds: Set<string> } {
+  const toAdd: TradeToAdd[] = [];
+  const toModify: TradeToModify[] = [];
+  const matchedTradeIds = new Set<string>();
+
+  // Transaction-number-bearing canonical trades resolve unambiguously —
+  // process them first so a shared ticker/date/share-count coincidence never
+  // steals a match away from the row with decisive proof.
+  const ordered = [...canonicalBuys].sort((a, b) => Number(b.transactionNumber !== undefined) - Number(a.transactionNumber !== undefined));
+
+  for (const canonical of ordered) {
+    const candidatePool = existingTrades.filter((t) => !matchedTradeIds.has(t.id));
+    const match = findDuplicateBuyMatch(
+      { ticker: canonical.ticker, side: "BUY", shares: canonical.shares, price: canonical.price, date: canonical.executionDate, time: canonical.executionTime, transactionNumber: canonical.transactionNumber } as ParsedTradeCandidate,
+      candidatePool,
+    );
+    if (!match) {
+      toAdd.push({ canonical });
+      continue;
+    }
+    matchedTradeIds.add(match.matchedId);
+    const trade = candidatePool.find((t) => t.id === match.matchedId)!;
+    const changes = diffTradeFields(trade, canonical);
+    if (changes.length > 0) {
+      toModify.push({ trade, canonical, changes, autoApplicable: changes.every((c) => CASH_SAFE_FIELDS.has(c.field)) });
+    }
+  }
+  return { toAdd, toModify, matchedTradeIds };
+}
+
+function diffSells(
+  canonicalSells: CanonicalTrade[],
+  existingAllocations: TradeAllocation[],
+): { toAdd: SellToAdd[]; modified: SellModified[]; extraneous: SellExtraneous[] } {
+  const toAdd: SellToAdd[] = [];
+  const modified: SellModified[] = [];
+  const matchedGroupIds = new Set<string>();
+
+  const ordered = [...canonicalSells].sort((a, b) => Number(b.transactionNumber !== undefined) - Number(a.transactionNumber !== undefined));
+  for (const canonical of ordered) {
+    const match = findDuplicateSellMatch(
+      { ticker: canonical.ticker, side: "SELL", shares: canonical.shares, price: canonical.price, date: canonical.executionDate, time: canonical.executionTime, transactionNumber: canonical.transactionNumber } as ParsedTradeCandidate,
+      existingAllocations.filter((a) => normalizeTicker(a.ticker) === canonical.ticker),
+    );
+    if (!match) {
+      toAdd.push({ canonical });
+      continue;
+    }
+    matchedGroupIds.add(match.matchedId);
+    if (!pricesWithinOcrNoise(match.matchedPrice, canonical.price)) {
+      const group = [...groupSellAllocationsByOrder(existingAllocations, canonical.ticker).values()].find((g) => g.id === match.matchedId);
+      if (group) modified.push({ group, ticker: canonical.ticker, canonical });
+    }
+  }
+
+  const extraneous: SellExtraneous[] = [];
+  const tickers = new Set(existingAllocations.map((a) => normalizeTicker(a.ticker)));
+  for (const ticker of tickers) {
+    for (const [, group] of groupSellAllocationsByOrder(existingAllocations, ticker)) {
+      if (!matchedGroupIds.has(group.id)) extraneous.push({ group, ticker });
+    }
+  }
+  return { toAdd, modified, extraneous };
+}
+
+function diffHoldings(canonicalBuys: CanonicalTrade[], canonicalSells: CanonicalTrade[], verifications: PositionVerification[]): HoldingsMismatch[] {
+  const buySharesByTicker = new Map<string, number>();
+  const sellSharesByTicker = new Map<string, number>();
+  for (const b of canonicalBuys) buySharesByTicker.set(b.ticker, (buySharesByTicker.get(b.ticker) ?? 0) + b.shares);
+  for (const s of canonicalSells) sellSharesByTicker.set(s.ticker, (sellSharesByTicker.get(s.ticker) ?? 0) + s.shares);
+  const latestVerification = latestByTicker(verifications);
+
+  const tickers = new Set([...buySharesByTicker.keys(), ...sellSharesByTicker.keys(), ...latestVerification.keys()]);
+  const results: HoldingsMismatch[] = [];
+  for (const ticker of tickers) {
+    const buyShares = buySharesByTicker.get(ticker) ?? 0;
+    const sellShares = sellSharesByTicker.get(ticker) ?? 0;
+    const verification = latestVerification.get(ticker);
+    const facts = buildInventoryFacts(ticker, {
+      existingRemainingShares: 0,
+      pendingBuyShares: buyShares,
+      pendingSellShares: sellShares,
+      netShares: buyShares - sellShares,
+      verifiedUnits: verification?.units,
+    });
+    const contradictions = evaluateInventoryConstraint(facts);
+    if (contradictions.length === 0) continue; // satisfied — closed position, exact holdings match, or no verification to compare against
+    results.push({
+      ticker,
+      calculatedRemaining: facts.calculatedRemaining,
+      verifiedUnits: facts.holdingsRemaining,
+      verificationCapturedAt: verification?.capturedAt,
+      contradiction: contradictions[0],
+    });
+  }
+  return results.sort((a, b) => a.ticker.localeCompare(b.ticker));
+}
+
+/**
+ * Dry run: reads every Upload, the full ledger, and every Holdings
+ * verification, and returns the full diff. Never writes anything.
+ */
+export async function dryRunLedgerRebuild(repos: AppRepositories): Promise<LedgerRebuildReport> {
+  const [uploads, existingTrades, existingAllocations, existingVerifications] = await Promise.all([
+    repos.uploads.getAll(),
+    repos.trades.getAll(),
+    repos.allocations.getAll(),
+    repos.verifications.getAll(),
+  ]);
+
+  const { buys: canonicalBuys, sells: canonicalSells } = buildCanonicalTrades(uploads);
+  const { toAdd: tradesToAdd, toModify: tradesToModify, matchedTradeIds } = diffBuys(canonicalBuys, existingTrades);
+  const { toAdd: sellsToAdd, modified: sellsModified, extraneous: sellsExtraneous } = diffSells(canonicalSells, existingAllocations);
+
+  const tradesToRemove: TradeToRemove[] = existingTrades
+    .filter((t) => !matchedTradeIds.has(t.id))
+    .map((trade) => ({ trade, blockedByAllocations: trade.remainingShares !== trade.shares }));
+
+  const holdingsMismatches = diffHoldings(canonicalBuys, canonicalSells, existingVerifications);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    tradesToAdd,
+    tradesToRemove,
+    tradesToModify,
+    sellsToAdd,
+    sellsExtraneous,
+    sellsModified,
+    holdingsMismatches,
+  };
+}
+
+export interface ApplyLedgerRebuildDecisions {
+  /** CanonicalTrade.key -> portfolio to create it in. A trade left out here is skipped — portfolio placement is never guessed. */
+  addToPortfolioByKey: Record<string, string>;
+  /** Trade.id values from tradesToRemove the caller has confirmed removing. Refused (via deleteTrade's own guard) if shares were sold against it. */
+  removeTradeIds: string[];
+  /** Trade.id values from tradesToModify the caller has confirmed correcting. Only ever applies a change whose fields are ALL cash-safe (see CASH_SAFE_FIELDS) — anything else is silently skipped even if listed here. */
+  modifyTradeIds: string[];
+}
+
+export interface ApplyLedgerRebuildResult {
+  added: number;
+  removed: number;
+  modified: number;
+  skipped: { tradeId: string; reason: string }[];
+}
+
+/**
+ * Applies only the subset of a dry run's diff that's safe to automate:
+ * creating a missing Buy (once the caller supplies a portfolio — never
+ * inferred), deleting an extraneous Buy with nothing sold against it (via
+ * the existing, cash-safe deleteTrade), and correcting cash-neutral metadata
+ * (companyName/transactionNumber) on a matched Buy. Never creates, deletes,
+ * or edits a TradeAllocation, and never corrects a cash-affecting field
+ * (price/fees/taxes) in place — both require a human decision this app
+ * already always asks for elsewhere (ADR-002; the sell allocation UI; a
+ * manual delete + re-add for a cash-affecting correction).
+ */
+export async function applyLedgerRebuild(
+  repos: AppRepositories,
+  report: LedgerRebuildReport,
+  decisions: ApplyLedgerRebuildDecisions,
+): Promise<ApplyLedgerRebuildResult> {
+  const skipped: { tradeId: string; reason: string }[] = [];
+  let added = 0;
+  let removed = 0;
+  let modified = 0;
+
+  for (const { canonical } of report.tradesToAdd) {
+    const portfolioId = decisions.addToPortfolioByKey[canonical.key];
+    if (!portfolioId) continue;
+    await recordBuy(repos, {
+      portfolioId,
+      ticker: canonical.ticker,
+      companyName: canonical.companyName,
+      shares: canonical.shares,
+      entryPrice: canonical.price,
+      fees: canonical.fees,
+      taxes: canonical.taxes,
+      executionDate: canonical.executionDate,
+      executionTime: canonical.executionTime ?? "00:00",
+      transactionNumber: canonical.transactionNumber,
+    });
+    added++;
+  }
+
+  for (const tradeId of decisions.removeTradeIds) {
+    const entry = report.tradesToRemove.find((r) => r.trade.id === tradeId);
+    if (!entry || entry.blockedByAllocations) {
+      skipped.push({ tradeId, reason: "Has shares sold against it — can't be auto-removed." });
+      continue;
+    }
+    await deleteTrade(repos, tradeId);
+    removed++;
+  }
+
+  for (const tradeId of decisions.modifyTradeIds) {
+    const entry = report.tradesToModify.find((m) => m.trade.id === tradeId);
+    if (!entry || !entry.autoApplicable) {
+      skipped.push({ tradeId, reason: "Change touches price/fees/taxes/time — requires a manual delete + re-add, never auto-applied." });
+      continue;
+    }
+    const updated: Trade = { ...entry.trade };
+    for (const change of entry.changes) {
+      if (change.field === "companyName") updated.companyName = entry.canonical.companyName;
+      if (change.field === "transactionNumber") updated.transactionNumber = entry.canonical.transactionNumber;
+    }
+    await repos.trades.save(updated);
+    modified++;
+  }
+
+  return { added, removed, modified, skipped };
+}

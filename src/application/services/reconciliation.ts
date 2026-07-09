@@ -21,7 +21,8 @@ export interface PositionReconciliation {
   verificationStale: boolean;
 }
 
-function latestByTicker(verifications: PositionVerification[]): Map<string, PositionVerification> {
+/** The most recent PositionVerification per ticker — the same "which broker screenshot is ground truth" reduction reused by ledgerRebuild.ts's holdings diff. */
+export function latestByTicker(verifications: PositionVerification[]): Map<string, PositionVerification> {
   const latest = new Map<string, PositionVerification>();
   for (const v of verifications) {
     const ticker = normalizeTicker(v.ticker);
