@@ -6,6 +6,8 @@ import type {
   JournalRepository,
   VerificationRepository,
   UploadRepository,
+  RawTransactionRepository,
+  CommittedLedgerRepository,
 } from "@domain/repositories";
 import type { Portfolio } from "@domain/entities/Portfolio";
 import type { Trade } from "@domain/entities/Trade";
@@ -14,6 +16,9 @@ import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 import type { JournalEntry } from "@domain/entities/JournalEntry";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import type { Upload } from "@domain/entities/Upload";
+import type { RawTransaction } from "@domain/entities/RawTransaction";
+import type { LedgerEvent } from "@domain/entities/LedgerEvent";
+import type { Allocation } from "@domain/entities/Allocation";
 import type { AppRepositories } from "@application/services/types";
 
 export function createFakePortfolioRepository(seed: Portfolio[] = []): PortfolioRepository {
@@ -159,6 +164,51 @@ export function createFakeUploadRepository(seed: Upload[] = []): UploadRepositor
     },
     async delete(id) {
       store.delete(id);
+    },
+  };
+}
+
+/** seq assignment mirrors DexieRawTransactionRepository.append: monotonic, atomic within this in-memory store. */
+export function createFakeRawTransactionRepository(seed: RawTransaction[] = []): RawTransactionRepository {
+  const store = new Map(seed.map((t) => [t.id, t]));
+  let nextSeq = seed.reduce((max, t) => Math.max(max, t.seq), 0);
+  return {
+    async getAll() {
+      return [...store.values()];
+    },
+    async getByPortfolio(portfolioId) {
+      return [...store.values()].filter((t) => t.portfolioId === portfolioId);
+    },
+    async getByTicker(ticker) {
+      return [...store.values()].filter((t) => t.ticker === ticker);
+    },
+    async getById(id) {
+      return store.get(id);
+    },
+    async append(transaction) {
+      nextSeq += 1;
+      const record = { ...transaction, seq: nextSeq };
+      store.set(record.id, record);
+      return record;
+    },
+  };
+}
+
+/** Mirrors DexieCommittedLedgerRepository: commitTicker is the only write path, full delete-and-replace per (portfolioId, ticker). */
+export function createFakeCommittedLedgerRepository(): CommittedLedgerRepository {
+  const events = new Map<string, LedgerEvent[]>();
+  const allocations = new Map<string, Allocation[]>();
+  const key = (portfolioId: string, ticker: string) => `${portfolioId}|${ticker}`;
+  return {
+    async getLedgerEvents(portfolioId, ticker) {
+      return events.get(key(portfolioId, ticker)) ?? [];
+    },
+    async getAllocations(portfolioId, ticker) {
+      return allocations.get(key(portfolioId, ticker)) ?? [];
+    },
+    async commitTicker(params) {
+      events.set(key(params.portfolioId, params.ticker), params.events);
+      allocations.set(key(params.portfolioId, params.ticker), params.allocations);
     },
   };
 }

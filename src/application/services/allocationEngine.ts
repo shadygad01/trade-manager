@@ -1,5 +1,8 @@
 import type { RawTransaction, SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
+import type { Allocation } from "@domain/entities/Allocation";
 import type { LedgerEvent, SellRecordedEvent } from "./ledgerEngine";
+
+export type { Allocation } from "@domain/entities/Allocation";
 
 /**
  * Allocation Engine: replays explicit SellAllocationDecision facts against
@@ -9,21 +12,8 @@ import type { LedgerEvent, SellRecordedEvent } from "./ledgerEngine";
  * every allocation here traces back to a raw, explicit user decision. Reads
  * only Ledger events + decision facts; never touches a raw BuyExecution/
  * SellExecution directly, never touches Holdings, price data, or anything
- * downstream of itself.
+ * downstream of itself. See @domain/entities/Allocation for the output shape.
  */
-
-export interface Allocation {
-  id: string;
-  sellEventId: string;
-  lotEventId: string;
-  shares: number;
-  price: number;
-  fees: number;
-  taxes: number;
-  executionDate: string;
-  executionTime?: string;
-  transactionNumber?: string;
-}
 
 function allocationId(sellEventId: string, lotEventId: string): string {
   return `${sellEventId}|${lotEventId}`;

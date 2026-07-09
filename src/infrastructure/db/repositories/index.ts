@@ -7,6 +7,7 @@ import { DexieJournalRepository } from "./DexieJournalRepository";
 import { DexieVerificationRepository } from "./DexieVerificationRepository";
 import { DexieUploadRepository } from "./DexieUploadRepository";
 import { DexieRawTransactionRepository } from "./DexieRawTransactionRepository";
+import { DexieCommittedLedgerRepository } from "./DexieCommittedLedgerRepository";
 
 export { DexiePortfolioRepository } from "./DexiePortfolioRepository";
 export { DexieTradeRepository } from "./DexieTradeRepository";
@@ -16,6 +17,7 @@ export { DexieJournalRepository } from "./DexieJournalRepository";
 export { DexieVerificationRepository } from "./DexieVerificationRepository";
 export { DexieUploadRepository } from "./DexieUploadRepository";
 export { DexieRawTransactionRepository } from "./DexieRawTransactionRepository";
+export { DexieCommittedLedgerRepository } from "./DexieCommittedLedgerRepository";
 
 export interface Repositories {
   portfolios: DexiePortfolioRepository;
@@ -26,6 +28,7 @@ export interface Repositories {
   verifications: DexieVerificationRepository;
   uploads: DexieUploadRepository;
   rawTransactions: DexieRawTransactionRepository;
+  committedLedger: DexieCommittedLedgerRepository;
 }
 
 export function createRepositories(database: PortfolioOsDatabase = sharedDb): Repositories {
@@ -38,5 +41,6 @@ export function createRepositories(database: PortfolioOsDatabase = sharedDb): Re
     verifications: new DexieVerificationRepository(database),
     uploads: new DexieUploadRepository(database),
     rawTransactions: new DexieRawTransactionRepository(database),
+    committedLedger: new DexieCommittedLedgerRepository(database),
   };
 }

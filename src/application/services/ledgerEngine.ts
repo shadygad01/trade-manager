@@ -1,6 +1,9 @@
 import type { RawTransaction, BuyExecutionPayload, SellExecutionPayload } from "@domain/entities/RawTransaction";
 import type { ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { LedgerEvent, LotOpenedEvent } from "@domain/entities/LedgerEvent";
 import { canonicalizeTradeEntries, type CanonicalTrade } from "./ledgerRebuild";
+
+export type { LedgerEvent, LotOpenedEvent, SellRecordedEvent } from "@domain/entities/LedgerEvent";
 
 /**
  * Ledger Engine: the Buy/Sell economic record ("the ledger," exactly the
@@ -9,34 +12,9 @@ import { canonicalizeTradeEntries, type CanonicalTrade } from "./ledgerRebuild";
  * never edited, never patched, never a target of a write. Reuses
  * canonicalizeTradeEntries (ledgerRebuild.ts's dedup/aggregation core)
  * verbatim; this module only adapts RawTransaction into that function's
- * input shape and maps its output into typed events.
+ * input shape and maps its output into typed events (see
+ * @domain/entities/LedgerEvent for the event shapes themselves).
  */
-
-interface LedgerEventBase {
-  /** Deterministic identity for "one real execution" — ledgerRebuild.ts's canonicalKey, so regenerating from an unchanged input set always reproduces the same id. */
-  eventId: string;
-  executionDate: string;
-  executionTime?: string;
-  ticker: string;
-  shares: number;
-  price: number;
-  fees?: number;
-  taxes?: number;
-  transactionNumber?: string;
-  /** Every RawTransaction that corroborates this same real execution, not just whichever row survived as the canonical read. */
-  sourceTransactionIds: string[];
-}
-
-export interface LotOpenedEvent extends LedgerEventBase {
-  type: "LotOpened";
-  companyName?: string;
-}
-
-export interface SellRecordedEvent extends LedgerEventBase {
-  type: "SellRecorded";
-}
-
-export type LedgerEvent = LotOpenedEvent | SellRecordedEvent;
 
 function toCandidateSource(source: RawTransaction["source"]): ParsedTradeCandidate["source"] {
   if (source === "statement" || source === "invoice" || source === "orders-screen" || source === "csv") return source;
@@ -74,7 +52,7 @@ function toCanonicalizationEntries(transactions: RawTransaction[]): { key: strin
 }
 
 function toEvent(c: CanonicalTrade): LedgerEvent {
-  const base: LedgerEventBase = {
+  const base: Omit<LotOpenedEvent, "type" | "companyName"> = {
     eventId: c.key,
     executionDate: c.executionDate,
     executionTime: c.executionTime,
