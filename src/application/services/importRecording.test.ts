@@ -24,7 +24,7 @@ describe("recordImportedRawTransactions", () => {
   it("appends exactly one BuyExecution raw transaction per BUY candidate, with only the documented seven fields' worth of content plus envelope metadata", async () => {
     await recordImportedRawTransactions(repos, {
       sourceUploadId: "upload-1",
-      candidates: [buyCandidate({ confidence: "high", source: "invoice" })],
+      candidates: [{ key: "k1", candidate: buyCandidate({ confidence: "high", source: "invoice" }) }],
       verifications: [],
       dividends: [],
       orderEvidences: [],
@@ -48,7 +48,7 @@ describe("recordImportedRawTransactions", () => {
   it("SELL candidates become SellExecution — no allocation, lot, or ledger concept involved", async () => {
     await recordImportedRawTransactions(repos, {
       sourceUploadId: "upload-1",
-      candidates: [buyCandidate({ side: "SELL", price: 50 })],
+      candidates: [{ key: "k1", candidate: buyCandidate({ side: "SELL", price: 50 }) }],
       verifications: [],
       dividends: [],
       orderEvidences: [],
@@ -63,12 +63,37 @@ describe("recordImportedRawTransactions", () => {
   it("a candidate with no recorded source defaults to statement, the same fallback duplicateDetection.ts already treats an untyped legacy read as", async () => {
     await recordImportedRawTransactions(repos, {
       sourceUploadId: "upload-1",
-      candidates: [buyCandidate({ source: undefined })],
+      candidates: [{ key: "k1", candidate: buyCandidate({ source: undefined }) }],
       verifications: [],
       dividends: [],
       orderEvidences: [],
     });
     expect((await rawTransactions.getAll())[0].source).toBe("statement");
+  });
+
+  it("a candidate's session key becomes the written RawTransaction's own id, so a later Skip/Dismiss/Discard action can retract this exact row", async () => {
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "upload-1",
+      candidates: [{ key: "session-key-42", candidate: buyCandidate() }],
+      verifications: [],
+      dividends: [],
+      orderEvidences: [],
+    });
+    const [txn] = await rawTransactions.getAll();
+    expect(txn.id).toBe("session-key-42");
+  });
+
+  it("an order-evidence row's session key likewise becomes its RawTransaction's own id", async () => {
+    const evidence: ParsedOrderEvidence = { ticker: "COMI", side: "BUY", totalValue: 4550, status: "fulfilled" };
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "upload-1",
+      candidates: [],
+      verifications: [],
+      dividends: [],
+      orderEvidences: [{ key: "evidence-key-7", evidence }],
+    });
+    const [txn] = await rawTransactions.getAll();
+    expect(txn.id).toBe("evidence-key-7");
   });
 
   it("appends a PositionVerificationCapture per verification, sourced as position-verification", async () => {
@@ -92,7 +117,7 @@ describe("recordImportedRawTransactions", () => {
 
   it("appends an OrderEvidenceCapture per order-history row, sourced as orders-timeline", async () => {
     const evidence: ParsedOrderEvidence = { ticker: "COMI", side: "BUY", totalValue: 4550, status: "fulfilled" };
-    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [], dividends: [], orderEvidences: [evidence] });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [], dividends: [], orderEvidences: [{ key: "k1", evidence }] });
 
     const [txn] = await rawTransactions.getAll();
     expect(txn.kind).toBe("OrderEvidenceCapture");
@@ -103,10 +128,13 @@ describe("recordImportedRawTransactions", () => {
   it("a batch of mixed candidate types appends exactly one raw transaction per item, nothing merged or dropped", async () => {
     await recordImportedRawTransactions(repos, {
       sourceUploadId: "upload-1",
-      candidates: [buyCandidate(), buyCandidate({ side: "SELL", price: 50 })],
+      candidates: [
+        { key: "k1", candidate: buyCandidate() },
+        { key: "k2", candidate: buyCandidate({ side: "SELL", price: 50 }) },
+      ],
       verifications: [{ ticker: "COMI", units: 100, capturedAt: "2026-02-10T00:00", source: "screenshot" }],
       dividends: [{ ticker: "COMI", date: "2026-01-20", amount: 100 }],
-      orderEvidences: [{ ticker: "COMI", side: "BUY", totalValue: 4550, status: "fulfilled" }],
+      orderEvidences: [{ key: "k3", evidence: { ticker: "COMI", side: "BUY", totalValue: 4550, status: "fulfilled" } }],
     });
     expect(await rawTransactions.getAll()).toHaveLength(5);
   });
@@ -121,7 +149,10 @@ describe("recordImportedRawTransactions", () => {
     // had a portfolio — but Import never assigns one, so nothing commits.
     await recordImportedRawTransactions(repos, {
       sourceUploadId: "upload-1",
-      candidates: [buyCandidate({ shares: 100 }), buyCandidate({ side: "SELL", shares: 100, price: 50 })],
+      candidates: [
+        { key: "k1", candidate: buyCandidate({ shares: 100 }) },
+        { key: "k2", candidate: buyCandidate({ side: "SELL", shares: 100, price: 50 }) },
+      ],
       verifications: [],
       dividends: [],
       orderEvidences: [],
