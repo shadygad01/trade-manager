@@ -16,7 +16,7 @@ import {
   pendingCandidateSignature,
 } from "./duplicateDetection";
 import { findOrderConfirmedKeys, findWrongTickerHintsFromOrders } from "./orderEvidence";
-import { checkTickerMatch } from "./importVerification";
+import { checkTickerMatch, type TickerMatchStatus } from "./importVerification";
 import { latestByTicker } from "./reconciliation";
 import type { PositionAggregate } from "./TradeService";
 
@@ -141,7 +141,16 @@ export interface VerifyAllParams {
   positions: PositionAggregate[];
 }
 
-export function verifyAll(params: VerifyAllParams): Map<string, TransactionVerification> {
+/**
+ * Does the actual work behind verifyAll/verifyAllDetailed/verifyTicker —
+ * exactly verifyAll's original body, unchanged, plus one addition: the
+ * per-ticker checkTickerMatch() result (already computed either way, at the
+ * same call site, to fold into each transaction's evidence) is also kept in
+ * `tickerStatuses` instead of only ever being read for its `.reason` string.
+ * verifyAll() itself is now a one-line wrapper over this so every existing
+ * caller keeps getting the exact same Map it always has.
+ */
+function computeVerification(params: VerifyAllParams): VerificationResult {
   const entries = toTradeCandidateEntries(params.transactions);
   const orderEvidences = toOrderEvidences(params.transactions);
   const verifications = toPositionVerifications(params.transactions);
@@ -176,6 +185,10 @@ export function verifyAll(params: VerifyAllParams): Map<string, TransactionVerif
 
   const tickers = new Set(entries.map((e) => normalizeTicker(e.candidate.ticker)));
   const tickerReason = new Map<string, ReturnType<typeof checkTickerMatch>>();
+  // Additive: the same checkTickerMatch() result tickerReason has always
+  // stored, tagged with its ticker — see TickerStatus/VerificationResult.
+  // Populated at the same call site as tickerReason, never a second call.
+  const tickerStatuses = new Map<string, TickerStatus>();
   for (const ticker of tickers) {
     const tickerEntries = entries.filter((e) => normalizeTicker(e.candidate.ticker) === ticker);
     const pendingBuyShares = tickerEntries.filter((e) => e.candidate.side === "BUY").reduce((s, e) => s + e.candidate.shares, 0);
@@ -186,20 +199,19 @@ export function verifyAll(params: VerifyAllParams): Map<string, TransactionVerif
     const allPendingSelfVerified = tickerEntries.every((e) => crossVerified.has(e.key) || aggregatedKeys.has(e.key));
     const allPendingOrderConfirmed = tickerEntries.every((e) => orderConfirmed.has(e.key));
 
-    tickerReason.set(
-      ticker,
-      checkTickerMatch({
-        hasShares: pendingBuyShares + pendingSellShares > 0,
-        pendingBuyShares,
-        pendingSellShares,
-        existingRemainingShares,
-        verifiedUnits: verification?.units,
-        verifiedAvgCost: verification?.avgCost,
-        allPendingFromInvoice,
-        allPendingSelfVerified,
-        allPendingOrderConfirmed,
-      })
-    );
+    const status = checkTickerMatch({
+      hasShares: pendingBuyShares + pendingSellShares > 0,
+      pendingBuyShares,
+      pendingSellShares,
+      existingRemainingShares,
+      verifiedUnits: verification?.units,
+      verifiedAvgCost: verification?.avgCost,
+      allPendingFromInvoice,
+      allPendingSelfVerified,
+      allPendingOrderConfirmed,
+    });
+    tickerReason.set(ticker, status);
+    tickerStatuses.set(ticker, { ticker, ...status });
   }
 
   const VERIFIED_REASONS = new Set(["no-shares-to-verify", "closed-position", "invoice-verified", "cross-verified", "orders-verified", "matched"]);
@@ -278,9 +290,48 @@ export function verifyAll(params: VerifyAllParams): Map<string, TransactionVerif
     result.set(entry.key, { transactionId: entry.key, evidence, verdict });
   }
 
-  return result;
+  return { transactions: result, tickers: tickerStatuses };
+}
+
+export function verifyAll(params: VerifyAllParams): Map<string, TransactionVerification> {
+  return computeVerification(params).transactions;
 }
 
 export function verifyTransaction(transactionId: string, params: VerifyAllParams): TransactionVerification | undefined {
   return verifyAll(params).get(transactionId);
+}
+
+/**
+ * Per-ticker reconciliation facts — checkTickerMatch()'s own result (see
+ * importVerification.ts's TickerMatchStatus), tagged with the ticker it was
+ * computed for. computeVerification already builds one of these per ticker
+ * while folding each transaction's evidence/verdict; verifyAllDetailed/
+ * verifyTicker expose it instead of letting it fall out of scope once that
+ * fold is done. No new calculation: same checkTickerMatch() call, at the
+ * same call site, with the same inputs, as verifyAll has always made.
+ */
+export interface TickerStatus extends TickerMatchStatus {
+  ticker: string;
+}
+
+export interface VerificationResult {
+  /** Byte-for-byte what verifyAll() has always returned — kept for backward compatibility. */
+  transactions: Map<string, TransactionVerification>;
+  /** One entry per ticker present in params.transactions, keyed by normalizeTicker(ticker). */
+  tickers: Map<string, TickerStatus>;
+}
+
+/**
+ * The same per-ticker facts verifyAll()/verifyTransaction() have always
+ * computed internally and discarded, now returned alongside the unchanged
+ * transaction verdicts. See VerifyAllParams/VerificationResult; nothing here
+ * recomputes anything verifyAll() didn't already compute.
+ */
+export function verifyAllDetailed(params: VerifyAllParams): VerificationResult {
+  return computeVerification(params);
+}
+
+/** Ticker-level counterpart to verifyTransaction — the TickerStatus for one ticker, or undefined if that ticker has no Buy/Sell transactions in `params.transactions`. */
+export function verifyTicker(ticker: string, params: VerifyAllParams): TickerStatus | undefined {
+  return computeVerification(params).tickers.get(normalizeTicker(ticker));
 }

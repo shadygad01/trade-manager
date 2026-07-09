@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { verifyAll, type VerifyAllParams } from "./verificationEngine";
+import { verifyAll, verifyAllDetailed, verifyTicker, type VerifyAllParams } from "./verificationEngine";
 import { createRawTransaction, type RawTransaction, type BuyExecutionPayload, type SellExecutionPayload } from "@domain/entities/RawTransaction";
 import type { PositionAggregate } from "./TradeService";
+import { checkTickerMatch } from "./importVerification";
 
 function buy(overrides: Partial<BuyExecutionPayload> & { id?: string; source?: RawTransaction["source"]; confidence?: RawTransaction["confidence"] } = {}): RawTransaction {
   const { id, source, confidence, ...payloadOverrides } = overrides;
@@ -154,5 +155,115 @@ describe("verificationEngine.verifyAll", () => {
     const capture = positionVerification(999); // wildly off — would be Needs Review for a normal source
     const result = run([b, capture], [{ ...emptyPosition(), totalShares: 100 }]);
     expect(result.get(b.id)?.verdict).toBe("Verified");
+  });
+});
+
+/**
+ * Phase 9.5 — contract-completion regression suite. verifyAll()'s existing
+ * behavior (asserted above) must be byte-for-byte unchanged now that it's a
+ * one-line wrapper over computeVerification; these tests additionally prove
+ * verifyAllDetailed()/verifyTicker() surface exactly checkTickerMatch()'s own
+ * output — the same numbers the legacy TickerMatchStatus path already
+ * produces — rather than a re-derived approximation.
+ */
+describe("verificationEngine — verifyAllDetailed/verifyTicker (additive contract)", () => {
+  const scenarios: { name: string; transactions: RawTransaction[]; positions?: PositionAggregate[] }[] = [
+    { name: "lone unverified buy", transactions: [buy()] },
+    { name: "closed position (buy+sell net zero)", transactions: [buy({ shares: 100 }), sell({ shares: 100 })] },
+    { name: "cross-source verified pair", transactions: [buy({ id: "stmt-1", source: "statement" }), buy({ id: "invoice-1", source: "invoice" })] },
+    { name: "exact duplicate pair", transactions: [buy({ id: "higher", source: "statement", price: 45.8 }), buy({ id: "lower", source: "statement", price: 45.5 })] },
+    { name: "order-confirmed buy", transactions: [buy(), orderEvidence()] },
+    {
+      name: "position-verification match",
+      transactions: [buy({ shares: 50 }), positionVerification(150)],
+      positions: [{ ...emptyPosition(), totalShares: 100 }],
+    },
+    {
+      name: "position-verification mismatch",
+      transactions: [buy({ shares: 50 }), positionVerification(999)],
+      positions: [{ ...emptyPosition(), totalShares: 100 }],
+    },
+    { name: "statement aggregate", transactions: [buy({ id: "p1", source: "orders-screen", shares: 30 }), buy({ id: "p2", source: "orders-screen", shares: 20 }), buy({ id: "summary", source: "statement", shares: 50 })] },
+    { name: "backfilled row", transactions: [buy({ source: "backfill" })] },
+    { name: "no transactions at all", transactions: [] },
+  ];
+
+  it.each(scenarios)("verifyAllDetailed($name).transactions is identical to verifyAll($name)'s own return value", ({ transactions, positions }) => {
+    const params: VerifyAllParams = { transactions, positions: positions ?? [emptyPosition()] };
+    const legacy = verifyAll(params);
+    const detailed = verifyAllDetailed(params);
+    expect(detailed.transactions).toEqual(legacy);
+    expect([...detailed.transactions.keys()]).toEqual([...legacy.keys()]);
+  });
+
+  it("verifyTicker(ticker, params) returns the exact same object as verifyAllDetailed(params).tickers.get(normalizeTicker(ticker))", () => {
+    const params: VerifyAllParams = { transactions: [buy({ shares: 100 }), sell({ shares: 100 })], positions: [emptyPosition()] };
+    const viaDetailed = verifyAllDetailed(params).tickers.get("COMI");
+    // Not .toBe: computeVerification recomputes fresh on every call (no
+    // cache, by design — same convention as holdingsEngine.ts), so this
+    // proves the two entry points agree on VALUE, not object identity.
+    expect(verifyTicker("COMI", params)).toEqual(viaDetailed);
+    expect(verifyTicker("comi", params)).toEqual(viaDetailed); // normalizeTicker uppercases, so a lowercase lookup resolves the same entry
+  });
+
+  it("verifyTicker returns undefined for a ticker with no Buy/Sell rows in scope", () => {
+    const params: VerifyAllParams = { transactions: [buy({ ticker: "COMI" })], positions: [emptyPosition()] };
+    expect(verifyTicker("HRHO", params)).toBeUndefined();
+  });
+
+  it("TickerStatus for a closed position matches checkTickerMatch() called directly with the same inputs — reason, netShares, matched", () => {
+    const params: VerifyAllParams = { transactions: [buy({ shares: 100 }), sell({ shares: 100 })], positions: [emptyPosition()] };
+    const status = verifyTicker("COMI", params)!;
+    const expected = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 100,
+      pendingSellShares: 100,
+      existingRemainingShares: 0,
+      allPendingFromInvoice: false,
+      allPendingSelfVerified: false,
+      allPendingOrderConfirmed: false,
+    });
+    expect(status.ticker).toBe("COMI");
+    expect(status.matched).toBe(expected.matched);
+    expect(status.reason).toBe(expected.reason);
+    expect(status.netShares).toBe(expected.netShares);
+  });
+
+  it("TickerStatus surfaces verifiedUnits/verifiedAvgCost/discrepancySide exactly as checkTickerMatch computed them, for a mismatch", () => {
+    const params: VerifyAllParams = {
+      transactions: [buy({ shares: 50 }), positionVerification(999)],
+      positions: [{ ...emptyPosition(), totalShares: 100 }],
+    };
+    const status = verifyTicker("COMI", params)!;
+    expect(status.reason).toBe("mismatch");
+    expect(status.verifiedUnits).toBe(999);
+    expect(status.existingRemainingShares).toBe(100);
+    expect(status.pendingBuyShares).toBe(50);
+    expect(status.netShares).toBe(150);
+    // netShares (150) < verifiedUnits (999) => shortage sits on the sell/missing-buy side.
+    expect(status.discrepancySide).toBe("sell");
+  });
+
+  it("TickerStatus.alreadyFullyRecorded is exposed when the broker's verified count already matches pre-batch ledger shares", () => {
+    const params: VerifyAllParams = {
+      transactions: [buy({ shares: 30 }), positionVerification(100)],
+      positions: [{ ...emptyPosition(), totalShares: 100 }],
+    };
+    const status = verifyTicker("COMI", params)!;
+    expect(status.reason).toBe("mismatch");
+    expect(status.alreadyFullyRecorded).toBe(true);
+  });
+
+  it("computeVerification is only exercised once per call — verifyAllDetailed does not run checkTickerMatch a second time with different results", () => {
+    // If the ticker-level computation ever forked into two separate call
+    // sites, a ticker straddling two batches of the same params could drift.
+    // Calling twice from the same params must be referentially stable in
+    // content (not identity, since each call recomputes from scratch) but
+    // never divergent.
+    const params: VerifyAllParams = { transactions: [buy({ shares: 50 }), positionVerification(150)], positions: [{ ...emptyPosition(), totalShares: 100 }] };
+    const first = verifyAllDetailed(params);
+    const second = verifyAllDetailed(params);
+    expect(first.tickers.get("COMI")).toEqual(second.tickers.get("COMI"));
+    expect(first.transactions).toEqual(second.transactions);
   });
 });

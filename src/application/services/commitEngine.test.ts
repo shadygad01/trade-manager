@@ -8,6 +8,7 @@ import {
   renameRawTransactionsTicker,
   type CommitEngineRepos,
 } from "./commitEngine";
+import { verifyAllDetailed } from "./verificationEngine";
 import { createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
 import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
@@ -312,6 +313,55 @@ describe("commitEngine", () => {
 
       const corrected = await renameRawTransactionsTicker(repos, "COMI", "HRHO");
       expect(corrected).toBe(0);
+    });
+  });
+
+  describe("Phase 9.5 — verifyAllDetailed's richer API agrees with commitEngine's existing decisions", () => {
+    /** commitEngine.ts never called any new API — it still calls verifyAll() exactly as before. These tests just cross-check the additive verifyAllDetailed()/TickerStatus surface against the ledger/allocation output that same unchanged code path already produces, proving the richer contract introduces no divergence. */
+    it("a ticker verifyAllDetailed reports matched:true is exactly the ticker shouldCommit says yes for, and commitTicker's ledger events reflect it", async () => {
+      await appendBuy({ shares: 100 });
+      await appendSell({ shares: 100 }); // closed position, no screenshot required
+
+      const all = await rawTransactions.getAll();
+      const status = verifyAllDetailed({ transactions: all, positions: [] }).tickers.get("COMI");
+      expect(status?.matched).toBe(true);
+
+      expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(true);
+      await commitTicker(repos, PORTFOLIO, "COMI");
+      const events = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
+      expect(events.map((e) => e.type).sort()).toEqual(["LotOpened", "SellRecorded"]);
+    });
+
+    it("a ticker verifyAllDetailed reports matched:false is exactly the ticker shouldCommit says no for, and commitTicker writes nothing", async () => {
+      await appendBuy({ shares: 100 }); // alone — Needs Review, no verification
+
+      const all = await rawTransactions.getAll();
+      const status = verifyAllDetailed({ transactions: all, positions: [] }).tickers.get("COMI");
+      expect(status?.matched).toBe(false);
+      expect(status?.reason).toBe("no-verification");
+
+      expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(false);
+      await commitTicker(repos, PORTFOLIO, "COMI");
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+    });
+
+    it("allocations generated via commitTicker are unaffected by reading the richer API alongside it", async () => {
+      await appendBuy({ shares: 100 });
+      await appendSell({ shares: 100 });
+      await commitTicker(repos, PORTFOLIO, "COMI");
+      const events = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
+      const lot = events.find((e) => e.type === "LotOpened")!;
+      const sell = events.find((e) => e.type === "SellRecorded")!;
+      await appendDecision({ sellExecutionId: sell.eventId, allocations: [{ lotRef: lot.eventId, shares: 100 }] });
+      await commitTicker(repos, PORTFOLIO, "COMI");
+
+      // Reading verifyAllDetailed after the fact must not perturb what was already committed.
+      const all = await rawTransactions.getAll();
+      verifyAllDetailed({ transactions: all, positions: [] });
+
+      const allocations = await committedLedger.getAllocations(PORTFOLIO, "COMI");
+      expect(allocations).toHaveLength(1);
+      expect(allocations[0]).toMatchObject({ sellEventId: sell.eventId, lotEventId: lot.eventId, shares: 100 });
     });
   });
 });
