@@ -37,7 +37,9 @@ export type RawTransactionSource =
   | "orders-timeline"
   | "position-verification"
   | "csv"
-  | "manual";
+  | "manual"
+  /** A one-time conversion of a Trade/TradeAllocation/PositionVerification that was already committed under the pre-migration architecture — already vetted and reconciled once, under the rules that applied at the time. Never the same as "manual" (a real user-typed trade with no prior history) or an OCR document type (no such document exists for this row). */
+  | "backfill";
 
 /** Always "unverified" at write time — a transaction's real, current status is derived by folding its supersede/retract chain (see the Verification Engine), never read from or written back onto this field. */
 export type RawTransactionStatus = "unverified";

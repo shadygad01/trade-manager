@@ -141,4 +141,18 @@ describe("verificationEngine.verifyAll", () => {
     const result = run([capture]);
     expect(result.has(capture.id)).toBe(false);
   });
+
+  it("a backfilled transaction is Verified unconditionally, even with no corroboration and an open (non-zero-net) position", () => {
+    const b = buy({ source: "backfill" });
+    const result = run([b]); // alone — would be Needs Review for any other source
+    expect(result.get(b.id)?.verdict).toBe("Verified");
+    expect(result.get(b.id)?.evidence).toEqual([{ type: "matched-backfill", detail: "Already committed and reconciled under the pre-migration system." }]);
+  });
+
+  it("a backfilled transaction is Verified even when a ticker-level position mismatch exists — history isn't re-litigated under the new rules", () => {
+    const b = buy({ source: "backfill", shares: 50 });
+    const capture = positionVerification(999); // wildly off — would be Needs Review for a normal source
+    const result = run([b, capture], [{ ...emptyPosition(), totalShares: 100 }]);
+    expect(result.get(b.id)?.verdict).toBe("Verified");
+  });
 });

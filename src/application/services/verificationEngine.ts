@@ -41,6 +41,7 @@ export type EvidenceType =
   | "matched-statement-aggregate"
   | "matched-ledger"
   | "matched-position"
+  | "matched-backfill"
   | "contradicted-wrong-ticker"
   | "contradicted-position-mismatch";
 
@@ -207,6 +208,26 @@ export function verifyAll(params: VerifyAllParams): Map<string, TransactionVerif
   for (const entry of entries) {
     const evidence: EvidenceItem[] = [];
     const ticker = normalizeTicker(entry.candidate.ticker);
+
+    // Backfilled data represents a fact already committed and reconciled
+    // once, under the pre-migration architecture's own rules, at the time
+    // it happened — re-litigating it under this engine's stricter
+    // per-transaction rules (which real historical trading data routinely
+    // wouldn't satisfy — a position that isn't closed and was never
+    // captured by a broker screenshot at the time is completely normal)
+    // would produce false Needs Review on perfectly legitimate history.
+    // Trusted unconditionally. The Ledger stage's own dedup remains the
+    // safety net for genuinely duplicate backfilled+new pairs — this
+    // bypass only settles THIS row's own verdict, it doesn't suppress
+    // anything else's evidence about it.
+    if (entry.txn.source === "backfill") {
+      result.set(entry.key, {
+        transactionId: entry.key,
+        evidence: [{ type: "matched-backfill", detail: "Already committed and reconciled under the pre-migration system." }],
+        verdict: "Verified",
+      });
+      continue;
+    }
 
     const isDuplicate = duplicateKeysToReject.has(entry.key);
     if (isDuplicate) {
