@@ -4,6 +4,7 @@ import { Download, Upload, AlertTriangle, HardDriveDownload } from "lucide-react
 import { repos } from "@presentation/lib/data";
 import { exportLedger, importLedger, parseLedgerSnapshot } from "@application/services/BackupService";
 import { PageHeader } from "@presentation/components/PageHeader";
+import { RebuildLedgerPanel } from "@presentation/components/RebuildLedgerPanel";
 import { formatDate } from "@presentation/lib/format";
 import { useT } from "@presentation/i18n/translations";
 
@@ -138,6 +139,10 @@ export function DataPage() {
           {importError ? <p className="mt-2 text-sm text-rose-400">{importError}</p> : null}
           {importSuccess ? <p className="mt-2 text-sm text-emerald-400">{importSuccess}</p> : null}
         </div>
+      </div>
+
+      <div className="mt-4">
+        <RebuildLedgerPanel />
       </div>
     </div>
   );

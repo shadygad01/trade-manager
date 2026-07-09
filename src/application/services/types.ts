@@ -5,6 +5,7 @@ import type {
   TimelineRepository,
   JournalRepository,
   VerificationRepository,
+  UploadRepository,
 } from "@domain/repositories";
 
 export interface AppRepositories {
@@ -14,4 +15,6 @@ export interface AppRepositories {
   timeline: TimelineRepository;
   journal: JournalRepository;
   verifications: VerificationRepository;
+  /** Read by ledgerRebuild.ts as the ONLY source of parsed trade candidates it's allowed to reconstruct the ledger from — never the ledger itself. */
+  uploads: UploadRepository;
 }
