@@ -1,4 +1,5 @@
 import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
+import type { RawTransaction } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { verifyAll } from "./verificationEngine";
 import { generateLedgerEvents } from "./ledgerEngine";
@@ -70,4 +71,28 @@ export async function commitTicker(repos: CommitEngineRepos, portfolioId: string
   const allocations = generateAllocations(events, decisionTransactions);
 
   await repos.committedLedger.commitTicker({ portfolioId, ticker: normalizedTicker, events, allocations });
+}
+
+/**
+ * The reactive trigger: append a raw transaction, then commit its ticker if
+ * that just made the whole ticker's verification state terminal. This is
+ * the ONLY place a commit is ever triggered — no scheduled job, no manual
+ * "rebuild" button, matching the Ledger rewrite's "no rebuild command"
+ * rule. Every writer should call this instead of `rawTransactions.append`
+ * directly once it's ready to participate in the new architecture.
+ *
+ * A transaction with no `portfolioId` (e.g. everything Import writes today
+ * — portfolio assignment is a deliberately separate, later step, never
+ * inferred at import time) or no `ticker` has nothing to commit yet: this
+ * is a correct, expected no-op for those rows, not a gap. It becomes live
+ * for a given raw transaction the moment something assigns it a portfolio.
+ */
+export async function appendAndMaybeCommit(repos: CommitEngineRepos, transaction: Omit<RawTransaction, "seq">): Promise<RawTransaction> {
+  const appended = await repos.rawTransactions.append(transaction);
+  if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
+    if (await shouldCommit(repos, appended.portfolioId, appended.ticker)) {
+      await commitTicker(repos, appended.portfolioId, appended.ticker);
+    }
+  }
+  return appended;
 }

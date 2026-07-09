@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { shouldCommit, commitTicker, type CommitEngineRepos } from "./commitEngine";
+import { shouldCommit, commitTicker, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 import { createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
 import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
@@ -111,5 +111,40 @@ describe("commitEngine", () => {
 
     expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toHaveLength(2);
     expect(await committedLedger.getLedgerEvents(PORTFOLIO, "HRHO")).toHaveLength(2);
+  });
+
+  describe("appendAndMaybeCommit", () => {
+    it("a transaction with no portfolioId (e.g. everything Import writes today) never triggers a commit", async () => {
+      const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" };
+      await appendAndMaybeCommit(repos, createRawTransaction({ kind: "BuyExecution", source: "manual", ticker: "COMI", payload }));
+
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+    });
+
+    it("appending the transaction that completes a closed position triggers a commit automatically, with no explicit commitTicker call", async () => {
+      const buyPayload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" };
+      await appendAndMaybeCommit(repos, createRawTransaction({ kind: "BuyExecution", source: "manual", portfolioId: PORTFOLIO, ticker: "COMI", payload: buyPayload }));
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]); // not yet — still Needs Review alone
+
+      const sellPayload: SellExecutionPayload = { ticker: "COMI", shares: 100, price: 50, executionDate: "2026-02-05" };
+      await appendAndMaybeCommit(repos, createRawTransaction({ kind: "SellExecution", source: "manual", portfolioId: PORTFOLIO, ticker: "COMI", payload: sellPayload }));
+
+      // The second append alone triggered the commit — closes the position, both verify.
+      const events = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
+      expect(events.map((e) => e.type).sort()).toEqual(["LotOpened", "SellRecorded"]);
+    });
+
+    it("a transaction that leaves the ticker ambiguous never triggers a commit", async () => {
+      const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" };
+      await appendAndMaybeCommit(repos, createRawTransaction({ kind: "BuyExecution", source: "manual", portfolioId: PORTFOLIO, ticker: "COMI", payload }));
+
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+    });
+
+    it("returns the appended transaction with its assigned seq, same as a plain append", async () => {
+      const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" };
+      const result = await appendAndMaybeCommit(repos, createRawTransaction({ kind: "BuyExecution", source: "manual", ticker: "COMI", payload }));
+      expect(typeof result.seq).toBe("number");
+    });
   });
 });

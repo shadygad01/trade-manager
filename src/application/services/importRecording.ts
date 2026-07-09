@@ -1,16 +1,24 @@
 import type { ParsedTradeCandidate, ParsedDividendCandidate, ParsedOrderEvidence } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type PositionVerificationCapturePayload, type OrderEvidenceCapturePayload, type DividendPaymentPayload, type RawTransactionSource } from "@domain/entities/RawTransaction";
-import type { RawTransactionRepository } from "@domain/repositories";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 
 /**
  * Import Recording: Import's ONLY sanctioned write. Given the domain-typed
  * candidates a parsed document produced, appends one immutable RawTransaction
  * per candidate — nothing else. No ledger, no allocations, no holdings, no
- * verification/matching decision. Every row is written with status
+ * verification/matching decision made HERE. Every row is written with status
  * "unverified"; deciding Verified/Rejected/Needs Review happens later, by
- * the Verification Engine, never here.
+ * the Verification Engine.
+ *
+ * Appends through `appendAndMaybeCommit` (commitEngine.ts) rather than
+ * `rawTransactions.append` directly, so a commit fires automatically the
+ * moment a ticker's verification state becomes terminal — but since Import
+ * never assigns a `portfolioId` (a deliberately separate, later step, never
+ * inferred here), every row Import writes today has nothing to commit yet;
+ * that trigger is correctly inert for Import specifically until something
+ * else assigns a portfolio.
  *
  * Deliberately takes plain domain-typed arrays rather than
  * ImportOrchestrator's ImportResult — that type lives in the infrastructure
@@ -21,9 +29,7 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
  * service, not the other way around.
  */
 
-export interface ImportRecordingRepos {
-  rawTransactions: RawTransactionRepository;
-}
+export type ImportRecordingRepos = CommitEngineRepos;
 
 export interface ImportRecordingInput {
   sourceUploadId: string;
@@ -58,7 +64,8 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
         companyName: candidate.companyName,
         transactionNumber: candidate.transactionNumber,
       };
-      await repos.rawTransactions.append(
+      await appendAndMaybeCommit(
+        repos,
         createRawTransaction({ kind: "BuyExecution", source: candidateSource(candidate), sourceUploadId, ticker, confidence: candidate.confidence, payload })
       );
     } else {
@@ -72,7 +79,8 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
         executionTime: candidate.time,
         transactionNumber: candidate.transactionNumber,
       };
-      await repos.rawTransactions.append(
+      await appendAndMaybeCommit(
+        repos,
         createRawTransaction({ kind: "SellExecution", source: candidateSource(candidate), sourceUploadId, ticker, confidence: candidate.confidence, payload })
       );
     }
@@ -87,7 +95,8 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       capturedAt: verification.capturedAt,
       companyName: verification.companyName,
     };
-    await repos.rawTransactions.append(
+    await appendAndMaybeCommit(
+      repos,
       createRawTransaction({ kind: "PositionVerificationCapture", source: "position-verification", sourceUploadId, ticker, payload })
     );
   }
@@ -98,7 +107,8 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
   for (const dividend of dividends) {
     const ticker = dividend.ticker ? normalizeTicker(dividend.ticker) : undefined;
     const payload: DividendPaymentPayload = { ticker, amount: dividend.amount, date: dividend.date };
-    await repos.rawTransactions.append(
+    await appendAndMaybeCommit(
+      repos,
       createRawTransaction({ kind: "DividendPayment", source: "position-verification", sourceUploadId, ticker, payload })
     );
   }
@@ -119,7 +129,8 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       time: evidence.time,
       companyName: evidence.companyName,
     };
-    await repos.rawTransactions.append(
+    await appendAndMaybeCommit(
+      repos,
       createRawTransaction({ kind: "OrderEvidenceCapture", source: "orders-timeline", sourceUploadId, ticker, confidence: evidence.confidence, payload })
     );
   }
