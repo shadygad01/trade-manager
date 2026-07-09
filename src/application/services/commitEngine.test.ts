@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { shouldCommit, commitTicker, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
+import { shouldCommit, commitTicker, appendAndMaybeCommit, assignPortfolio, type CommitEngineRepos } from "./commitEngine";
 import { createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
 import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
@@ -145,6 +145,66 @@ describe("commitEngine", () => {
       const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" };
       const result = await appendAndMaybeCommit(repos, createRawTransaction({ kind: "BuyExecution", source: "manual", ticker: "COMI", payload }));
       expect(typeof result.seq).toBe("number");
+    });
+  });
+
+  describe("assignPortfolio", () => {
+    async function appendUnassignedBuy(overrides: Partial<BuyExecutionPayload> = {}) {
+      const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01", ...overrides };
+      return rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "csv", ticker: "COMI", payload })); // no portfolioId — as Import writes it
+    }
+
+    it("assigning a ticker's unassigned transactions makes them visible to shouldCommit/commitTicker under that portfolio", async () => {
+      await appendUnassignedBuy({ shares: 100 });
+      await rawTransactions.append(
+        createRawTransaction({
+          kind: "SellExecution",
+          source: "csv",
+          ticker: "COMI",
+          payload: { ticker: "COMI", shares: 100, price: 50, executionDate: "2026-02-05" },
+        })
+      );
+      expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(false); // unassigned — nothing to commit under any portfolio yet
+
+      await assignPortfolio(repos, "COMI", PORTFOLIO);
+
+      // Assignment alone triggers the commit (closed position, both verify).
+      const events = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
+      expect(events.map((e) => e.type).sort()).toEqual(["LotOpened", "SellRecorded"]);
+    });
+
+    it("assigning one ticker never touches an unrelated ticker's still-unassigned transactions", async () => {
+      await appendUnassignedBuy({ ticker: "COMI" });
+      await rawTransactions.append(
+        createRawTransaction({ kind: "BuyExecution", source: "csv", ticker: "HRHO", payload: { ticker: "HRHO", shares: 20, price: 10, executionDate: "2026-02-01" } })
+      );
+
+      await assignPortfolio(repos, "COMI", PORTFOLIO);
+
+      const comiTxns = (await rawTransactions.getAll()).filter((t) => t.ticker === "COMI" && t.kind === "BuyExecution");
+      const hrhoTxns = (await rawTransactions.getAll()).filter((t) => t.ticker === "HRHO" && t.kind === "BuyExecution");
+      expect(comiTxns[0].portfolioId).toBeUndefined(); // still immutable — assignment is a separate fact, never an edit
+      expect(hrhoTxns[0].portfolioId).toBeUndefined();
+    });
+
+    it("assigning a ticker with nothing unassigned is a harmless no-op", async () => {
+      await expect(assignPortfolio(repos, "COMI", PORTFOLIO)).resolves.toBeUndefined();
+      expect(await rawTransactions.getAll()).toEqual([]);
+    });
+
+    it("assigning the same ticker twice to different portfolios: the later assignment wins for a transaction targeted only once", async () => {
+      await appendUnassignedBuy({ shares: 100 });
+      await assignPortfolio(repos, "COMI", "portfolio-a");
+
+      // Nothing left unassigned for COMI, so a second call is a no-op —
+      // proving assignment doesn't re-target an already-assigned row.
+      await assignPortfolio(repos, "COMI", "portfolio-b");
+
+      const [buy] = (await rawTransactions.getAll()).filter((t) => t.kind === "BuyExecution");
+      const assignments = (await rawTransactions.getAll()).filter((t) => t.kind === "PortfolioAssignment");
+      expect(assignments).toHaveLength(1);
+      expect((assignments[0].payload as { targetId: string; portfolioId: string }).targetId).toBe(buy.id);
+      expect((assignments[0].payload as { targetId: string; portfolioId: string }).portfolioId).toBe("portfolio-a");
     });
   });
 });

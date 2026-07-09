@@ -6,6 +6,7 @@ import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions } from "@application/services/importRecording";
+import { assignPortfolio } from "@application/services/commitEngine";
 import {
   findDuplicateBuyMatch,
   findDuplicateSellMatch,
@@ -367,6 +368,16 @@ export function ImportPage() {
 
   function setTickerPortfolio(ticker: string, portfolioId: string) {
     importSession.update((prev) => ({ ...prev, tickerPortfolio: { ...prev.tickerPortfolio, [ticker]: portfolioId } }));
+
+    // Migration dual-write: also assigns every still-unassigned
+    // RawTransaction for this ticker to the chosen portfolio (see
+    // commitEngine.assignPortfolio), which is what lets the new
+    // architecture's reactive commit trigger fire for it at all — Import
+    // itself never assigns a portfolio (see importRecording.ts). Isolated
+    // and non-fatal for the same reason as the dual-write in processFiles.
+    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
+      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
+    });
   }
 
   async function processFiles(files: File[]) {
