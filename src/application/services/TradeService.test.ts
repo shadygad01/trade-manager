@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
-import { createFakeRepositories } from "@application/testUtils/fakeRepositories";
+import { createFakeRepositories, createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import {
   recordBuy,
   recordSell,
@@ -13,6 +13,13 @@ import {
   consolidateTicker,
   findMisnamedTickers,
 } from "./TradeService";
+import { commitTicker, assignPortfolio, type CommitEngineRepos } from "./commitEngine";
+import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
+
+/** The migration dual-write is opt-in per repos bundle — plain createFakeRepositories() output doesn't satisfy it, matching the app's real repos singleton (which always does). */
+function withMigrationRepos(repos: ReturnType<typeof createFakeRepositories>): ReturnType<typeof createFakeRepositories> & CommitEngineRepos {
+  return { ...repos, rawTransactions: createFakeRawTransactionRepository(), committedLedger: createFakeCommittedLedgerRepository() };
+}
 
 function seedPortfolio(cash: number) {
   return createPortfolio({ id: "p1", name: "Main", kind: "Trading", initialCash: cash });
@@ -205,6 +212,65 @@ describe("deleteTrade", () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
     await expect(deleteTrade(repos, "nope")).rejects.toThrow(/not found/i);
   });
+
+  describe("migration dual-write", () => {
+    it("retracts the matching RawTransaction so a re-commit can't resurrect the deleted trade", async () => {
+      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+      const { trade } = await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2026-01-05",
+        executionTime: "10:30",
+      });
+      // Mirrors what backfill/import would already have written for this exact trade.
+      const payload: BuyExecutionPayload = { ticker: "COMI", shares: 10, price: 50, executionDate: "2026-01-05", executionTime: "10:30" };
+      const raw = await repos.rawTransactions.append(
+        createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: "p1", ticker: "COMI", payload }),
+      );
+      await commitTicker(repos, "p1", "COMI");
+      expect(await repos.committedLedger.getLedgerEvents("p1", "COMI")).toHaveLength(1);
+
+      await deleteTrade(repos, trade.id);
+
+      const retractions = (await repos.rawTransactions.getAll()).filter((t) => t.kind === "Retraction");
+      expect(retractions).toHaveLength(1);
+      expect((retractions[0].payload as { targetId: string }).targetId).toBe(raw.id);
+      // The retraction's own commit trigger already cleared the cache.
+      expect(await repos.committedLedger.getLedgerEvents("p1", "COMI")).toEqual([]);
+    });
+
+    it("is a harmless no-op when no matching RawTransaction exists (a trade recorded before this dual-write existed)", async () => {
+      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+      const { trade } = await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2026-01-05",
+        executionTime: "10:30",
+      });
+
+      await expect(deleteTrade(repos, trade.id)).resolves.toBeUndefined();
+      expect((await repos.rawTransactions.getAll())).toHaveLength(0);
+    });
+
+    it("plain AppRepositories (no rawTransactions/committedLedger) still deletes the trade normally", async () => {
+      const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+      const { trade } = await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2026-01-05",
+        executionTime: "10:30",
+      });
+
+      await deleteTrade(repos, trade.id);
+      expect(await repos.trades.getById(trade.id)).toBeUndefined();
+    });
+  });
 });
 
 describe("correctTradeExecutionDate", () => {
@@ -360,6 +426,52 @@ describe("renameTickerEverywhere", () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
     const result = await renameTickerEverywhere(repos, "COMI", "comi");
     expect(result).toEqual({ tradesUpdated: 0, allocationsUpdated: 0, timelineEventsUpdated: 0, verificationsUpdated: 0 });
+  });
+
+  describe("migration dual-write", () => {
+    it("corrects the matching RawTransaction's ticker too, so it doesn't stay orphaned under the old, now-corrected-away ticker", async () => {
+      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+      await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "ZZZZ",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2026-01-05",
+        executionTime: "10:30",
+      });
+      // Mirrors what an earlier import/backfill would already have written
+      // (source csv, per commitEngine.test.ts's own convention for an
+      // unassigned raw transaction).
+      const payload: BuyExecutionPayload = { ticker: "ZZZZ", shares: 10, price: 50, executionDate: "2026-01-05", executionTime: "10:30" };
+      await repos.rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "csv", ticker: "ZZZZ", payload }));
+
+      await renameTickerEverywhere(repos, "ZZZZ", "COMI");
+
+      const all = await repos.rawTransactions.getAll();
+      expect(all.filter((t) => t.kind === "Correction")).toHaveLength(1);
+      expect(all.filter((t) => t.kind === "BuyExecution")[0].ticker).toBe("ZZZZ"); // immutable — the original field never changes
+
+      // The old ticker no longer resolves this row at all — only the new one does.
+      await assignPortfolio(repos, "ZZZZ", "p1");
+      expect((await repos.rawTransactions.getAll()).filter((t) => t.kind === "PortfolioAssignment")).toHaveLength(0);
+      await assignPortfolio(repos, "COMI", "p1");
+      expect((await repos.rawTransactions.getAll()).filter((t) => t.kind === "PortfolioAssignment")).toHaveLength(1);
+    });
+
+    it("plain AppRepositories (no rawTransactions/committedLedger) still renames normally", async () => {
+      const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+      await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "ZZZZ",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2026-01-05",
+        executionTime: "10:30",
+      });
+
+      const result = await renameTickerEverywhere(repos, "ZZZZ", "COMI");
+      expect(result.tradesUpdated).toBe(1);
+    });
   });
 });
 

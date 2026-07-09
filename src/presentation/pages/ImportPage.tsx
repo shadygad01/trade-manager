@@ -5,6 +5,8 @@ import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2,
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
+import { recordImportedRawTransactions } from "@application/services/importRecording";
+import { assignPortfolio } from "@application/services/commitEngine";
 import {
   findDuplicateBuyMatch,
   findDuplicateSellMatch,
@@ -366,6 +368,16 @@ export function ImportPage() {
 
   function setTickerPortfolio(ticker: string, portfolioId: string) {
     importSession.update((prev) => ({ ...prev, tickerPortfolio: { ...prev.tickerPortfolio, [ticker]: portfolioId } }));
+
+    // Migration dual-write: also assigns every still-unassigned
+    // RawTransaction for this ticker to the chosen portfolio (see
+    // commitEngine.assignPortfolio), which is what lets the new
+    // architecture's reactive commit trigger fire for it at all — Import
+    // itself never assigns a portfolio (see importRecording.ts). Isolated
+    // and non-fatal for the same reason as the dual-write in processFiles.
+    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
+      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
+    });
   }
 
   async function processFiles(files: File[]) {
@@ -438,6 +450,24 @@ export function ImportPage() {
             parsedAt: new Date().toISOString(),
           };
           await repos.uploads.save(upload);
+
+          // Migration dual-write: additionally record every parsed candidate
+          // as an immutable RawTransaction (see importRecording.ts) — the
+          // eventual sole source of truth. Best-effort and isolated from the
+          // existing commit flow below on purpose: this is shadow data for
+          // the new architecture, not yet read by anything, and must never
+          // be able to break today's working Import behavior if it fails.
+          try {
+            await recordImportedRawTransactions(repos, {
+              sourceUploadId: upload.id,
+              candidates: result.candidates,
+              verifications: result.verifications,
+              dividends: result.dividends,
+              orderEvidences: result.orderEvidences,
+            });
+          } catch (err) {
+            console.error("recordImportedRawTransactions failed (shadow write, non-fatal):", err);
+          }
 
           const fileSeq = seq;
           seq += 1;
@@ -659,6 +689,21 @@ export function ImportPage() {
   async function commitTickerGroup(ticker: string) {
     const portfolioId = resolvedPortfolioId(ticker);
     if (!portfolioId) return;
+
+    // Migration dual-write: setTickerPortfolio's own assignPortfolio call
+    // only fires when the user explicitly picks from the dropdown —
+    // resolvedPortfolioId can also resolve implicitly (a ticker already
+    // uniquely tied to one portfolio, or a single-portfolio app), in which
+    // case that call never happens and this ticker's RawTransactions would
+    // stay unassigned forever, never reaching the new architecture's commit
+    // trigger. Calling it here too, on every commit regardless of how the
+    // portfolio resolved, closes that gap; it's a harmless no-op once
+    // setTickerPortfolio already assigned everything. Isolated and
+    // non-fatal for the same reason as every other shadow write here.
+    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
+      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
+    });
+
     const state = importSession.getState();
 
     const buys = state.pendingCandidates.filter(
