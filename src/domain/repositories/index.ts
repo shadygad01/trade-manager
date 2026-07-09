@@ -5,6 +5,7 @@ import type { TimelineEvent } from "../entities/TimelineEvent";
 import type { JournalEntry } from "../entities/JournalEntry";
 import type { PositionVerification } from "../entities/PositionVerification";
 import type { Upload } from "../entities/Upload";
+import type { RawTransaction } from "../entities/RawTransaction";
 
 export interface PortfolioRepository {
   getAll(): Promise<Portfolio[]>;
@@ -60,6 +61,20 @@ export interface UploadRepository {
   getByHash(fileHash: string): Promise<Upload | undefined>;
   save(upload: Upload): Promise<void>;
   delete(id: string): Promise<void>;
+}
+
+/**
+ * Storage for the append-only fact log (see RawTransaction's own doc
+ * comment). Deliberately exposes no update/delete — immutability is
+ * enforced structurally by this interface's shape, not by convention.
+ */
+export interface RawTransactionRepository {
+  getAll(): Promise<RawTransaction[]>;
+  getByPortfolio(portfolioId: string): Promise<RawTransaction[]>;
+  getByTicker(ticker: string): Promise<RawTransaction[]>;
+  getById(id: string): Promise<RawTransaction | undefined>;
+  /** Assigns `seq` atomically and persists the row. The only way a RawTransaction ever reaches storage. */
+  append(transaction: Omit<RawTransaction, "seq">): Promise<RawTransaction>;
 }
 
 /** Freshness metadata for the price snapshot, so the UI can say which close the "current" prices actually represent. */
