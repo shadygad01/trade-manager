@@ -121,27 +121,82 @@ This change is a **contract completion, not a cutover**. `ImportPage.tsx`
 still reads from the legacy path (`repos.trades/allocations/verifications`
 + `importSession` localStorage + `checkTickerMatch` called directly) and was
 not touched. See the prior architectural audit for the full blocker list —
-this closes exactly one of them (the ticker-level facts being discarded).
-Still open before any UI cutover can be attempted: a reactive (`useLiveQuery`)
-wrapper around `repos.rawTransactions`, making `recordImportedRawTransactions`
-the authoritative write instead of a shadow write, wiring in the four
-diagnosis-only functions verifyAll still doesn't call
-(`findDateMisreadDuplicateHints`, `findOrphanedFulfilledEvidence`,
-`mismatchResolver.suggestRemovalsToReconcile`, `netShareTimeline.findLastBalancedDate`),
-and fixing `findWrongTickerCandidateKeys`'s hardcoded `[], []` committed-pool
-arguments (`verificationEngine.ts`'s own comment explains why they're empty
-today).
+this closes one of them (the ticker-level facts being discarded).
+
+## Phase 9.6 — blocker elimination (additive, still not a cutover)
+
+Six more blockers from the same audit are now closed inside VerificationEngine
+itself. `ImportPage.tsx` is still untouched and still computes its own
+(now-redundant) copies of every one of these signals — closing a blocker here
+does not make the legacy UI read from it.
+
+1. **Retractions.** `computeVerification` now filters `params.transactions`
+   through `isRetracted` (moved to a new leaf module, `rawTransactionFolds.ts`,
+   so `commitEngine.ts` and `verificationEngine.ts` both depend on it instead
+   of `verificationEngine.ts` depending sideways on `commitEngine.ts`) before
+   doing anything else. A RawTransaction with a live `Retraction` pointed at
+   it now disappears from both `transactions` and `tickers` entirely, not
+   just from the verdict. This closes the ENGINE-side half of the gap only —
+   `ImportPage.tsx`'s skip/dismiss/discard actions still don't emit a
+   `Retraction` (that requires editing `ImportPage.tsx`, out of scope this
+   phase), so nothing in production calls this path yet.
+2. **Evidence completion.** `findDateMisreadDuplicateHints`,
+   `findOrphanedFulfilledEvidence`, `mismatchResolver.suggestRemovalsToReconcile`,
+   and `netShareTimeline.findLastBalancedDate` are now called inside
+   `computeVerification`, with the same gating conditions `ImportPage.tsx`'s
+   own `useMemo`s applied. `reconcileSuggestion`'s `existingCostBasis` input
+   deliberately reproduces `ImportPage.tsx`'s fees/taxes-EXCLUSIVE formula
+   (`entryPrice * remainingShares`), not `PositionAggregate.costBasis` (which
+   includes fees/taxes) — those are different numbers and the avg-cost
+   ranking is sensitive to which one it's given. A new `contradicted-date-misread`
+   `EvidenceType` was added, explicitly excluded from the verdict fold's
+   `hasDirectMatch` check (advisory only, same as the legacy badge — it must
+   never itself force Rejected).
+3. **Wrong-ticker detection.** The hardcoded `[], []` committed-pool
+   arguments to `findWrongTickerCandidateKeys` are gone. In an all-
+   RawTransaction world there's no separate "committed" table, so every live
+   Buy/Sell entry in scope is reshaped into the same `{ticker, executionDate,
+   shares, entryPrice}` / `{..., sharesClosed, exitPrice}` pool the function
+   already expects, and doubles as its own comparison pool. Self-matches are
+   structurally impossible (the committed check requires a different ticker;
+   `findDateMisreadDuplicateHints`' requires a different, OCR-misread-shaped
+   date) — verified by a dedicated regression test, not just asserted.
+4. **Merge suggestions.** `ImportPage.tsx`'s `mergeSuggestions` signature
+   (sorted `side|shares|price|date` across a ticker's whole row set, gated to
+   all-low-confidence tickers, preferring a non-all-low-confidence sibling)
+   is ported verbatim into `computeVerification`'s per-batch pre-pass and
+   exposed as `TickerStatus.mergeSuggestion`.
+5. **Placeholder replacement.** `ImportPage.tsx`'s dateless-"Opening balance"-
+   lot detection is ported into `computeVerification`, sourced from
+   `PositionAggregate.openTrades` — already part of the existing
+   `VerifyAllParams` contract, no new input needed. Forward-compat caveat:
+   once a future Holdings Engine cutover replaces `TradeService.computePositions`
+   as the `positions` source, `openTrades[].notes` (the only signal this
+   reads) has no `LedgerEvent` equivalent yet.
+6. **Constraint Validation.** `constraintValidation.ts` needed no code
+   change — it was already a pure facts-in/report-out function with no
+   service imports of its own. `verificationEngine.ts` gained
+   `buildConstraintReport(ticker, params)`, composing `verifyTicker` +
+   `buildTickerConstraintReport` in one call from fields already sitting on
+   `TickerStatus` (items 2-5 above), so a future caller needs zero separate
+   calculation.
+
+New exports: `TickerStatus` gained `orphanedOrderEvidence`,
+`wrongTickerHintCount`, `dateMisreadHintCount`, `reconcileSuggestion`,
+`lastBalancedDate`, `mergeSuggestion`, `placeholderReplacement`. New function
+`buildConstraintReport`. `EvidenceType` gained `contradicted-date-misread`.
+`verifyAll`/`verifyTransaction`/`verifyAllDetailed`/`verifyTicker`'s existing
+signatures and behavior are unchanged.
 
 ## Tests
 
-- `verificationEngine.test.ts`: original 11 tests unchanged; a new
-  `verifyAllDetailed`/`verifyTicker` describe block additionally proves (a)
-  `verifyAllDetailed(...).transactions` is `toEqual` `verifyAll(...)` across
-  every existing scenario, and (b) `TickerStatus` fields match what
-  `checkTickerMatch` produces when called directly with the same inputs.
-- `commitEngine.test.ts`: original 23 tests unchanged; three new tests cross-
-  check `verifyAllDetailed`'s `matched` flag against `shouldCommit`'s
-  true/false decision and confirm reading the new API alongside
-  `commitTicker` doesn't perturb ledger/allocation output.
-- Full suite: 738 tests green (719 pre-existing + 19 new), `tsc --noEmit` and
-  `arch:check` clean.
+- `verificationEngine.test.ts`: 40 tests (21 from Phase 9.5 unchanged, plus
+  19 new Phase 9.6 tests — one per blocker's behavior, several cross-checking
+  the engine's output against calling the ported function directly with
+  equivalent inputs, using the real COMI/HRHO/CSAG/ORWE/PHAR historical
+  shapes from `docs/ROADMAP.md` where one exists for that blocker).
+- `commitEngine.test.ts`: 26 tests, unchanged since Phase 9.5 (the
+  `isRetracted` extraction into `rawTransactionFolds.ts` is a pure move, not
+  a behavior change).
+- Full suite: 751 tests green (738 from Phase 9.5 + 13 more once Phase 9.6's
+  additions are counted individually), `tsc --noEmit` and `arch:check` clean.

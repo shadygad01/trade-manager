@@ -8,16 +8,22 @@ import type {
 import type { ParsedTradeCandidate, ParsedOrderEvidence } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { Money } from "@domain/value-objects/Money";
 import {
   findCrossSourceVerifiedKeys,
   findAggregateStatementMatches,
   findWrongTickerCandidateKeys,
+  findDateMisreadDuplicateHints,
   suggestDuplicatePendingCandidateKeysToDelete,
   pendingCandidateSignature,
 } from "./duplicateDetection";
-import { findOrderConfirmedKeys, findWrongTickerHintsFromOrders } from "./orderEvidence";
+import { findOrderConfirmedKeys, findWrongTickerHintsFromOrders, findOrphanedFulfilledEvidence } from "./orderEvidence";
 import { checkTickerMatch, type TickerMatchStatus } from "./importVerification";
 import { latestByTicker } from "./reconciliation";
+import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "./mismatchResolver";
+import { findLastBalancedDate, type LastBalancedPoint } from "./netShareTimeline";
+import { buildTickerConstraintReport, type TickerConstraintReport } from "./constraintValidation";
+import { isRetracted } from "./rawTransactionFolds";
 import type { PositionAggregate } from "./TradeService";
 
 /**
@@ -43,7 +49,8 @@ export type EvidenceType =
   | "matched-position"
   | "matched-backfill"
   | "contradicted-wrong-ticker"
-  | "contradicted-position-mismatch";
+  | "contradicted-position-mismatch"
+  | "contradicted-date-misread";
 
 export interface EvidenceItem {
   type: EvidenceType;
@@ -124,6 +131,14 @@ function toPositionVerifications(transactions: RawTransaction[]): PositionVerifi
     });
 }
 
+/** Sorted side|shares|price|date signature of one ticker's whole buy/sell row set — ImportPage's own mergeSuggestions signature, ported verbatim (see computeVerification's merge-suggestion pre-pass). */
+function tickerRowSignature(tickerEntries: TradeCandidateEntry[]): string {
+  return tickerEntries
+    .map((e) => `${e.candidate.side}|${e.candidate.shares}|${e.candidate.price}|${e.candidate.date}`)
+    .sort()
+    .join(";");
+}
+
 /** Which OTHER document type corroborated a cross-source-verified entry — findCrossSourceVerifiedKeys itself only returns which keys are verified, not by which pairing, so this re-derives just the grouping (via the same exported signature key), not the decision logic. */
 function corroboratingSourceLabel(entry: TradeCandidateEntry, allEntries: TradeCandidateEntry[]): EvidenceType | undefined {
   const sig = pendingCandidateSignature(entry.candidate);
@@ -151,9 +166,17 @@ export interface VerifyAllParams {
  * caller keeps getting the exact same Map it always has.
  */
 function computeVerification(params: VerifyAllParams): VerificationResult {
-  const entries = toTradeCandidateEntries(params.transactions);
-  const orderEvidences = toOrderEvidences(params.transactions);
-  const verifications = toPositionVerifications(params.transactions);
+  // Blocker 1 (retractions): a RawTransaction with a live Retraction pointed
+  // at it is never a subject of verification again, permanently — same fold
+  // rule commitEngine.ts's relevantTradeTransactions already applies before
+  // a commit. Filtered once, up front, so every downstream computation
+  // (entries, order evidence, position verifications, and every hint below)
+  // automatically never sees a retracted row again.
+  const liveTransactions = params.transactions.filter((t) => !isRetracted(params.transactions, t.id));
+
+  const entries = toTradeCandidateEntries(liveTransactions);
+  const orderEvidences = toOrderEvidences(liveTransactions);
+  const verifications = toPositionVerifications(liveTransactions);
   const verificationByTicker = latestByTicker(verifications);
   const positionByTicker = new Map(params.positions.map((p) => [normalizeTicker(p.ticker), p]));
 
@@ -174,26 +197,85 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
   const duplicateKeysToReject = new Set(
     suggestDuplicatePendingCandidateKeysToDelete(entryPairs).filter((key) => !crossVerified.has(key))
   );
-  // No separately committed ledger exists at this layer, so the
-  // wrong-ticker/order hints only ever compare pending entries against each
-  // other and against order-history evidence — never against a "committed"
-  // pool, which is exactly what these functions already support (their
-  // committedTrades/committedAllocations parameters are for a maintenance
-  // scenario this layer doesn't have).
-  const wrongTickerHints = findWrongTickerCandidateKeys(entryPairs, [], []);
+  // Blocker 3 (wrong-ticker/date-misread accuracy): there is no separate
+  // "committed" table at this layer — every Buy/Sell RawTransaction in scope
+  // (this batch's and any earlier, already-settled one alike) IS the
+  // canonical history now, so it doubles as its own committed-comparison
+  // pool. Self-matches are structurally impossible: findWrongTickerCandidateKeys'
+  // committed check requires a DIFFERENT ticker than the row being checked,
+  // and findDateMisreadDuplicateHints' committed check requires a DIFFERENT
+  // (OCR-misread-shaped) date — neither can ever match a row against its own
+  // literal data. This is a strict superset of what a real, separately
+  // committed pool would have caught (every prior "committed" fact is
+  // included here too), so detection accuracy only ever grows, never shrinks.
+  const canonicalTrades = entries
+    .filter((e) => e.candidate.side === "BUY")
+    .map((e) => ({ ticker: e.candidate.ticker, executionDate: e.candidate.date, shares: e.candidate.shares, entryPrice: e.candidate.price }));
+  const canonicalAllocations = entries
+    .filter((e) => e.candidate.side === "SELL")
+    .map((e) => ({ ticker: e.candidate.ticker, executionDate: e.candidate.date, sharesClosed: e.candidate.shares, exitPrice: e.candidate.price }));
+  const wrongTickerHints = findWrongTickerCandidateKeys(entryPairs, canonicalTrades, canonicalAllocations);
   const wrongTickerOrderHints = findWrongTickerHintsFromOrders(entryPairs, orderEvidences);
+  // Blocker 2 (date-misread evidence completion): same canonical pool as
+  // wrong-ticker above — findDateMisreadDuplicateHints has no pending-vs-
+  // pending fallback of its own, so without a real committed-shaped pool it
+  // could never fire at all (see Phase 9.5's own gap notes).
+  const dateMisreadHints = findDateMisreadDuplicateHints(entryPairs, canonicalTrades, canonicalAllocations);
+  // Blocker 2 (orphaned order evidence): ticker-scoped, computed once over
+  // the whole batch — findOrphanedFulfilledEvidence already returns its
+  // result grouped by ticker.
+  const orphanedByTicker = findOrphanedFulfilledEvidence(entryPairs, orderEvidences);
 
-  const tickers = new Set(entries.map((e) => normalizeTicker(e.candidate.ticker)));
+  const entriesByTicker = new Map<string, TradeCandidateEntry[]>();
+  for (const e of entries) {
+    const ticker = normalizeTicker(e.candidate.ticker);
+    const bucket = entriesByTicker.get(ticker);
+    if (bucket) bucket.push(e);
+    else entriesByTicker.set(ticker, [e]);
+  }
+  const tickers = new Set(entriesByTicker.keys());
+
+  // Blocker 4 (merge suggestions): two ticker groups whose full buy/sell row
+  // sets are byte-for-byte identical (side|shares|price|date) are, for all
+  // practical purposes, the same upload read under two different guessed
+  // tickers — same signature/gating ImportPage's own mergeSuggestions used,
+  // ported verbatim (every ticker's signature feeds the grouping regardless
+  // of confidence; a SUGGESTION only fires for an all-low-confidence ticker,
+  // preferring a non-all-low-confidence sibling over the first one found).
+  const mergeSuggestions = new Map<string, string>();
+  {
+    const bySignature = new Map<string, string[]>();
+    for (const ticker of tickers) {
+      const sig = tickerRowSignature(entriesByTicker.get(ticker) ?? []);
+      if (!sig) continue;
+      const list = bySignature.get(sig) ?? [];
+      list.push(ticker);
+      bySignature.set(sig, list);
+    }
+    for (const ticker of tickers) {
+      const tickerEntries = entriesByTicker.get(ticker) ?? [];
+      if (tickerEntries.length === 0 || !tickerEntries.every((e) => e.candidate.confidence === "low")) continue;
+      const sig = tickerRowSignature(tickerEntries);
+      if (!sig) continue;
+      const siblings = (bySignature.get(sig) ?? []).filter((t) => t !== ticker);
+      if (siblings.length === 0) continue;
+      const preferred =
+        siblings.find((t) => !(entriesByTicker.get(t) ?? []).every((e) => e.candidate.confidence === "low")) ?? siblings[0];
+      mergeSuggestions.set(ticker, preferred);
+    }
+  }
+
   const tickerReason = new Map<string, ReturnType<typeof checkTickerMatch>>();
   // Additive: the same checkTickerMatch() result tickerReason has always
   // stored, tagged with its ticker — see TickerStatus/VerificationResult.
   // Populated at the same call site as tickerReason, never a second call.
   const tickerStatuses = new Map<string, TickerStatus>();
   for (const ticker of tickers) {
-    const tickerEntries = entries.filter((e) => normalizeTicker(e.candidate.ticker) === ticker);
+    const tickerEntries = entriesByTicker.get(ticker) ?? [];
     const pendingBuyShares = tickerEntries.filter((e) => e.candidate.side === "BUY").reduce((s, e) => s + e.candidate.shares, 0);
     const pendingSellShares = tickerEntries.filter((e) => e.candidate.side === "SELL").reduce((s, e) => s + e.candidate.shares, 0);
-    const existingRemainingShares = positionByTicker.get(ticker)?.totalShares ?? 0;
+    const position = positionByTicker.get(ticker);
+    const existingRemainingShares = position?.totalShares ?? 0;
     const verification = verificationByTicker.get(ticker);
     const allPendingFromInvoice = tickerEntries.every((e) => e.candidate.source === "invoice");
     const allPendingSelfVerified = tickerEntries.every((e) => crossVerified.has(e.key) || aggregatedKeys.has(e.key));
@@ -211,7 +293,70 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
       allPendingOrderConfirmed,
     });
     tickerReason.set(ticker, status);
-    tickerStatuses.set(ticker, { ticker, ...status });
+
+    const wrongTickerHintCount = tickerEntries.filter((e) => wrongTickerHints.has(e.key) || wrongTickerOrderHints.has(e.key)).length;
+    const dateMisreadHintCount = tickerEntries.filter((e) => dateMisreadHints.has(e.key)).length;
+
+    // Blocker 2 (reconcile suggestion): same gating ImportPage's own
+    // reconcileSuggestions applied — only once a mismatch is real (not
+    // already fully explained by an alreadyFullyRecorded ledger) and the
+    // broker's verified count is known. existingCostBasis intentionally
+    // reproduces ImportPage's own fees/taxes-EXCLUSIVE formula
+    // (entryPrice * remainingShares only), NOT PositionAggregate.costBasis
+    // (which includes fees/taxes pro-rated) — those are different numbers,
+    // and suggestRemovalsToReconcile's avg-cost ranking is sensitive to
+    // which one it's given.
+    let reconcileSuggestion: ReconcileSuggestion | undefined;
+    if (status.reason === "mismatch" && !status.alreadyFullyRecorded && status.verifiedUnits !== undefined) {
+      const openTrades = position?.openTrades ?? [];
+      const existingCostBasis = Money.sum(openTrades.map((t) => Money.from(t.entryPrice).multiply(t.remainingShares))).toNumber();
+      reconcileSuggestion = suggestRemovalsToReconcile({
+        rows: tickerEntries.map((e) => ({ key: e.key, side: e.candidate.side, shares: e.candidate.shares, price: e.candidate.price, confidence: e.candidate.confidence })),
+        existingRemainingShares,
+        existingCostBasis,
+        verifiedUnits: status.verifiedUnits,
+        verifiedAvgCost: status.verifiedAvgCost,
+      });
+    }
+
+    // Blocker 2 (last-balanced-date): same gating ImportPage applied — only
+    // meaningful once a ticker is unmatched.
+    const lastBalancedDate = status.matched
+      ? undefined
+      : findLastBalancedDate({
+          rows: tickerEntries.map((e) => ({ key: e.key, side: e.candidate.side, shares: e.candidate.shares, date: e.candidate.date })),
+          existingRemainingShares,
+        });
+
+    // Blocker 5 (placeholder replacement): same gating and same dateless-
+    // opening-balance-lot detection ImportPage's own placeholderReplacements
+    // applied, sourced from PositionAggregate.openTrades (already part of
+    // VerifyAllParams — no new input needed). Forward-compat caveat: once a
+    // future Holdings Engine cutover replaces this positions source,
+    // openTrades' `notes` field (the only signal this reads) has no
+    // Ledger-event equivalent yet — see the phase report.
+    let placeholderReplacement: string[] | undefined;
+    if (status.reason === "mismatch" && status.alreadyFullyRecorded && status.verifiedUnits !== undefined) {
+      const pendingNet = status.netShares - existingRemainingShares;
+      if (Math.abs(pendingNet - status.verifiedUnits) < 1e-6) {
+        const existingOpen = (position?.openTrades ?? []).filter((t) => t.remainingShares > 0);
+        const allDeletablePlaceholders =
+          existingOpen.length > 0 && existingOpen.every((t) => t.notes?.startsWith("Opening balance") && t.remainingShares === t.shares);
+        if (allDeletablePlaceholders) placeholderReplacement = existingOpen.map((t) => t.id);
+      }
+    }
+
+    tickerStatuses.set(ticker, {
+      ticker,
+      ...status,
+      orphanedOrderEvidence: orphanedByTicker.get(ticker) ?? [],
+      wrongTickerHintCount,
+      dateMisreadHintCount,
+      reconcileSuggestion,
+      lastBalancedDate,
+      mergeSuggestion: mergeSuggestions.get(ticker),
+      placeholderReplacement,
+    });
   }
 
   const VERIFIED_REASONS = new Set(["no-shares-to-verify", "closed-position", "invoice-verified", "cross-verified", "orders-verified", "matched"]);
@@ -264,6 +409,13 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
     const wrongTicker = wrongTickerHints.get(entry.key) ?? wrongTickerOrderHints.get(entry.key);
     if (wrongTicker) evidence.push({ type: "contradicted-wrong-ticker", detail: `Numbers match a fulfilled/committed row under ticker ${wrongTicker} instead.` });
 
+    // Advisory only, same contract as findDateMisreadDuplicateHints' own doc
+    // comment — never auto-merges/rejects anything, so deliberately excluded
+    // from both hasSpecificContradiction and hasDirectMatch below (a badge,
+    // not a verdict input).
+    const dateMisreadDate = dateMisreadHints.get(entry.key);
+    if (dateMisreadDate) evidence.push({ type: "contradicted-date-misread", detail: `Date may be a single-digit OCR misread of an execution already recorded on ${dateMisreadDate}.` });
+
     // Fold rule (four branches, checked in order):
     // 1. A confirmed duplicate (not the survivor) is a confident re-read of a real execution already represented elsewhere -> Rejected.
     // 2. A CONFIDENT, row-specific contradiction (wrong-ticker hint — numbers point at a different ticker
@@ -273,7 +425,9 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
     // 3. The ticker-level reconciliation is confidently settled and no row-specific contradiction exists -> Verified.
     // 4. Anything else (no evidence yet, an unresolved ticker-level mismatch, or no-verification) -> Needs Review.
     const hasSpecificContradiction = evidence.some((e) => e.type === "contradicted-wrong-ticker");
-    const hasDirectMatch = evidence.some((e) => e.type !== "contradicted-wrong-ticker" && e.type !== "contradicted-position-mismatch" && e.type !== "matched-position");
+    const hasDirectMatch = evidence.some(
+      (e) => e.type !== "contradicted-wrong-ticker" && e.type !== "contradicted-position-mismatch" && e.type !== "matched-position" && e.type !== "contradicted-date-misread"
+    );
     const tickerVerified = reason !== undefined && VERIFIED_REASONS.has(reason.reason);
 
     let verdict: VerificationVerdict;
@@ -312,6 +466,20 @@ export function verifyTransaction(transactionId: string, params: VerifyAllParams
  */
 export interface TickerStatus extends TickerMatchStatus {
   ticker: string;
+  /** Fulfilled order-history rows for this ticker with no matching pending candidate — same fact findOrphanedFulfilledEvidence surfaces, computed once per batch and split out per ticker here. Empty array (never undefined) when none exist. */
+  orphanedOrderEvidence: ParsedOrderEvidence[];
+  /** How many of this ticker's live Buy/Sell transactions carry a contradicted-wrong-ticker evidence item (see the per-transaction evidence list for which ones). */
+  wrongTickerHintCount: number;
+  /** How many of this ticker's live Buy/Sell transactions carry a contradicted-date-misread evidence item. */
+  dateMisreadHintCount: number;
+  /** mismatchResolver.suggestRemovalsToReconcile's result for this ticker — only computed once `reason==="mismatch"`, not `alreadyFullyRecorded`, and `verifiedUnits` is known (same gating the legacy caller applied). */
+  reconcileSuggestion?: ReconcileSuggestion;
+  /** netShareTimeline.findLastBalancedDate's result for this ticker — only computed while unmatched (same gating the legacy caller applied). */
+  lastBalancedDate?: LastBalancedPoint;
+  /** Another ticker in the same batch whose entire Buy/Sell row set is byte-for-byte identical to this one's — the same-execution-under-two-ticker-guesses shape ImportPage's own mergeSuggestions already flagged. */
+  mergeSuggestion?: string;
+  /** Existing open-Trade ids that are safely-deletable dateless "Opening balance" placeholders whose removal would let this batch's real dated rows verify instead of being discarded — requires the caller's PositionAggregate to carry `openTrades` (already part of the existing contract). */
+  placeholderReplacement?: string[];
 }
 
 export interface VerificationResult {
@@ -334,4 +502,26 @@ export function verifyAllDetailed(params: VerifyAllParams): VerificationResult {
 /** Ticker-level counterpart to verifyTransaction — the TickerStatus for one ticker, or undefined if that ticker has no Buy/Sell transactions in `params.transactions`. */
 export function verifyTicker(ticker: string, params: VerifyAllParams): TickerStatus | undefined {
   return computeVerification(params).tickers.get(normalizeTicker(ticker));
+}
+
+/**
+ * Blocker 6 (Constraint Validation): buildTickerConstraintReport
+ * (constraintValidation.ts) has always been a pure facts-in/report-out
+ * function — it never called duplicateDetection/orderEvidence/
+ * mismatchResolver/netShareTimeline itself, a caller always had to. This is
+ * that caller: every DiagnosisInputs field it needs is now already sitting
+ * on TickerStatus, computed once, here. No calculation is duplicated —
+ * constraintValidation.ts itself is untouched.
+ */
+export function buildConstraintReport(ticker: string, params: VerifyAllParams): TickerConstraintReport | undefined {
+  const status = verifyTicker(ticker, params);
+  if (!status) return undefined;
+  return buildTickerConstraintReport(ticker, status, {
+    reconcileSuggestion: status.reconcileSuggestion,
+    lastBalancedDate: status.lastBalancedDate,
+    wrongTickerHintCount: status.wrongTickerHintCount,
+    dateMisreadHintCount: status.dateMisreadHintCount,
+    orphanedOrderEvidenceCount: status.orphanedOrderEvidence.length,
+    discrepancySide: status.discrepancySide,
+  });
 }

@@ -10,6 +10,7 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { verifyAll } from "./verificationEngine";
 import { generateLedgerEvents } from "./ledgerEngine";
 import { generateAllocations } from "./allocationEngine";
+import { isRetracted } from "./rawTransactionFolds";
 
 /**
  * Commit Engine: the only code path that ever writes to ledgerCache /
@@ -79,11 +80,6 @@ function resolveCurrentTicker(all: RawTransaction[], transaction: RawTransaction
   if (corrections.length === 0) return transaction.ticker;
   const latest = corrections.reduce((a, b) => (b.seq > a.seq ? b : a));
   return (latest.payload as CorrectionPayload).patch.ticker;
-}
-
-/** Whether any Retraction targets `transactionId` — a retracted row is never a subject of commit or assignment again, permanently. */
-function isRetracted(all: RawTransaction[], transactionId: string): boolean {
-  return all.some((t) => t.kind === "Retraction" && (t.payload as RetractionPayload).targetId === transactionId);
 }
 
 async function relevantTradeTransactions(repos: CommitEngineRepos, portfolioId: string, ticker: string) {
