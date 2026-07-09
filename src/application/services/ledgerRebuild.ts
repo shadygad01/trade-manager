@@ -65,24 +65,23 @@ export interface CanonicalTrade {
   sourceUploadIds: string[];
 }
 
-function canonicalKey(c: { side: "BUY" | "SELL"; ticker: string; date: string; shares: number; price: number }): string {
+/** Exported so a caller with a canonicalization-worthy entry pool that isn't shaped like Upload[] (e.g. the Ledger Engine, over RawTransactions) can derive the same deterministic identity for "one real execution" without re-deriving the formula. */
+export function canonicalKey(c: { side: "BUY" | "SELL"; ticker: string; date: string; shares: number; price: number }): string {
   return `${normalizeTicker(c.ticker)}|${c.side}|${c.date}|${c.shares}|${c.price}`;
 }
 
 /**
- * Collapses every parsed candidate across every Upload into the set of
- * canonical facts that should exist: one entry per real execution, whether
- * it was read once or corroborated by several documents. See the module
- * doc comment for which existing functions this reuses and why.
+ * The reusable core of buildCanonicalTrades, split out so a caller whose
+ * entries didn't come from Upload.candidates (e.g. the Ledger Engine, over
+ * RawTransactions) can still reuse this exact dedup/aggregation pipeline.
+ * `uploadId` on each entry is "whatever backing document/fact this candidate
+ * traces back to" — an Upload id for buildCanonicalTrades' own callers, but
+ * just as validly a RawTransaction's own id when there's no separate Upload
+ * concept at the caller's layer.
  */
-export function buildCanonicalTrades(uploads: Upload[]): { buys: CanonicalTrade[]; sells: CanonicalTrade[] } {
-  const allEntries: { key: string; candidate: ParsedTradeCandidate; uploadId: string }[] = [];
-  for (const upload of uploads) {
-    if (upload.status !== "parsed") continue;
-    upload.candidates.forEach((candidate, i) => {
-      allEntries.push({ key: `${upload.id}#${i}`, candidate, uploadId: upload.id });
-    });
-  }
+export function canonicalizeTradeEntries(
+  allEntries: { key: string; candidate: ParsedTradeCandidate; uploadId: string }[]
+): { buys: CanonicalTrade[]; sells: CanonicalTrade[] } {
   if (allEntries.length === 0) return { buys: [], sells: [] };
 
   // Statement rows that aggregate several other-source executions are
@@ -146,6 +145,23 @@ export function buildCanonicalTrades(uploads: Upload[]): { buys: CanonicalTrade[
     (canonical.side === "BUY" ? buys : sells).push(canonical);
   }
   return { buys, sells };
+}
+
+/**
+ * Collapses every parsed candidate across every Upload into the set of
+ * canonical facts that should exist: one entry per real execution, whether
+ * it was read once or corroborated by several documents. See the module
+ * doc comment for which existing functions this reuses and why.
+ */
+export function buildCanonicalTrades(uploads: Upload[]): { buys: CanonicalTrade[]; sells: CanonicalTrade[] } {
+  const allEntries: { key: string; candidate: ParsedTradeCandidate; uploadId: string }[] = [];
+  for (const upload of uploads) {
+    if (upload.status !== "parsed") continue;
+    upload.candidates.forEach((candidate, i) => {
+      allEntries.push({ key: `${upload.id}#${i}`, candidate, uploadId: upload.id });
+    });
+  }
+  return canonicalizeTradeEntries(allEntries);
 }
 
 export interface TradeFieldChange {
