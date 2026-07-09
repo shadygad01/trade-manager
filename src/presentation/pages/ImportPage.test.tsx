@@ -1506,3 +1506,124 @@ describe("TickerGroupCard — Orders timeline evidence", () => {
     expect(screen.getByText("No matching order")).toBeInTheDocument();
   });
 });
+
+describe("TickerGroupCard — constraint validation layer (facts first, diagnosis only after a contradiction)", () => {
+  it("reports the constraint as satisfied, with no Contradiction/Diagnosis text, for a matched ticker", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [buyEntry("b1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: true,
+          reason: "matched",
+          netShares: 30,
+          existingRemainingShares: 0,
+          pendingBuyShares: 30,
+          pendingSellShares: 0,
+          verifiedUnits: 30,
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Constraint check")).toBeInTheDocument();
+    expect(screen.getByText("Facts reconcile — no contradiction")).toBeInTheDocument();
+    expect(screen.getByText(/Opening 0 \+ Buy 30 − Sell 0 = Calculated 30/)).toBeInTheDocument();
+    expect(screen.queryByText("Diagnosis (after contradiction, never before)")).not.toBeInTheDocument();
+  });
+
+  it("reports an objective Contradiction with Expected/Calculated/Difference, plus a Diagnosis, for a genuine mismatch", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [buyEntry("b1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "mismatch",
+          netShares: 120,
+          existingRemainingShares: 0,
+          pendingBuyShares: 120,
+          pendingSellShares: 0,
+          verifiedUnits: 100,
+          discrepancySide: "buy",
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Contradiction")).toBeInTheDocument();
+    expect(screen.getByText(/Expected 100, Calculated 120, Difference 20/)).toBeInTheDocument();
+    expect(screen.getByText("Diagnosis (after contradiction, never before)")).toBeInTheDocument();
+    expect(screen.getByText(/An extra or duplicate Buy transaction is likely already on the ledger/)).toBeInTheDocument();
+  });
+
+  it("does not render the panel when the ticker has no Buy/Sell rows at all (dividend/verification-only)", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "no-shares-to-verify", netShares: 0 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.queryByText("Constraint check")).not.toBeInTheDocument();
+  });
+});

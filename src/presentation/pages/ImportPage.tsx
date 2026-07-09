@@ -28,6 +28,7 @@ import {
 } from "@application/services/orderEvidence";
 import { suggestRemovalsToReconcile, MAX_RECONCILE_ROWS, type ReconcileSuggestion } from "@application/services/mismatchResolver";
 import { findLastBalancedDate } from "@application/services/netShareTimeline";
+import { buildTickerConstraintReport, type TickerConstraintReport } from "@application/services/constraintValidation";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -1774,6 +1775,70 @@ export function ImportPage() {
   );
 }
 
+function confidenceText(t: TFunction, confidence: "high" | "medium" | "low"): string {
+  if (confidence === "high") return t("importPage.constraintConfidenceHigh");
+  if (confidence === "medium") return t("importPage.constraintConfidenceMedium");
+  return t("importPage.constraintConfidenceLow");
+}
+
+/**
+ * Facts first, contradiction second, diagnosis only ever after that — see
+ * constraintValidation.ts. Purely additive/read-only: renders whatever
+ * checkTickerMatch + the existing diagnosis signals already produced,
+ * changes nothing about the banners/badges above and below it.
+ */
+function ConstraintReportPanel({ report, t }: { report: TickerConstraintReport; t: TFunction }) {
+  const { facts, contradictions, diagnosis } = report;
+  return (
+    <details className="border-b border-slate-800 px-4 py-2 text-xs text-slate-400">
+      <summary className="cursor-pointer select-none font-medium text-slate-300">
+        {t("importPage.constraintReportTitle")}
+        {report.satisfied ? (
+          <span className="ms-2 text-emerald-400">{t("importPage.constraintSatisfied")}</span>
+        ) : (
+          <span className="ms-2 text-rose-400">{t("importPage.constraintContradictionTitle")}</span>
+        )}
+      </summary>
+      <div className="mt-2 space-y-1.5">
+        <p>
+          {t("importPage.constraintFactsLine", {
+            opening: formatShares(facts.openingShares),
+            buy: formatShares(facts.buyShares),
+            sell: formatShares(facts.sellShares),
+            calculated: formatShares(facts.calculatedRemaining),
+            holdingsSuffix:
+              facts.holdingsRemaining !== undefined
+                ? t("importPage.constraintFactsHoldingsSuffix", { holdings: formatShares(facts.holdingsRemaining) })
+                : "",
+          })}
+        </p>
+        {facts.closed ? <p className="text-slate-500">{t("importPage.constraintClosedPositionNote")}</p> : null}
+        {contradictions.map((c, i) => (
+          <p key={i} className="text-rose-300">
+            {t("importPage.constraintContradictionLine", {
+              expected: formatShares(c.expected),
+              calculated: formatShares(c.calculated),
+              difference: formatShares(c.difference),
+            })}
+          </p>
+        ))}
+        {diagnosis.length > 0 ? (
+          <div className="mt-1.5 border-t border-slate-800 pt-1.5">
+            <p className="font-medium text-slate-300">{t("importPage.constraintDiagnosisTitle")}</p>
+            <ul className="mt-1 list-disc ps-4">
+              {diagnosis.map((d, i) => (
+                <li key={i}>
+                  {d.explanation} — {t("importPage.constraintDiagnosisConfidence", { confidence: confidenceText(t, d.confidence) })}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </details>
+  );
+}
+
 export function TickerGroupCard({
   ticker,
   group,
@@ -1975,6 +2040,42 @@ export function TickerGroupCard({
   }, [group.buys, group.sells, addedKeys, skippedKeys, dismissedKeys, suspectedDuplicateKeys]);
   const netAfterDiscardingDuplicates = (matchStatus?.netShares ?? 0) - duplicateFlaggedNet;
 
+  /**
+   * Constraint Validation Layer: consumes checkTickerMatch's own already-
+   * computed output (matchStatus) plus the other diagnosis signals this card
+   * already has in scope (reconcileSuggestion, lastBalanced,
+   * wrongTickerHints/dateMisreadHints, orphanedOrderEvidence) — recomputes
+   * nothing. See constraintValidation.ts: facts first, objective
+   * contradiction second, diagnosis only ever after that.
+   */
+  const constraintReport = useMemo(() => {
+    if (!matchStatus || group.buys.length + group.sells.length === 0) return undefined;
+    const stillPendingRows = [...group.buys, ...group.sells].filter(
+      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    );
+    return buildTickerConstraintReport(ticker, matchStatus, {
+      reconcileSuggestion,
+      lastBalancedDate: lastBalanced,
+      wrongTickerHintCount: stillPendingRows.filter((e) => wrongTickerHints?.has(e.key)).length,
+      dateMisreadHintCount: stillPendingRows.filter((e) => dateMisreadHints?.has(e.key)).length,
+      orphanedOrderEvidenceCount: orphanedOrderEvidence?.length ?? 0,
+      discrepancySide: matchStatus.discrepancySide,
+    });
+  }, [
+    ticker,
+    matchStatus,
+    group.buys,
+    group.sells,
+    addedKeys,
+    skippedKeys,
+    dismissedKeys,
+    reconcileSuggestion,
+    lastBalanced,
+    wrongTickerHints,
+    dateMisreadHints,
+    orphanedOrderEvidence,
+  ]);
+
   function confirmRename() {
     onRenameTicker(draftTicker);
     setRenaming(false);
@@ -2109,6 +2210,7 @@ export function TickerGroupCard({
           ) : null}
         </div>
       </div>
+      {constraintReport ? <ConstraintReportPanel report={constraintReport} t={t} /> : null}
       {matchStatus?.reason === "matched" && (matchStatus.existingRemainingShares ?? 0) > 0 ? (
         <div className="border-b border-slate-800 bg-emerald-500/5 px-4 py-2 text-xs text-slate-400">
           {t("importPage.matchesBrokerBanner", {
