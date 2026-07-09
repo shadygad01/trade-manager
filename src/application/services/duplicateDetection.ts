@@ -84,7 +84,8 @@ function timesConflict(a?: string, b?: string): boolean {
  * even when its date/shares/price would otherwise look like a match. A
  * conflicting execution time (see timesConflict) does the same.
  */
-function findMatch(
+/** Exported so callers with a comparison pool that isn't shaped like Trade[]/TradeAllocation[] (e.g. the Verification Engine, comparing raw transactions against each other) can reuse this exact matching rule instead of re-deriving it. */
+export function findMatch(
   candidate: { ticker: string; date: string; shares: number; time?: string; transactionNumber?: string },
   candidatePrice: number,
   existing: { id: string; ticker: string; date: string; shares: number; price: number; executionTime?: string; transactionNumber?: string }[]
