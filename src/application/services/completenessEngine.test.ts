@@ -97,6 +97,22 @@ describe("completenessEngine — Historical Ledger Completeness Engine", () => {
     expect(report.estimatedMissingShares).toBe(16); // |34 - 50|
   });
 
+  it("CSAG: orphaned Orders-history evidence names the exact missing execution (ticker/date/shares) the minimal-document-request business rule requires", () => {
+    // Matches the business rule's own worked example verbatim: CSAG, 14 Jan
+    // 2026, 20 shares, Orders+Statement already prove it happened, Invoice
+    // is the only missing evidence.
+    const closedPair1 = buy({ id: "c1", ticker: "CSAG", shares: 10, executionDate: "2025-12-01" });
+    const closedPair2 = sell({ id: "c2", ticker: "CSAG", shares: 10, executionDate: "2025-12-15" }); // reconciles to 0
+    const orphaned = orderEvidence({ ticker: "CSAG", side: "BUY", shares: 20, price: 41.5, date: "2026-01-14" });
+    const params: VerifyAllParams = { transactions: [closedPair1, closedPair2, orphaned], positions: [emptyPosition("CSAG")] };
+    const status = verifyTicker("CSAG", params)!;
+
+    const report = assessTickerCompleteness(status);
+    expect(report.status).toBe("Incomplete");
+    expect(report.recoveryPlan?.bestEvidence).toBe("Broker Statement");
+    expect(report.recoveryPlan?.expectedExecution).toEqual({ ticker: "CSAG", side: "BUY", date: "2026-01-14", shares: 20 });
+  });
+
   it("ORWE: orphaned fulfilled Orders-history evidence gives a DIRECT, non-estimated missing count/shares/window, and the highest recovery confidence tier", () => {
     // No broker "My Position" screenshot at all here. A fully closed
     // buy+sell pair establishes a real lastBalancedDate first, so the

@@ -39,11 +39,21 @@ export type EvidenceDocumentType = "Orders History" | "Broker Statement" | "Invo
  * statistical or ML prediction; nothing in this codebase has ever measured a
  * real recovery-success rate, and this module does not claim to.
  */
+/** The specific execution the recovery plan is asking evidence for, when direct Orders-history evidence already names it — never fabricated: undefined whenever the gap isn't pinned to one specific transaction (a bounded/unbounded arithmetic gap has a date range or nothing at all, never a single named execution). */
+export interface ExpectedExecution {
+  ticker: string;
+  side: "BUY" | "SELL";
+  date?: string;
+  shares?: number;
+}
+
 export interface RecoveryPlan {
   bestEvidence: EvidenceDocumentType;
   alternativeEvidence?: EvidenceDocumentType;
   estimatedRecoverySuccess: number;
   rationale: string;
+  /** Present only in the direct-evidence case (an orphaned Orders-history row names the missing transaction exactly) — see ExpectedExecution. */
+  expectedExecution?: ExpectedExecution;
 }
 
 export interface TickerCompletenessReport {
@@ -193,11 +203,18 @@ function recoveryPlan(status: TickerStatus, classification: LedgerCompletenessSt
   const open = isOpenPosition(status);
 
   if (status.orphanedOrderEvidence.length > 0) {
+    // The first orphaned row only — multiple orphaned rows mean multiple
+    // separate gaps, each needing its own request; this plan names ONE
+    // concrete execution, per the minimal-request business rule ("exactly
+    // which ticker, exactly which date, exactly which execution" — never a
+    // bundled "here's everything still missing").
+    const named = status.orphanedOrderEvidence[0];
     return {
       bestEvidence: "Broker Statement",
       alternativeEvidence: "Invoice",
       estimatedRecoverySuccess: RECOVERY_CONFIDENCE.directEvidence,
       rationale: "Orders History already names the missing transaction's ticker/side/shares/date — a Statement or Invoice for that date closes the gap directly.",
+      expectedExecution: { ticker: status.ticker, side: named.side, date: named.date, shares: named.shares },
     };
   }
   // Open with no independent broker count at all (never "mismatch" — that

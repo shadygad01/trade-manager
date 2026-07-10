@@ -36,6 +36,10 @@ export interface ParsedTradeCandidate {
    * cross-verification rule) but never with each other.
    */
   source?: "statement" | "invoice" | "orders-screen" | "csv";
+  /** How this candidate's text was obtained — see RawTransaction.ExtractionMethod's own doc comment. */
+  extractionMethod?: "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry";
+  /** Which released BrokerParser version produced this candidate — see RawTransaction.parserVersion's own doc comment. */
+  parserVersion?: string;
   /**
    * Broker-assigned unique execution identifier (e.g. Thndr's Invoice
    * "Transaction No.", like "N000248458443") — the single most reliable
@@ -88,6 +92,10 @@ export interface ParsedOrderEvidence {
   /** Execution date (ISO), set only for the dated "Transactions" list shape — see the interface doc comment. */
   date?: string;
   time?: string;
+  /** How this evidence row's text was obtained — see RawTransaction.ExtractionMethod's own doc comment. */
+  extractionMethod?: "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry";
+  /** Which released BrokerParser version produced this evidence — see RawTransaction.parserVersion's own doc comment. */
+  parserVersion?: string;
 }
 
 /** A dividend payout read from a broker's "My Position" / dividends history screen. */

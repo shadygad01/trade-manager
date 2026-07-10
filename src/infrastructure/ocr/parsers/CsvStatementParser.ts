@@ -132,6 +132,8 @@ const EMPTY_ROWS_RESULT: OrderRowsParseResult = {
 
 export class CsvStatementParser implements BrokerParser {
   readonly id = "csv-generic";
+  /** Bump whenever a regex/extraction fix changes what this parser reads — see BrokerParser.version's own doc comment. */
+  readonly version = "1.0.0";
   // Left undefined by default so the cutoff is resolved fresh on every call
   // (via defaultTrackedSince()) rather than frozen at construction time —
   // see ThndrParser's identical trackedSinceOverride for why.
