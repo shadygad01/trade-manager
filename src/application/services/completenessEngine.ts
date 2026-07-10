@@ -1,4 +1,5 @@
 import { verifyAllDetailed, verifyTicker, type TickerStatus, type VerifyAllParams } from "./verificationEngine";
+import { buildCoverageClaims, isDateAlreadyCovered, hasOrdersHistoryFor, type CoverageClaim } from "./evidenceCoverage";
 
 /**
  * Historical Ledger Completeness Engine. A different question than
@@ -198,7 +199,42 @@ function isOpenPosition(status: TickerStatus): boolean {
  * Phase 5 — persisting original documents), not just which rows matched.
  * Documented as a known simplification, not hidden.
  */
-function recoveryPlan(status: TickerStatus, classification: LedgerCompletenessStatus): RecoveryPlan | undefined {
+/**
+ * True when `type`'s coverage for this gap is already on file — recommending
+ * it again would ask for a document that, per the Evidence Coverage Engine,
+ * was already uploaded and evidently either doesn't contain the missing row
+ * or wasn't extracted correctly from it. Either way it "cannot increase
+ * confidence" (this plan's own business rule) the way a genuinely new
+ * document type could. Invoice is deliberately never considered covered —
+ * a per-transaction Invoice for a specific date is never superseded by any
+ * account-wide document already on file.
+ */
+function isAlreadyCovered(type: EvidenceDocumentType, status: TickerStatus, gapDate: string | undefined, claims: CoverageClaim[]): boolean {
+  if (type === "Invoice") return false;
+  if (type === "Orders History") return hasOrdersHistoryFor(status.ticker, claims);
+  if ((type === "Broker Statement" || type === "Transactions") && gapDate) return isDateAlreadyCovered(gapDate, claims);
+  return false;
+}
+
+/**
+ * Swaps a covered `bestEvidence` for its alternative, and a covered
+ * alternative for Invoice as the final fallback (see isAlreadyCovered) —
+ * applied once, uniformly, after each branch below picks its answer on the
+ * merits, so every branch's own reasoning stays untouched by coverage.
+ */
+function skipAlreadyCovered(plan: RecoveryPlan, status: TickerStatus, gapDate: string | undefined, claims: CoverageClaim[]): RecoveryPlan {
+  if (claims.length === 0) return plan;
+  if (!isAlreadyCovered(plan.bestEvidence, status, gapDate, claims)) return plan;
+  const next = plan.alternativeEvidence && !isAlreadyCovered(plan.alternativeEvidence, status, gapDate, claims) ? plan.alternativeEvidence : "Invoice";
+  return {
+    ...plan,
+    bestEvidence: next,
+    alternativeEvidence: next === "Invoice" ? undefined : "Invoice",
+    rationale: `${plan.rationale} (${plan.bestEvidence} was already uploaded for this ticker/date and didn't resolve it — asking for it again can't increase confidence, so ${next} is recommended instead.)`,
+  };
+}
+
+function recoveryPlan(status: TickerStatus, classification: LedgerCompletenessStatus, coverageClaims: CoverageClaim[] = []): RecoveryPlan | undefined {
   if (classification !== "Incomplete") return undefined;
   const open = isOpenPosition(status);
 
@@ -209,19 +245,23 @@ function recoveryPlan(status: TickerStatus, classification: LedgerCompletenessSt
     // which ticker, exactly which date, exactly which execution" — never a
     // bundled "here's everything still missing").
     const named = status.orphanedOrderEvidence[0];
-    return {
+    const plan: RecoveryPlan = {
       bestEvidence: "Broker Statement",
       alternativeEvidence: "Invoice",
       estimatedRecoverySuccess: RECOVERY_CONFIDENCE.directEvidence,
       rationale: "Orders History already names the missing transaction's ticker/side/shares/date — a Statement or Invoice for that date closes the gap directly.",
       expectedExecution: { ticker: status.ticker, side: named.side, date: named.date, shares: named.shares },
     };
+    return skipAlreadyCovered(plan, status, named.date, coverageClaims);
   }
   // Open with no independent broker count at all (never "mismatch" — that
   // reason means a count already exists) — the single most direct document
   // is the broker's own current-holdings screen, per business rule "if the
   // ticker is still open, request My Position."
   if (open && status.reason === "no-verification") {
+    // My Position is never subject to skipAlreadyCovered: a fresh screenshot
+    // always reflects the CURRENT count, so an earlier one is never "already
+    // covered" the way a historical document's fixed window can be.
     return {
       bestEvidence: "My Position",
       alternativeEvidence: "Orders History",
@@ -230,7 +270,7 @@ function recoveryPlan(status: TickerStatus, classification: LedgerCompletenessSt
     };
   }
   if (status.lastBalancedDate) {
-    return {
+    const plan: RecoveryPlan = {
       // Transactions (account-wide, dated) is the cheaper, more exhaustive
       // ask than Orders History here -- the undated "Orders" timeline shape
       // can't pinpoint a date at all, while the dated "Transactions" list
@@ -244,17 +284,29 @@ function recoveryPlan(status: TickerStatus, classification: LedgerCompletenessSt
       estimatedRecoverySuccess: RECOVERY_CONFIDENCE.boundedGap,
       rationale: `Everything through ${status.lastBalancedDate.date} reconciles exactly -- evidence dated after that date (a Transactions screen, or an Orders History screenshot for this ticker) would show precisely what's missing.`,
     };
+    return skipAlreadyCovered(plan, status, undefined, coverageClaims);
   }
-  return {
+  const plan: RecoveryPlan = {
     bestEvidence: "Orders History",
     alternativeEvidence: "Broker Statement",
     estimatedRecoverySuccess: RECOVERY_CONFIDENCE.unboundedGap,
     rationale: "No point in this ticker's history reconciles to zero — the gap isn't confined to a date range; a full account-wide Orders History covering this ticker's entire lifetime is the strongest single document.",
   };
+  return skipAlreadyCovered(plan, status, undefined, coverageClaims);
 }
 
-/** The single entry point: TickerStatus in, a full completeness report out. Never recomputes anything verifyAllDetailed/verifyTicker didn't already compute. */
-export function assessTickerCompleteness(status: TickerStatus): TickerCompletenessReport {
+/**
+ * The single entry point: TickerStatus in, a full completeness report out.
+ * Never recomputes anything verifyAllDetailed/verifyTicker didn't already
+ * compute. `coverageClaims` is optional (defaults to none, identical to this
+ * function's behavior before the Evidence Coverage Engine existed) — pass
+ * `buildCoverageClaims(params.transactions)` to let the recovery plan skip
+ * recommending a document type already on file for this gap (see
+ * evidenceCoverage.ts). assessSingleTicker/assessAllTickersCompleteness
+ * below compute it automatically; call this directly only when you have a
+ * bare TickerStatus with no RawTransaction[] in scope.
+ */
+export function assessTickerCompleteness(status: TickerStatus, coverageClaims: CoverageClaim[] = []): TickerCompletenessReport {
   const classification = classify(status);
   const estimate = classification === "Incomplete" ? estimateMissing(status) : {};
   return {
@@ -264,20 +316,21 @@ export function assessTickerCompleteness(status: TickerStatus): TickerCompletene
     missingWindow: classification === "Incomplete" ? missingWindow(status) : undefined,
     estimatedMissingTransactions: estimate.transactions,
     estimatedMissingShares: estimate.shares,
-    recoveryPlan: recoveryPlan(status, classification),
+    recoveryPlan: recoveryPlan(status, classification, coverageClaims),
   };
 }
 
 /** Ticker-level counterpart, mirroring verificationEngine's verifyTicker — one ticker's report, or undefined if it has no Buy/Sell transactions in scope. */
 export function assessSingleTicker(ticker: string, params: VerifyAllParams): TickerCompletenessReport | undefined {
   const status = verifyTicker(ticker, params);
-  return status ? assessTickerCompleteness(status) : undefined;
+  return status ? assessTickerCompleteness(status, buildCoverageClaims(params.transactions)) : undefined;
 }
 
 /** Every ticker in scope, in one call — the batch counterpart to assessSingleTicker. */
 export function assessAllTickersCompleteness(params: VerifyAllParams): Map<string, TickerCompletenessReport> {
   const { tickers } = verifyAllDetailed(params);
+  const claims = buildCoverageClaims(params.transactions);
   const reports = new Map<string, TickerCompletenessReport>();
-  for (const [ticker, status] of tickers) reports.set(ticker, assessTickerCompleteness(status));
+  for (const [ticker, status] of tickers) reports.set(ticker, assessTickerCompleteness(status, claims));
   return reports;
 }

@@ -3,6 +3,7 @@ import type { Upload } from "@domain/entities/Upload";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { verifyAllDetailed, type VerifyAllParams, type EvidenceType } from "./verificationEngine";
 import { assessTickerCompleteness, type TickerCompletenessReport } from "./completenessEngine";
+import { buildCoverageClaims } from "./evidenceCoverage";
 
 /**
  * Evidence Graph: a read-only VIEW composing what verificationEngine.ts and
@@ -188,7 +189,7 @@ export function buildEvidenceGraph(ticker: string, params: VerifyAllParams, uplo
   }
 
   if (tickerStatus) {
-    const completeness = assessTickerCompleteness(tickerStatus);
+    const completeness = assessTickerCompleteness(tickerStatus, buildCoverageClaims(params.transactions));
     nodes.push({
       kind: "ticker-position",
       id: tickerNodeId(normalizedTicker),
