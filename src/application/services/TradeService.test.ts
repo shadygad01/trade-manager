@@ -214,7 +214,7 @@ describe("deleteTrade", () => {
   });
 
   describe("migration dual-write", () => {
-    it("retracts the matching RawTransaction so a re-commit can't resurrect the deleted trade", async () => {
+    it("retracts EVERY live matching RawTransaction so a re-commit can't resurrect the deleted trade — including the fact recordBuy itself now writes (Phase 9.8)", async () => {
       const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
       const { trade } = await recordBuy(repos, {
         portfolioId: "p1",
@@ -224,7 +224,9 @@ describe("deleteTrade", () => {
         executionDate: "2026-01-05",
         executionTime: "10:30",
       });
-      // Mirrors what backfill/import would already have written for this exact trade.
+      // A second, duplicate fact for the same execution (as an earlier
+      // backfill would have written) — deleteTrade must retract BOTH, or the
+      // survivor would re-project the deleted trade on the next commit.
       const payload: BuyExecutionPayload = { ticker: "COMI", shares: 10, price: 50, executionDate: "2026-01-05", executionTime: "10:30" };
       const raw = await repos.rawTransactions.append(
         createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: "p1", ticker: "COMI", payload }),
@@ -235,15 +237,22 @@ describe("deleteTrade", () => {
       await deleteTrade(repos, trade.id);
 
       const retractions = (await repos.rawTransactions.getAll()).filter((t) => t.kind === "Retraction");
-      expect(retractions).toHaveLength(1);
-      expect((retractions[0].payload as { targetId: string }).targetId).toBe(raw.id);
+      expect(retractions).toHaveLength(2);
+      expect(new Set(retractions.map((r) => (r.payload as { targetId: string }).targetId))).toEqual(new Set([trade.id, raw.id]));
       // The retraction's own commit trigger already cleared the cache.
       expect(await repos.committedLedger.getLedgerEvents("p1", "COMI")).toEqual([]);
+      // And the legacy projection converged to the same answer: the trade stays deleted.
+      expect(await repos.trades.getById(trade.id)).toBeUndefined();
+      expect((await repos.trades.getByPortfolio("p1")).filter((t) => t.ticker === "COMI")).toEqual([]);
     });
 
-    it("is a harmless no-op when no matching RawTransaction exists (a trade recorded before this dual-write existed)", async () => {
-      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
-      const { trade } = await recordBuy(repos, {
+    it("is a harmless no-op when no matching RawTransaction exists (a trade recorded before any fact writer existed)", async () => {
+      // The trade is created against a repos bundle WITHOUT the raw log (so
+      // recordBuy's own Phase 9.8 fact writer stays dormant), then deleted
+      // against one WITH it — the exact shape of a trade recorded before the
+      // dual-write shipped.
+      const legacyOnly = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+      const { trade } = await recordBuy(legacyOnly, {
         portfolioId: "p1",
         ticker: "COMI",
         shares: 10,
@@ -252,6 +261,7 @@ describe("deleteTrade", () => {
         executionTime: "10:30",
       });
 
+      const repos = withMigrationRepos(legacyOnly);
       await expect(deleteTrade(repos, trade.id)).resolves.toBeUndefined();
       expect((await repos.rawTransactions.getAll())).toHaveLength(0);
     });
@@ -448,7 +458,10 @@ describe("renameTickerEverywhere", () => {
       await renameTickerEverywhere(repos, "ZZZZ", "COMI");
 
       const all = await repos.rawTransactions.getAll();
-      expect(all.filter((t) => t.kind === "Correction")).toHaveLength(1);
+      // Two live ZZZZ facts exist by the time the rename runs — the one
+      // recordBuy itself now writes (Phase 9.8) plus the csv mirror above —
+      // and the rename must correct BOTH, or one would stay orphaned.
+      expect(all.filter((t) => t.kind === "Correction")).toHaveLength(2);
       expect(all.filter((t) => t.kind === "BuyExecution")[0].ticker).toBe("ZZZZ"); // immutable — the original field never changes
 
       // The old ticker no longer resolves this row at all — only the new one does.

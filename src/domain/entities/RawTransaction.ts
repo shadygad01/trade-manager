@@ -54,6 +54,11 @@ export interface BuyExecutionPayload {
   executionTime?: string;
   companyName?: string;
   transactionNumber?: string;
+  /** User-authored annotations (manual Record Buy) — carried on the fact so a full rebuild never loses them. OCR imports never set these. */
+  notes?: string;
+  strategyTags?: string[];
+  /** Only set when the user overrode the known-ticker sector map at entry time — a derivable sector is never stored (see TradeService.recordBuy). */
+  sector?: string;
 }
 
 export interface SellExecutionPayload {
@@ -65,6 +70,9 @@ export interface SellExecutionPayload {
   executionDate: string;
   executionTime?: string;
   transactionNumber?: string;
+  /** User-authored annotations (manual Sell allocation) — same rationale as BuyExecutionPayload's. */
+  notes?: string;
+  exitReason?: string;
 }
 
 export interface SellAllocationDecisionPayload {
