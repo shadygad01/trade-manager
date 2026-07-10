@@ -8,9 +8,10 @@ import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { KNOWN_EGX_TICKERS, tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
 import { getTrackingStartDate, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
-import { retractRawTransaction, renameRawTransactionsTicker, type CommitEngineRepos } from "./commitEngine";
+import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolio, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 import { canonicalKey } from "./ledgerRebuild";
-import type { BuyExecutionPayload } from "@domain/entities/RawTransaction";
+import { isRetracted } from "./rawTransactionFolds";
+import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
 
 function companyNameForTicker(ticker: string): string | undefined {
   return KNOWN_EGX_TICKERS.find((t) => t.ticker === ticker)?.companyName;
@@ -52,7 +53,52 @@ export interface RecordBuyResult {
   trade: Trade;
 }
 
-export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): Promise<RecordBuyResult> {
+/**
+ * Phase 9.8 fact writer: every recorded Buy now also lands in the immutable
+ * RawTransaction log (when the repos bundle carries it — the app's real
+ * singleton always does), so a manual Record Buy is no longer invisible to
+ * the canonical rebuild. Guarded by canonical-key lookup: an Import-flow Buy
+ * whose fact was already written at extraction time (importRecording.ts)
+ * appends nothing — it only gets its portfolio assignment confirmed. Same
+ * non-fatal isolation as every dual-write in this migration.
+ */
+async function ensureBuyFact(repos: CommitEngineRepos & Partial<AppRepositories>, trade: Trade, input: RecordBuyInput): Promise<void> {
+  const ticker = normalizeTicker(trade.ticker);
+  const key = canonicalKey({ side: "BUY", ticker, date: trade.executionDate, shares: trade.shares, price: trade.entryPrice });
+  const all = await repos.rawTransactions.getAll();
+  const liveMatch = all.find((t) => {
+    if (t.kind !== "BuyExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== ticker) return false;
+    if (isRetracted(all, t.id)) return false;
+    const p = t.payload as BuyExecutionPayload;
+    return canonicalKey({ side: "BUY", ticker, date: p.executionDate, shares: p.shares, price: p.price }) === key;
+  });
+
+  if (!liveMatch) {
+    const payload: BuyExecutionPayload = {
+      ticker,
+      shares: trade.shares,
+      price: trade.entryPrice,
+      fees: trade.fees,
+      taxes: trade.taxes,
+      executionDate: trade.executionDate,
+      executionTime: trade.executionTime,
+      companyName: trade.companyName,
+      transactionNumber: trade.transactionNumber,
+      notes: trade.notes,
+      strategyTags: trade.strategyTags.length > 0 ? trade.strategyTags : undefined,
+      // Only a genuine user override is a fact — a derivable sector is recomputed, never stored.
+      sector: input.sector,
+    };
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "manual", portfolioId: trade.portfolioId, ticker, payload })
+    );
+  } else {
+    await assignPortfolio(repos, ticker, trade.portfolioId);
+  }
+}
+
+export async function recordBuy(repos: AppRepositories & Partial<CommitEngineRepos>, input: RecordBuyInput): Promise<RecordBuyResult> {
   assertWithinTrackingRange(input.executionDate);
   const portfolio = await repos.portfolios.getById(input.portfolioId);
   if (!portfolio) {
@@ -99,6 +145,12 @@ export async function recordBuy(repos: AppRepositories, input: RecordBuyInput): 
       notes: input.notes,
     })
   );
+
+  if (repos.rawTransactions && repos.committedLedger) {
+    await ensureBuyFact(repos as AppRepositories & CommitEngineRepos, trade, input).catch((err) => {
+      console.error("ensureBuyFact failed (fact write, non-fatal):", err);
+    });
+  }
 
   return { trade };
 }
@@ -169,23 +221,36 @@ export async function deleteTrade(repos: AppRepositories & Partial<CommitEngineR
 }
 
 /**
- * Finds the BuyExecution RawTransaction that corresponds to a legacy Trade —
- * same correlation key (ticker/side/date/shares/price) backfillRawTransactions
- * and systemValidation already use to line up old and new records — and
- * retracts it. A Trade only ever reaches deleteTrade with zero shares closed
- * against it, so there is at most one live (non-retracted) match.
+ * Finds every live BuyExecution RawTransaction that corresponds to a legacy
+ * Trade — same correlation key (ticker/side/date/shares/price)
+ * backfillRawTransactions and systemValidation already use to line up old
+ * and new records — and retracts them ALL. Retracting only the first match
+ * used to be enough (nothing read the facts); with Phase 9.8's legacy
+ * projection, any lingering live same-key fact would re-CREATE the deleted
+ * trade as a freshly projected lot on the ticker's next commit — the exact
+ * resurrection this retraction exists to prevent.
  */
 async function retractMatchingRawTransaction(repos: CommitEngineRepos, trade: Trade): Promise<void> {
   const ticker = normalizeTicker(trade.ticker);
   const key = canonicalKey({ side: "BUY", ticker, date: trade.executionDate, shares: trade.shares, price: trade.entryPrice });
   const all = await repos.rawTransactions.getAll();
-  const match = all.find((t) => {
+  const matches = all.filter((t) => {
     if (t.kind !== "BuyExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== ticker) return false;
+    if (isRetracted(all, t.id)) return false;
     const payload = t.payload as BuyExecutionPayload;
     return canonicalKey({ side: "BUY", ticker, date: payload.executionDate, shares: payload.shares, price: payload.price }) === key;
   });
-  if (!match) return;
-  await retractRawTransaction(repos, match.id, "Trade deleted in the pre-migration UI");
+  // All but the last are appended without the commit trigger, so the ticker
+  // recommits ONCE against the fully retracted set — triggering per
+  // retraction would let a mid-sequence commit see a half-retracted set and
+  // transiently re-project a lot that's about to be voided.
+  for (const match of matches.slice(0, -1)) {
+    await repos.rawTransactions.append(
+      createRawTransaction({ kind: "Retraction", source: "manual", payload: { targetId: match.id, reason: "Trade deleted in the pre-migration UI" } })
+    );
+  }
+  const last = matches[matches.length - 1];
+  if (last) await retractRawTransaction(repos, last.id, "Trade deleted in the pre-migration UI");
 }
 
 /**
@@ -346,7 +411,7 @@ export interface RecordSellResult {
   allocations: TradeAllocation[];
 }
 
-export async function recordSell(repos: AppRepositories, input: RecordSellInput): Promise<RecordSellResult> {
+export async function recordSell(repos: AppRepositories & Partial<CommitEngineRepos>, input: RecordSellInput): Promise<RecordSellResult> {
   if (input.allocations.length === 0) {
     throw new Error("recordSell requires at least one allocation");
   }
@@ -361,6 +426,7 @@ export async function recordSell(repos: AppRepositories, input: RecordSellInput)
   const sellGroupId = input.sellGroupId ?? generateId();
 
   const createdAllocations: TradeAllocation[] = [];
+  const closedTrades: Trade[] = [];
   const relatedTradeIds: string[] = [];
   let netProceeds = Money.zero();
   let realizedMicros = 0;
@@ -401,6 +467,7 @@ export async function recordSell(repos: AppRepositories, input: RecordSellInput)
     });
     await repos.allocations.save(allocation);
     createdAllocations.push(allocation);
+    closedTrades.push(trade);
     relatedTradeIds.push(trade.id);
 
     const remainingShares = trade.remainingShares - line.shares;
@@ -436,7 +503,98 @@ export async function recordSell(repos: AppRepositories, input: RecordSellInput)
     })
   );
 
+  if (repos.rawTransactions && repos.committedLedger) {
+    await ensureSellFacts(repos as AppRepositories & CommitEngineRepos, input, ticker, sellGroupId, createdAllocations, closedTrades).catch(
+      (err) => {
+        console.error("ensureSellFacts failed (fact write, non-fatal):", err);
+      }
+    );
+  }
+
   return { realizedPnl: microsToMoney(realizedMicros), allocations: createdAllocations };
+}
+
+/**
+ * Phase 9.8 fact writer, Sell side: (1) the SellExecution fact — skipped
+ * when an Import-written one with the same canonical key already exists —
+ * and (2) the SellAllocationDecision fact, the immutable record of WHICH
+ * lots the user chose to close (ADR-002). The decision is the half no
+ * Import path ever writes, so it's checked and written independently of the
+ * execution fact; `sellExecutionId`/`lotRef` use canonical keys, exactly the
+ * eventIds generateLedgerEvents derives for these same facts (the identical
+ * convention backfillRawTransactions established), so the Allocation Engine
+ * replays this decision correctly on every future rebuild.
+ */
+async function ensureSellFacts(
+  repos: CommitEngineRepos & Partial<AppRepositories>,
+  input: RecordSellInput,
+  ticker: string,
+  sellGroupId: string,
+  createdAllocations: TradeAllocation[],
+  closedTrades: Trade[]
+): Promise<void> {
+  const totalShares = createdAllocations.reduce((sum, a) => sum + a.sharesClosed, 0);
+  const price = createdAllocations[0].exitPrice;
+  const sellKey = canonicalKey({ side: "SELL", ticker, date: input.executionDate, shares: totalShares, price });
+  const all = await repos.rawTransactions.getAll();
+  const isLive = (id: string) => !isRetracted(all, id);
+
+  const liveSellMatch = all.find((t) => {
+    if (t.kind !== "SellExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== ticker) return false;
+    if (!isLive(t.id)) return false;
+    const p = t.payload as SellExecutionPayload;
+    return canonicalKey({ side: "SELL", ticker, date: p.executionDate, shares: p.shares, price: p.price }) === sellKey;
+  });
+  if (!liveSellMatch) {
+    const payload: SellExecutionPayload = {
+      ticker,
+      shares: totalShares,
+      price,
+      fees: createdAllocations.reduce((sum, a) => sum + a.fees, 0),
+      taxes: createdAllocations.reduce((sum, a) => sum + a.taxes, 0),
+      executionDate: input.executionDate,
+      executionTime: input.executionTime,
+      transactionNumber: input.transactionNumber,
+      notes: createdAllocations[0].notes,
+      exitReason: createdAllocations[0].exitReason,
+    };
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: "manual", portfolioId: input.portfolioId, ticker, payload })
+    );
+  }
+
+  const liveDecisionExists = all.some(
+    (t) => t.kind === "SellAllocationDecision" && isLive(t.id) && (t.payload as SellAllocationDecisionPayload).sellExecutionId === sellKey
+  );
+  if (!liveDecisionExists) {
+    const payload: SellAllocationDecisionPayload = {
+      sellExecutionId: sellKey,
+      allocations: createdAllocations.map((a, i) => ({
+        lotRef: canonicalKey({
+          side: "BUY",
+          ticker: normalizeTicker(closedTrades[i].ticker),
+          date: closedTrades[i].executionDate,
+          shares: closedTrades[i].shares,
+          price: closedTrades[i].entryPrice,
+        }),
+        shares: a.sharesClosed,
+      })),
+    };
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({
+        id: `${sellGroupId}|decision`,
+        kind: "SellAllocationDecision",
+        source: "manual",
+        portfolioId: input.portfolioId,
+        ticker,
+        payload,
+      })
+    );
+  }
+
+  await assignPortfolio(repos, ticker, input.portfolioId);
 }
 
 export interface MoveTradeResult {

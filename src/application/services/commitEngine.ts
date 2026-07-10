@@ -11,6 +11,7 @@ import { verifyAll } from "./verificationEngine";
 import { generateLedgerEvents } from "./ledgerEngine";
 import { generateAllocations } from "./allocationEngine";
 import { isRetracted } from "./rawTransactionFolds";
+import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } from "./ledgerProjection";
 
 /**
  * Commit Engine: the only code path that ever writes to ledgerCache /
@@ -113,28 +114,71 @@ async function relevantTradeTransactions(repos: CommitEngineRepos, portfolioId: 
 const NO_EXISTING_POSITIONS: never[] = [];
 
 export async function shouldCommit(repos: CommitEngineRepos, portfolioId: string, ticker: string): Promise<boolean> {
-  const transactions = (await relevantTradeTransactions(repos, portfolioId, ticker)).filter(
-    (t) => t.kind === "BuyExecution" || t.kind === "SellExecution"
-  );
-  if (transactions.length === 0) return false;
+  const relevant = await relevantTradeTransactions(repos, portfolioId, ticker);
+  if (!relevant.some((t) => t.kind === "BuyExecution" || t.kind === "SellExecution")) return false;
 
-  const verdicts = verifyAll({ transactions, positions: NO_EXISTING_POSITIONS });
+  // The FULL relevant set goes to verifyAll, not just Buy/Sell: the engine
+  // itself only ever produces verdicts for Buy/Sell rows, but it reads
+  // PositionVerificationCapture/OrderEvidenceCapture facts as corroboration
+  // — without them here, a broker screenshot that reconciles a ticker
+  // exactly could never terminal-ize its commit (Phase 9.8 fix; before it,
+  // only closed-position/invoice/cross-verified paths ever fired here).
+  const verdicts = verifyAll({ transactions: relevant, positions: NO_EXISTING_POSITIONS });
   return [...verdicts.values()].every((v) => v.verdict !== "Needs Review");
 }
 
-export async function commitTicker(repos: CommitEngineRepos, portfolioId: string, ticker: string): Promise<void> {
+export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedgerRepos>, portfolioId: string, ticker: string): Promise<void> {
   const normalizedTicker = normalizeTicker(ticker);
+
+  // Phase 9.8: when the caller's repos bundle carries the legacy tables (the
+  // app's real singleton always does; bare CommitEngineRepos test bundles
+  // don't), the commit ALSO projects its output onto Trade/TradeAllocation —
+  // the tables the UI reads — making the legacy ledger a derived view that
+  // auto-corrects whenever better historical facts reach a terminal verdict.
+  // Gap-backfill runs FIRST so any legacy row that predates its fact writer
+  // gets a fact before projection could ever mistake it for stale data; if
+  // that step fails, projection is skipped entirely (never run against a
+  // possibly-incomplete fact set), while the cache commit proceeds as always.
+  let projection: (CommitEngineRepos & LegacyLedgerRepos) | undefined =
+    repos.trades !== undefined && repos.allocations !== undefined ? (repos as CommitEngineRepos & LegacyLedgerRepos) : undefined;
+  if (projection) {
+    try {
+      await ensureLegacyFactsExist(projection, portfolioId, normalizedTicker);
+    } catch (err) {
+      console.error("ensureLegacyFactsExist failed — skipping legacy projection for this commit:", err);
+      projection = undefined;
+    }
+  }
+
   const relevant = await relevantTradeTransactions(repos, portfolioId, normalizedTicker);
   const tradeTransactions = relevant.filter((t) => t.kind === "BuyExecution" || t.kind === "SellExecution");
   const decisionTransactions = relevant.filter((t) => t.kind === "SellAllocationDecision");
 
-  const verdicts = verifyAll({ transactions: tradeTransactions, positions: NO_EXISTING_POSITIONS });
+  // Full relevant set, same reason as shouldCommit: capture facts are
+  // corroboration inputs; verdicts still only ever cover Buy/Sell rows.
+  const verdicts = verifyAll({ transactions: relevant, positions: NO_EXISTING_POSITIONS });
   const verifiedTransactions = tradeTransactions.filter((t) => verdicts.get(t.id)?.verdict === "Verified");
 
   const events = generateLedgerEvents(verifiedTransactions);
   const allocations = generateAllocations(events, decisionTransactions);
 
   await repos.committedLedger.commitTicker({ portfolioId, ticker: normalizedTicker, events, allocations });
+
+  // Projection only ever runs on a TERMINAL verdict set. commitTicker is
+  // also force-called on Retraction/Correction regardless of shouldCommit
+  // (to clear a stale cache), and in that path a still-Needs-Review fact
+  // produces no lot — projecting then would delete a legitimate legacy row
+  // merely because its corroboration hasn't arrived yet. An empty set is
+  // terminal (everything retracted IS a settled state); an undecided one is
+  // not.
+  const terminal = [...verdicts.values()].every((v) => v.verdict !== "Needs Review");
+  if (projection && terminal) {
+    try {
+      await projectLegacyTicker(projection, portfolioId, normalizedTicker, events, allocations);
+    } catch (err) {
+      console.error("projectLegacyTicker failed (cache commit already applied, legacy rows unchanged):", err);
+    }
+  }
 }
 
 /**

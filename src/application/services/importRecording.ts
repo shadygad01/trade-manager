@@ -12,6 +12,19 @@ import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
  * "unverified"; deciding Verified/Rejected/Needs Review happens later, by
  * the Verification Engine.
  *
+ * Phase 9.7: this is now the AUTHORITATIVE write for the RawTransaction log,
+ * not a best-effort shadow of it. "Authoritative" describes completeness and
+ * fidelity of the DATA, not write ordering or failure severity — ImportPage.tsx
+ * still calls this from inside a non-fatal try/catch (a transient IndexedDB
+ * failure here must never break today's working legacy Import flow, which
+ * remains the actual source of truth for what the user sees), and the
+ * localStorage pending pool is still what ImportPage reads and renders from.
+ * What changed: every candidate's own session key is now threaded through as
+ * the written RawTransaction's `id` (see ImportRecordingInput), so a later
+ * Skip/Dismiss/Discard action can retract the exact right row — the raw log
+ * can now faithfully reflect the candidate's FULL lifecycle (created, then
+ * later retracted), not just its creation.
+ *
  * Appends through `appendAndMaybeCommit` (commitEngine.ts) rather than
  * `rawTransactions.append` directly, so a commit fires automatically the
  * moment a ticker's verification state becomes terminal — but since Import
@@ -33,10 +46,21 @@ export type ImportRecordingRepos = CommitEngineRepos;
 
 export interface ImportRecordingInput {
   sourceUploadId: string;
-  candidates: ParsedTradeCandidate[];
+  /**
+   * `key` becomes the written RawTransaction's own `id` (see createRawTransaction's
+   * `id` override) instead of a random generated one — the same key the
+   * presentation layer's pending-candidate pool already uses (see
+   * ImportPage.tsx's CandidateEntry). This is what makes a later
+   * Skip/Dismiss/Discard action (keyed the same way) able to retract the
+   * exact RawTransaction this candidate produced, via
+   * commitEngine.retractRawTransaction(repos, key) — no separate lookup
+   * table, no signature-based correlation needed.
+   */
+  candidates: { key: string; candidate: ParsedTradeCandidate }[];
   verifications: Omit<PositionVerification, "id" | "portfolioId">[];
   dividends: ParsedDividendCandidate[];
-  orderEvidences: ParsedOrderEvidence[];
+  /** Same `key`-as-`id` treatment as `candidates`, for the same reason — an Orders-screenshot row can be individually discarded too (see ImportPage.tsx's discardOrderEvidence). */
+  orderEvidences: { key: string; evidence: ParsedOrderEvidence }[];
 }
 
 function candidateSource(candidate: ParsedTradeCandidate): RawTransactionSource {
@@ -50,7 +74,7 @@ function candidateSource(candidate: ParsedTradeCandidate): RawTransactionSource 
 export async function recordImportedRawTransactions(repos: ImportRecordingRepos, input: ImportRecordingInput): Promise<void> {
   const { sourceUploadId, candidates, verifications, dividends, orderEvidences } = input;
 
-  for (const candidate of candidates) {
+  for (const { key, candidate } of candidates) {
     const ticker = normalizeTicker(candidate.ticker);
     if (candidate.side === "BUY") {
       const payload: BuyExecutionPayload = {
@@ -66,7 +90,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       };
       await appendAndMaybeCommit(
         repos,
-        createRawTransaction({ kind: "BuyExecution", source: candidateSource(candidate), sourceUploadId, ticker, confidence: candidate.confidence, payload })
+        createRawTransaction({ id: key, kind: "BuyExecution", source: candidateSource(candidate), sourceUploadId, ticker, confidence: candidate.confidence, payload })
       );
     } else {
       const payload: SellExecutionPayload = {
@@ -81,7 +105,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       };
       await appendAndMaybeCommit(
         repos,
-        createRawTransaction({ kind: "SellExecution", source: candidateSource(candidate), sourceUploadId, ticker, confidence: candidate.confidence, payload })
+        createRawTransaction({ id: key, kind: "SellExecution", source: candidateSource(candidate), sourceUploadId, ticker, confidence: candidate.confidence, payload })
       );
     }
   }
@@ -115,7 +139,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
 
   // Order evidence is only ever read from the account-wide Orders-timeline
   // screen — see ImportOrchestrator's own routing.
-  for (const evidence of orderEvidences) {
+  for (const { key, evidence } of orderEvidences) {
     const ticker = normalizeTicker(evidence.ticker);
     const payload: OrderEvidenceCapturePayload = {
       ticker,
@@ -131,7 +155,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
     };
     await appendAndMaybeCommit(
       repos,
-      createRawTransaction({ kind: "OrderEvidenceCapture", source: "orders-timeline", sourceUploadId, ticker, confidence: evidence.confidence, payload })
+      createRawTransaction({ id: key, kind: "OrderEvidenceCapture", source: "orders-timeline", sourceUploadId, ticker, confidence: evidence.confidence, payload })
     );
   }
 }

@@ -6,7 +6,7 @@ import { repos, getImportOrchestrator } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions } from "@application/services/importRecording";
-import { assignPortfolio } from "@application/services/commitEngine";
+import { assignPortfolio, retractRawTransaction } from "@application/services/commitEngine";
 import {
   findDuplicateBuyMatch,
   findDuplicateSellMatch,
@@ -81,6 +81,29 @@ type Stage = "idle" | "reading" | "error";
  */
 function verificationContentKey(v: { ticker: string; units: number; avgCost?: number }): string {
   return `${normalizeTicker(v.ticker)}|${v.units}|${v.avgCost ?? ""}`;
+}
+
+/**
+ * Phase 9.7: every Skip/Dismiss/Discard action calls this so the canonical
+ * RawTransaction history reflects the same intent the localStorage session
+ * already records — a retracted row is permanently excluded from
+ * VerificationEngine/CommitEngine (see rawTransactionFolds.isRetracted), the
+ * same fold every other reader of the raw log already applies. Fire-and-
+ * forget, isolated, non-fatal — same shadow-write discipline as every other
+ * dual-write in this migration (assignPortfolio, recordImportedRawTransactions):
+ * a failure here must never break today's working Import behavior, which
+ * still reads only from the localStorage pending pool. Each `key` here is
+ * expected to equal the RawTransaction id recordImportedRawTransactions wrote
+ * for it (see importRecording.ts) — a key from before that change shipped
+ * simply retracts nothing (no RawTransaction has that id), which is inert,
+ * not harmful.
+ */
+function retractRawTransactionKeys(keys: Iterable<string>) {
+  for (const key of keys) {
+    retractRawTransaction(repos, key).catch((err) => {
+      console.error("retractRawTransaction failed (shadow write, non-fatal):", err);
+    });
+  }
 }
 
 /**
@@ -263,6 +286,7 @@ export function ImportPage() {
       .map((e) => e.key);
     if (keysToSkip.length === 0) return;
     importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
+    retractRawTransactionKeys(keysToSkip);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     initialDataLoaded,
@@ -302,6 +326,7 @@ export function ImportPage() {
     if (aggregateMatches.size === 0) return;
     const keysToSkip = [...aggregateMatches.keys()];
     importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
+    retractRawTransactionKeys(keysToSkip);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialDataLoaded, pendingCandidates, session.addedKeys, session.skippedKeys, session.dismissedKeys]);
 
@@ -451,27 +476,37 @@ export function ImportPage() {
           };
           await repos.uploads.save(upload);
 
+          // Phase 9.7: keys computed BEFORE the dual-write below (not after,
+          // as before) so each candidate/order-evidence row's own session key
+          // can be threaded through as its RawTransaction's own `id` — see
+          // importRecording.ts's ImportRecordingInput doc comment. This is
+          // what lets a later Skip/Dismiss/Discard action retract the exact
+          // right row by key, with no separate lookup needed.
+          const fileSeq = seq;
+          seq += 1;
+          const newCandidates = result.candidates.map((candidate, ci) => ({ key: `${fileSeq}-c${ci}`, candidate }));
+          const newOrderEvidenceEntries = result.orderEvidences.map((evidence, oi) => ({ key: `${fileSeq}-o${oi}`, evidence }));
+
           // Migration dual-write: additionally record every parsed candidate
-          // as an immutable RawTransaction (see importRecording.ts) — the
-          // eventual sole source of truth. Best-effort and isolated from the
-          // existing commit flow below on purpose: this is shadow data for
-          // the new architecture, not yet read by anything, and must never
-          // be able to break today's working Import behavior if it fails.
+          // as an immutable RawTransaction (see importRecording.ts). No
+          // longer shadow data nobody reads — Phase 9.7 made this the
+          // authoritative, full-lifecycle record (see the module's own doc
+          // comment) — but still isolated in its own try/catch on purpose:
+          // a transient IndexedDB failure here must never break today's
+          // working Import flow, which the localStorage pending pool below
+          // remains the actual source of truth for.
           try {
             await recordImportedRawTransactions(repos, {
               sourceUploadId: upload.id,
-              candidates: result.candidates,
+              candidates: newCandidates,
               verifications: result.verifications,
               dividends: result.dividends,
-              orderEvidences: result.orderEvidences,
+              orderEvidences: newOrderEvidenceEntries,
             });
           } catch (err) {
             console.error("recordImportedRawTransactions failed (shadow write, non-fatal):", err);
           }
 
-          const fileSeq = seq;
-          seq += 1;
-          const newCandidates = result.candidates.map((candidate, ci) => ({ key: `${fileSeq}-c${ci}`, candidate }));
           let skippedVerifications = 0;
           let skippedDividends = 0;
           let skippedOrderEvidences = 0;
@@ -510,12 +545,12 @@ export function ImportPage() {
             // screenshot are genuinely two separate orders.
             const seenEvidenceKeys = new Set(prev.pendingOrderEvidences.map((e) => orderEvidenceContentKey(e.evidence)));
             const newOrderEvidences: OrderEvidenceEntry[] = [];
-            result.orderEvidences.forEach((evidence, oi) => {
+            newOrderEvidenceEntries.forEach(({ key, evidence }) => {
               if (seenEvidenceKeys.has(orderEvidenceContentKey(evidence))) {
                 skippedOrderEvidences += 1;
                 return;
               }
-              newOrderEvidences.push({ key: `${fileSeq}-o${oi}`, evidence });
+              newOrderEvidences.push({ key, evidence });
             });
 
             // Cross-document field completion: the same transaction read
@@ -845,6 +880,11 @@ export function ImportPage() {
    * the redundant copy is cleaned up for commit.
    */
   function moveToDiscarded(prev: typeof session, keys: Set<string>) {
+    // Phase 9.7: fires once here for all four discard entry points below
+    // (clearPendingDuplicateCandidates, discardPendingCandidate,
+    // discardPendingCandidateKeys, discardAllPendingForTicker) instead of
+    // once per call site.
+    retractRawTransactionKeys(keys);
     return {
       ...prev,
       pendingCandidates: prev.pendingCandidates.filter((e) => !keys.has(e.key)),
@@ -864,6 +904,7 @@ export function ImportPage() {
       ...prev,
       pendingOrderEvidences: prev.pendingOrderEvidences.filter((e) => e.key !== key),
     }));
+    retractRawTransactionKeys([key]);
   }
 
   /** Discards one specific still-pending candidate — the single-row counterpart to clearPendingDuplicateCandidates. */
