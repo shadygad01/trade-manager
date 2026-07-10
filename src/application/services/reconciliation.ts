@@ -3,6 +3,8 @@ import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { PositionAggregate } from "./TradeService";
+import { checkTickerMatch } from "./importVerification";
+import { suggestRemovalsToReconcile, MAX_RECONCILE_ROWS, type ReconcilableRow } from "./mismatchResolver";
 
 export interface PositionReconciliation {
   ticker: string;
@@ -39,6 +41,19 @@ export function latestByTicker(verifications: PositionVerification[]): Map<strin
  * each ticker against the most recent broker "My Position" screenshot for
  * that ticker. Never mutates the ledger — this only surfaces a discrepancy
  * for the user to investigate (e.g. a duplicate import, or a missing trade).
+ *
+ * The actual match/mismatch judgment is delegated to checkTickerMatch — the
+ * same canonical function Import's live commit gate and the Evidence
+ * Intelligence facade both use — instead of a second, independently
+ * hand-rolled comparison. Everything already committed for this ticker is
+ * treated as a single settled amount (existingRemainingShares =
+ * computedShares, no separate "pending" batch — there is none once trades
+ * are committed), so checkTickerMatch's netShares reduces to exactly
+ * computedShares here. `verificationStale` — a real, additional concern
+ * checkTickerMatch has no equivalent for (it always compares "as of right
+ * now," with no notion of a screenshot predating trades recorded since) —
+ * remains this module's own, layered on top: a mismatch a newer trade would
+ * fully explain is suppressed rather than reported as a live discrepancy.
  */
 export function reconcilePositions(
   positions: PositionAggregate[],
@@ -68,6 +83,15 @@ export function reconcilePositions(
         (a) => normalizeTicker(a.ticker) === ticker && `${a.executionDate}T${a.executionTime}` > verification.capturedAt
       );
 
+    const match = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 0,
+      pendingSellShares: 0,
+      existingRemainingShares: computedShares,
+      verifiedUnits: verification.units,
+      verifiedAvgCost: verification.avgCost,
+    });
+
     results.push({
       ticker,
       verificationId: verification.id,
@@ -76,8 +100,8 @@ export function reconcilePositions(
       verifiedAvgCost: verification.avgCost,
       verificationCapturedAt: verification.capturedAt,
       verificationSource: verification.source,
-      quantityMismatch: !hasNewerActivity && computedShares > verification.units,
-      quantityShortfall: !hasNewerActivity && computedShares < verification.units,
+      quantityMismatch: !hasNewerActivity && match.discrepancySide === "buy" && !match.matched,
+      quantityShortfall: !hasNewerActivity && match.discrepancySide === "sell" && !match.matched,
       verificationStale: hasNewerActivity,
     });
   }
@@ -106,14 +130,39 @@ export function suggestDuplicateTradeIds(params: {
   openTrades: { id: string; entryPrice: number; shares: number; remainingShares: number }[];
   computedShares: number;
   verifiedUnits: number;
+  verifiedAvgCost?: number;
 }): string[] {
-  const deletable = [...params.openTrades]
-    .filter((t) => t.remainingShares === t.shares)
-    .sort((a, b) => a.entryPrice - b.entryPrice);
+  const deletable = [...params.openTrades].filter((t) => t.remainingShares === t.shares);
 
+  // Prefer the canonical, avg-cost-ranked, alternatives-aware solver
+  // (mismatchResolver.suggestRemovalsToReconcile — the same one Import's own
+  // reconcile banner uses) only when it actually has a ranking signal to
+  // exploit (a broker-verified avg cost) and its exhaustive-subset search
+  // can cover every deletable trade. Without an avg cost, that solver has NO
+  // price-preference signal at all and picks an arbitrary valid subset —
+  // strictly worse than this module's own lowest-price-first heuristic,
+  // which encodes a real, sound rule for exactly this common case (the same
+  // real trade re-read from a duplicate document differs mostly in price
+  // rounding; the lower reads are the more likely duplicates, leaving the
+  // highest, most-plausible post-commission price on the ledger). So the
+  // greedy heuristic remains primary whenever there's no avg cost to rank
+  // by, and is also the fallback above MAX_RECONCILE_ROWS (2^n search),
+  // where the canonical solver declines to run at all.
+  if (params.verifiedAvgCost !== undefined && deletable.length > 0 && deletable.length <= MAX_RECONCILE_ROWS) {
+    const rows: ReconcilableRow[] = deletable.map((t) => ({ key: t.id, side: "BUY", shares: t.shares, price: t.entryPrice }));
+    const suggestion = suggestRemovalsToReconcile({
+      rows,
+      existingRemainingShares: 0,
+      verifiedUnits: params.verifiedUnits,
+      verifiedAvgCost: params.verifiedAvgCost,
+    });
+    if (suggestion) return suggestion.keysToRemove;
+  }
+
+  const sorted = [...deletable].sort((a, b) => a.entryPrice - b.entryPrice);
   const ids: string[] = [];
   let remaining = params.computedShares;
-  for (const t of deletable) {
+  for (const t of sorted) {
     if (remaining <= params.verifiedUnits) break;
     if (remaining - t.shares < params.verifiedUnits) continue;
     ids.push(t.id);

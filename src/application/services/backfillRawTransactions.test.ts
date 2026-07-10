@@ -6,10 +6,14 @@ import {
   createFakeVerificationRepository,
   createFakeRawTransactionRepository,
   createFakeCommittedLedgerRepository,
+  createFakePortfolioRepository,
+  createFakeTimelineRepository,
 } from "@application/testUtils/fakeRepositories";
 import { createTrade, type Trade } from "@domain/entities/Trade";
 import { createTradeAllocation, type TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
+import { createPortfolio } from "@domain/entities/Portfolio";
+import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 
 const PORTFOLIO = "p1";
 
@@ -17,13 +21,16 @@ describe("backfillRawTransactions", () => {
   let trades: Trade[];
   let allocations: TradeAllocation[];
   let verifications: PositionVerification[];
+  let timelineEvents: TimelineEvent[];
   let repos: BackfillRepos;
 
   function buildRepos() {
     return {
+      portfolios: createFakePortfolioRepository([createPortfolio({ id: PORTFOLIO, name: "Main", kind: "Trading" })]),
       trades: createFakeTradeRepository(trades),
       allocations: createFakeTradeAllocationRepository(allocations),
       verifications: createFakeVerificationRepository(verifications),
+      timeline: createFakeTimelineRepository(timelineEvents),
       rawTransactions: createFakeRawTransactionRepository(),
       committedLedger: createFakeCommittedLedgerRepository(),
     };
@@ -33,6 +40,7 @@ describe("backfillRawTransactions", () => {
     trades = [];
     allocations = [];
     verifications = [];
+    timelineEvents = [];
   });
 
   it("backfills a single Trade into a BuyExecution raw transaction with source backfill, preserving its portfolioId", async () => {
@@ -42,7 +50,7 @@ describe("backfillRawTransactions", () => {
     repos = buildRepos();
 
     const result = await backfillRawTransactions(repos);
-    expect(result).toEqual({ buysBackfilled: 1, sellOrdersBackfilled: 0, verificationsBackfilled: 0 });
+    expect(result).toEqual({ buysBackfilled: 1, sellOrdersBackfilled: 0, verificationsBackfilled: 0, cashEventsBackfilled: 0 });
 
     const all = await repos.rawTransactions.getAll();
     const buy = all.find((t) => t.kind === "BuyExecution")!;
@@ -129,10 +137,39 @@ describe("backfillRawTransactions", () => {
     await expect(backfillRawTransactions(repos)).rejects.toThrow(/no longer exists/);
   });
 
+  it("backfills a Dividend and a CashAdjustment TimelineEvent into facts, reusing the event's own id", async () => {
+    timelineEvents = [
+      { id: "div-1", portfolioId: PORTFOLIO, type: "Dividend", timestamp: "2026-04-30T00:00", ticker: "PHAR", amount: 44.18, attachments: [], createdAt: "2026-04-30T00:00" },
+      { id: "adj-1", portfolioId: PORTFOLIO, type: "CashAdjustment", timestamp: "2026-01-15T00:00", amount: -50, notes: "bank fee", attachments: [], createdAt: "2026-01-15T00:00" },
+    ];
+    repos = buildRepos();
+
+    const result = await backfillRawTransactions(repos);
+    expect(result.cashEventsBackfilled).toBe(2);
+
+    const facts = await repos.rawTransactions.getAll();
+    const dividendFact = facts.find((f) => f.id === "div-1")!;
+    expect(dividendFact.kind).toBe("DividendPayment");
+    expect(dividendFact.source).toBe("backfill");
+    expect(dividendFact.payload).toEqual({ ticker: "PHAR", amount: 44.18, date: "2026-04-30" });
+
+    const adjustmentFact = facts.find((f) => f.id === "adj-1")!;
+    expect(adjustmentFact.kind).toBe("CashAdjustment");
+    expect(adjustmentFact.payload).toEqual({ amount: -50, notes: "bank fee", date: "2026-01-15" });
+  });
+
+  it("a portfolio with only a Dividend event (no trades at all) is still backfilled — enumerated from every portfolio, not just ones with trades", async () => {
+    timelineEvents = [{ id: "div-1", portfolioId: PORTFOLIO, type: "Dividend", timestamp: "2026-04-30T00:00", amount: 10, attachments: [], createdAt: "2026-04-30T00:00" }];
+    repos = buildRepos();
+
+    const result = await backfillRawTransactions(repos);
+    expect(result).toEqual({ buysBackfilled: 0, sellOrdersBackfilled: 0, verificationsBackfilled: 0, cashEventsBackfilled: 1 });
+  });
+
   it("an empty ledger backfills nothing", async () => {
     repos = buildRepos();
     const result = await backfillRawTransactions(repos);
-    expect(result).toEqual({ buysBackfilled: 0, sellOrdersBackfilled: 0, verificationsBackfilled: 0 });
+    expect(result).toEqual({ buysBackfilled: 0, sellOrdersBackfilled: 0, verificationsBackfilled: 0, cashEventsBackfilled: 0 });
     expect(await repos.rawTransactions.getAll()).toEqual([]);
   });
 });
