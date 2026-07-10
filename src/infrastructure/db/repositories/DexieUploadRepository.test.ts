@@ -57,4 +57,24 @@ describe("DexieUploadRepository", () => {
     const all = await repo.getAll();
     expect(all.map((u) => u.id).sort()).toEqual(["upload-1", "upload-2"]);
   });
+
+  it("persists the original document's bytes (fileBlob) permanently alongside its extracted text — the Evidence Repository durability fix", async () => {
+    const originalBytes = new Blob(["%PDF-1.4 fake statement bytes"], { type: "application/pdf" });
+    await repo.save(makeUpload({ rawText: "Buy COMI 10@45.50", fileBlob: originalBytes }));
+
+    const found = await repo.getByHash("hash-1");
+    expect(found?.fileBlob).toBeInstanceOf(Blob);
+    expect(found?.fileBlob?.size).toBe(originalBytes.size);
+    expect(await found?.fileBlob?.text()).toBe(await originalBytes.text());
+    // The extracted text survives independently — re-parsing later never
+    // requires re-reading the blob, but the blob is there if extraction
+    // logic improves and a re-OCR/re-parse is ever needed.
+    expect(found?.rawText).toBe("Buy COMI 10@45.50");
+  });
+
+  it("an upload with no fileBlob (e.g. a CSV, or one recorded before this field existed) round-trips fine with it left undefined", async () => {
+    await repo.save(makeUpload());
+    const found = await repo.getByHash("hash-1");
+    expect(found?.fileBlob).toBeUndefined();
+  });
 });

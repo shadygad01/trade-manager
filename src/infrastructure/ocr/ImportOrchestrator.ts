@@ -24,6 +24,13 @@ export interface ImportResult {
   warnings: string[];
   /** SHA-256 hex digest of the file's bytes — callers persisting an Upload entity use this for its fileHash field / per-file dedup. */
   fileHash: string;
+  /**
+   * The original file's bytes, for callers persisting a permanent Evidence
+   * Repository record (see Upload.fileBlob) — undefined only for plain-text/
+   * CSV files, whose bytes already equal `rawText` verbatim, so storing both
+   * would be a pure duplicate.
+   */
+  fileBlob?: Blob;
 }
 
 async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
@@ -51,6 +58,9 @@ export class ImportOrchestrator {
 
     const isImage = file.type.startsWith("image/");
     const isPdf = file.type === "application/pdf";
+    // A File already IS a Blob — no re-read needed. Only for image/PDF
+    // uploads (see Upload.fileBlob's own doc comment on why CSV is excluded).
+    const fileBlob: Blob | undefined = isImage || isPdf ? file : undefined;
     let rawText = "";
     let sourceCanvas: HTMLCanvasElement | null = null;
 
@@ -92,6 +102,7 @@ export class ImportOrchestrator {
         rawText,
         warnings: ["No text could be read from the file — try another file."],
         fileHash,
+        fileBlob,
       };
     }
 
@@ -121,6 +132,7 @@ export class ImportOrchestrator {
             rawText,
             warnings: ["Recognized a position screen but couldn't read the ticker/units — try a clearer screenshot."],
             fileHash,
+            fileBlob,
           };
         }
         return {
@@ -133,6 +145,7 @@ export class ImportOrchestrator {
           rawText,
           warnings: [],
           fileHash,
+          fileBlob,
         };
       }
     }
@@ -158,6 +171,7 @@ export class ImportOrchestrator {
           rawText,
           warnings: ["Recognized an Orders history screen but couldn't read any order rows — try a clearer or larger screenshot."],
           fileHash,
+          fileBlob,
         };
       }
       const warnings: string[] = [];
@@ -176,6 +190,7 @@ export class ImportOrchestrator {
         rawText,
         warnings,
         fileHash,
+        fileBlob,
       };
     }
 
@@ -183,7 +198,7 @@ export class ImportOrchestrator {
     for (const parser of candidateParsers) {
       const candidates = parser.parseStatementText(rawText);
       if (candidates.length > 0) {
-        return { status: "parsed", docType: "statement", candidates, verifications: [], dividends: [], orderEvidences: [], rawText, warnings: [], fileHash };
+        return { status: "parsed", docType: "statement", candidates, verifications: [], dividends: [], orderEvidences: [], rawText, warnings: [], fileHash, fileBlob };
       }
     }
 
@@ -272,6 +287,7 @@ export class ImportOrchestrator {
           rawText: rawText + rowScanLog,
           warnings,
           fileHash,
+          fileBlob,
         };
       }
     }
@@ -302,6 +318,7 @@ export class ImportOrchestrator {
             : "No transactions found in the file. Make sure it's a supported broker report.",
       ],
       fileHash,
+      fileBlob,
     };
   }
 }

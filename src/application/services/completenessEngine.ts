@@ -30,7 +30,7 @@ export interface MissingWindow {
   to?: string;
 }
 
-export type EvidenceDocumentType = "Orders History" | "Broker Statement" | "Invoice";
+export type EvidenceDocumentType = "Orders History" | "Broker Statement" | "Invoice" | "Transactions" | "My Position";
 
 /**
  * estimatedRecoverySuccess is a documented heuristic CONFIDENCE TIER
@@ -155,17 +155,42 @@ function estimateMissing(status: TickerStatus): { transactions?: number; shares?
 }
 
 /**
- * Best-evidence recommendation intentionally has only two real signals to
- * work from today: whether direct (orphaned) evidence already exists, and
- * whether a bounded gap window was found. TickerStatus has no "was Orders
- * History ever uploaded for this ticker at all" flag (only which rows came
- * back unmatched), so a ticker whose Orders History was uploaded but simply
- * doesn't cover the missing window reads identically here to one that never
- * had Orders History at all — both recommend it as the best next document.
+ * Whether this ticker currently has real, non-zero shares outstanding — the
+ * one fact that gates every "My Position" recommendation below. A broker's
+ * "My Position" screen only ever lists tickers it currently holds; asking
+ * for one on a CLOSED ticker (net shares = 0) can never be satisfied even in
+ * principle, and — more importantly — a My Position screenshot proves only
+ * the CURRENT count, never a historical execution, so it can't corroborate a
+ * closed ticker's past even if a stale one happened to be on hand. See
+ * business rule: "if the ticker is already closed, never request My
+ * Position because it cannot prove historical executions."
+ */
+function isOpenPosition(status: TickerStatus): boolean {
+  return Math.abs(status.netShares) >= 1e-6;
+}
+
+/**
+ * Best-evidence recommendation searches what this ticker's evidence already
+ * contains before naming the next document, per business rule "search the
+ * existing Evidence Repository first, determine exactly which evidence is
+ * missing, request only the smallest missing document." Three real signals
+ * drive it: (1) whether direct (orphaned) Orders-history evidence already
+ * names the missing transaction, (2) whether a bounded gap window was found,
+ * and (3) whether the ticker is currently open or closed — which alone
+ * decides whether "My Position" is ever a legal answer.
+ *
+ * TickerStatus still has no "was Orders History ever uploaded for this
+ * ticker at all, and did it simply not cover the missing window" flag (only
+ * which rows came back unmatched) — a ticker whose Orders History doesn't
+ * cover the gap still reads identically to one that never had Orders History
+ * uploaded at all. Fully closing that gap needs the Evidence Repository to
+ * answer "which document types has this ticker ever seen" directly (see
+ * Phase 5 — persisting original documents), not just which rows matched.
  * Documented as a known simplification, not hidden.
  */
 function recoveryPlan(status: TickerStatus, classification: LedgerCompletenessStatus): RecoveryPlan | undefined {
   if (classification !== "Incomplete") return undefined;
+  const open = isOpenPosition(status);
 
   if (status.orphanedOrderEvidence.length > 0) {
     return {
@@ -175,12 +200,32 @@ function recoveryPlan(status: TickerStatus, classification: LedgerCompletenessSt
       rationale: "Orders History already names the missing transaction's ticker/side/shares/date — a Statement or Invoice for that date closes the gap directly.",
     };
   }
+  // Open with no independent broker count at all (never "mismatch" — that
+  // reason means a count already exists) — the single most direct document
+  // is the broker's own current-holdings screen, per business rule "if the
+  // ticker is still open, request My Position."
+  if (open && status.reason === "no-verification") {
+    return {
+      bestEvidence: "My Position",
+      alternativeEvidence: "Orders History",
+      estimatedRecoverySuccess: status.lastBalancedDate ? RECOVERY_CONFIDENCE.boundedGap : RECOVERY_CONFIDENCE.unboundedGap,
+      rationale: "This position is still open and no broker holdings count has ever been supplied — a \"My Position\" screenshot confirms the current unit count directly, the single fact this ticker is missing.",
+    };
+  }
   if (status.lastBalancedDate) {
     return {
-      bestEvidence: "Orders History",
+      // Transactions (account-wide, dated) is the cheaper, more exhaustive
+      // ask than Orders History here -- the undated "Orders" timeline shape
+      // can't pinpoint a date at all, while the dated "Transactions" list
+      // (or an Orders History screenshot for the specific ticker) can. Never
+      // My Position for a closed ticker (enforced above); a real "mismatch"
+      // already has its broker count, so Orders History (to find WHICH row
+      // is wrong) outranks Transactions (which only proves something
+      // happened, not what).
+      bestEvidence: !open || status.reason === "mismatch" ? "Orders History" : "Transactions",
       alternativeEvidence: "Broker Statement",
       estimatedRecoverySuccess: RECOVERY_CONFIDENCE.boundedGap,
-      rationale: `Everything through ${status.lastBalancedDate.date} reconciles exactly — an Orders History screenshot covering after that date would show precisely what's missing.`,
+      rationale: `Everything through ${status.lastBalancedDate.date} reconciles exactly -- evidence dated after that date (a Transactions screen, or an Orders History screenshot for this ticker) would show precisely what's missing.`,
     };
   }
   return {

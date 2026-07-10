@@ -1627,3 +1627,114 @@ describe("TickerGroupCard — constraint validation layer (facts first, diagnosi
     expect(screen.queryByText("Constraint check")).not.toBeInTheDocument();
   });
 });
+
+describe("TickerGroupCard — closed-position recovery plan (the SKPC case: buy 82 == sell 82, no independent corroboration)", () => {
+  const skpcMatchStatus = {
+    matched: false,
+    reason: "closed-position" as const,
+    netShares: 0,
+    existingRemainingShares: 0,
+    pendingBuyShares: 82,
+    pendingSellShares: 82,
+  };
+
+  it("shows the amber 'needs corroborating evidence' badge, never the green 'Sold out' badge, for an uncorroborated net-zero ticker", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [buyEntry("b1")], sells: [sellEntry("s1")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={skpcMatchStatus}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Closed — needs corroborating evidence")).toBeInTheDocument();
+    expect(screen.queryByText("Sold out — no screenshot needed")).not.toBeInTheDocument();
+    // No Confirm button either — matched is false, so nothing commits yet.
+    expect(screen.queryByRole("button", { name: /Confirm/ })).not.toBeInTheDocument();
+  });
+
+  it("names a concrete next document instead of asking to re-upload everything, and never recommends My Position for a closed ticker", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [buyEntry("b1")], sells: [sellEntry("s1")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={skpcMatchStatus}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/Closes this gap:/)).toBeInTheDocument();
+    expect(screen.queryByText(/My Position/)).not.toBeInTheDocument();
+  });
+
+  it("shows no recovery plan once independently corroborated (matched: true) — nothing left to recover", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [buyEntry("b1")], sells: [sellEntry("s1")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "orders-verified", netShares: 0, existingRemainingShares: 0, pendingBuyShares: 82, pendingSellShares: 82 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.queryByText(/Closes this gap:/)).not.toBeInTheDocument();
+  });
+});

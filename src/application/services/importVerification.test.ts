@@ -65,7 +65,7 @@ describe("checkTickerMatch", () => {
     expect(result.reason).toBe("no-shares-to-verify");
   });
 
-  it("is trivially matched for a fully sold-out ticker (buy == sell) even with no broker screenshot", () => {
+  it("does NOT auto-match a fully sold-out ticker (buy == sell) with no independent corroboration — the JUFO/SKPC closed-position trap", () => {
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 50,
@@ -73,10 +73,34 @@ describe("checkTickerMatch", () => {
       existingRemainingShares: 0,
       verifiedUnits: undefined,
     });
-    expect(result.matched).toBe(true);
+    expect(result.matched).toBe(false);
     expect(result.reason).toBe("closed-position");
     expect(result.netShares).toBe(0);
     expect(result.discrepancySide).toBeUndefined();
+  });
+
+  it("still matches a closed (net-zero) ticker once independently corroborated (invoice/cross/orders-verified)", () => {
+    const invoiceVerified = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 50,
+      pendingSellShares: 50,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      allPendingFromInvoice: true,
+    });
+    expect(invoiceVerified.matched).toBe(true);
+    expect(invoiceVerified.reason).toBe("invoice-verified");
+
+    const ordersVerified = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 50,
+      pendingSellShares: 50,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      allPendingOrderConfirmed: true,
+    });
+    expect(ordersVerified.matched).toBe(true);
+    expect(ordersVerified.reason).toBe("orders-verified");
   });
 
   it("still requires a screenshot when net shares are nonzero and none was uploaded", () => {

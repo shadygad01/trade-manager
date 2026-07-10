@@ -31,6 +31,8 @@ import {
 import { suggestRemovalsToReconcile, MAX_RECONCILE_ROWS, type ReconcileSuggestion } from "@application/services/mismatchResolver";
 import { findLastBalancedDate } from "@application/services/netShareTimeline";
 import { buildTickerConstraintReport, type TickerConstraintReport } from "@application/services/constraintValidation";
+import { assessTickerCompleteness, type TickerCompletenessReport } from "@application/services/completenessEngine";
+import type { TickerStatus } from "@application/services/verificationEngine";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -471,6 +473,7 @@ export function ImportPage() {
             status: result.status === "failed" ? "failed" : "parsed",
             candidates: result.candidates,
             rawText: result.rawText,
+            fileBlob: result.fileBlob,
             createdAt: new Date().toISOString(),
             parsedAt: new Date().toISOString(),
           };
@@ -1925,6 +1928,41 @@ function ConstraintReportPanel({ report, t }: { report: TickerConstraintReport; 
   );
 }
 
+const EVIDENCE_DOCUMENT_LABEL_KEY: Record<string, string> = {
+  "Orders History": "importPage.evidenceOrdersHistory",
+  "Broker Statement": "importPage.evidenceBrokerStatement",
+  Invoice: "importPage.evidenceInvoice",
+  Transactions: "importPage.evidenceTransactions",
+  "My Position": "importPage.evidenceMyPosition",
+};
+
+/**
+ * Surfaces completenessEngine's minimal-document recommendation instead of a
+ * bare "needs a screenshot" block — names exactly which document closes the
+ * gap and why, per the Evidence Resolution business rule "request only the
+ * smallest missing document, never ask the user to re-upload everything."
+ * Manual "I confirm this is complete" is deliberately NOT offered here as an
+ * equal alternative — it's the last resort once no further evidence can
+ * reasonably be requested, not a shortcut around requesting it.
+ */
+function RecoveryPlanPanel({ report, t }: { report: TickerCompletenessReport; t: TFunction }) {
+  const plan = report.recoveryPlan;
+  if (!plan) return null;
+  return (
+    <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2.5 text-xs text-amber-200">
+      <p className="font-medium">
+        {t("importPage.recoveryPlanTitle", { document: t(EVIDENCE_DOCUMENT_LABEL_KEY[plan.bestEvidence] ?? plan.bestEvidence) })}
+      </p>
+      <p className="mt-1 text-amber-200/80">{plan.rationale}</p>
+      {plan.alternativeEvidence ? (
+        <p className="mt-1 text-amber-200/60">
+          {t("importPage.recoveryPlanAlternative", { document: t(EVIDENCE_DOCUMENT_LABEL_KEY[plan.alternativeEvidence] ?? plan.alternativeEvidence) })}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 export function TickerGroupCard({
   ticker,
   group,
@@ -2162,6 +2200,27 @@ export function TickerGroupCard({
     orphanedOrderEvidence,
   ]);
 
+  /**
+   * Evidence Resolution's minimal-document recommendation (completenessEngine.ts)
+   * for a still-unmatched ticker — reuses the exact same engine the
+   * RawTransaction-based path already uses, fed from this card's own
+   * already-computed signals (matchStatus, orphanedOrderEvidence,
+   * lastBalanced) rather than a second, parallel implementation. Only
+   * meaningful once unmatched — a matched ticker has nothing to recover.
+   */
+  const completenessReport = useMemo((): TickerCompletenessReport | undefined => {
+    if (!matchStatus || matchStatus.matched || group.buys.length + group.sells.length === 0) return undefined;
+    const status: TickerStatus = {
+      ...matchStatus,
+      ticker,
+      orphanedOrderEvidence: orphanedOrderEvidence ?? [],
+      wrongTickerHintCount: 0,
+      dateMisreadHintCount: 0,
+      lastBalancedDate: lastBalanced,
+    };
+    return assessTickerCompleteness(status);
+  }, [matchStatus, group.buys, group.sells, ticker, orphanedOrderEvidence, lastBalanced]);
+
   function confirmRename() {
     onRenameTicker(draftTicker);
     setRenaming(false);
@@ -2297,6 +2356,7 @@ export function TickerGroupCard({
         </div>
       </div>
       {constraintReport ? <ConstraintReportPanel report={constraintReport} t={t} /> : null}
+      {completenessReport?.recoveryPlan ? <RecoveryPlanPanel report={completenessReport} t={t} /> : null}
       {matchStatus?.reason === "matched" && (matchStatus.existingRemainingShares ?? 0) > 0 ? (
         <div className="border-b border-slate-800 bg-emerald-500/5 px-4 py-2 text-xs text-slate-400">
           {t("importPage.matchesBrokerBanner", {
@@ -2706,6 +2766,20 @@ function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
     );
   }
   if (status.reason === "closed-position") {
+    // matched=true here means an independent source (invoice/cross/orders
+    // history) already corroborated the closed round-trip; matched=false
+    // means the net-zero arithmetic alone was all that was on offer — never
+    // trusted by itself (see importVerification.ts's closed-position fix,
+    // the JUFO/SKPC bug class). The unmatched case gets the same amber
+    // "needs evidence" treatment as no-verification, plus a
+    // RecoveryPlanPanel naming exactly what to upload next.
+    if (!status.matched) {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+          <ShieldAlert size={11} /> {t("importPage.matchClosedNeedsEvidence")}
+        </span>
+      );
+    }
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
         <ShieldCheck size={11} /> {t("importPage.matchSoldOut")}

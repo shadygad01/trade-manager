@@ -47,10 +47,16 @@ describe("commitEngine", () => {
     expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(false);
   });
 
-  it("shouldCommit is true once a closed position (buy+sell netting to zero) needs no verification screenshot", async () => {
+  it("shouldCommit is true once a closed position (buy+sell netting to zero) is independently corroborated (e.g. invoice-sourced) — bare arithmetic alone is never enough (see importVerification.ts's closed-position fix)", async () => {
+    await appendBuy({ shares: 100 }, "invoice");
+    await appendSell({ shares: 100 }, "invoice");
+    expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(true);
+  });
+
+  it("shouldCommit is false for a closed position (buy+sell netting to zero) with NO independent corroboration — the JUFO/SKPC trap", async () => {
     await appendBuy({ shares: 100 });
     await appendSell({ shares: 100 });
-    expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(true);
+    expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(false);
   });
 
   it("shouldCommit is false while a lone buy with no corroboration is still Needs Review", async () => {
@@ -59,8 +65,8 @@ describe("commitEngine", () => {
   });
 
   it("commitTicker writes a LotOpened event for a verified buy and it's readable back from the cache", async () => {
-    await appendBuy({ shares: 100 });
-    await appendSell({ shares: 100 }); // closes the position -> both verify
+    await appendBuy({ shares: 100 }, "invoice");
+    await appendSell({ shares: 100 }, "invoice"); // invoice-corroborated closed position -> both verify
     await commitTicker(repos, PORTFOLIO, "COMI");
 
     const events = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
@@ -75,8 +81,8 @@ describe("commitEngine", () => {
   });
 
   it("commitTicker writes allocations generated from a verified SellAllocationDecision", async () => {
-    await appendBuy({ shares: 100 });
-    await appendSell({ shares: 100 });
+    await appendBuy({ shares: 100 }, "invoice");
+    await appendSell({ shares: 100 }, "invoice");
     await commitTicker(repos, PORTFOLIO, "COMI");
 
     const events = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
@@ -91,15 +97,15 @@ describe("commitEngine", () => {
   });
 
   it("re-committing after new data arrives fully replaces the cache, never leaving stale rows behind", async () => {
-    await appendBuy({ shares: 100 });
-    await appendSell({ shares: 100 });
+    await appendBuy({ shares: 100 }, "invoice");
+    await appendSell({ shares: 100 }, "invoice");
     await commitTicker(repos, PORTFOLIO, "COMI");
     const firstPass = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
     expect(firstPass).toHaveLength(2);
 
     // A second, independent buy+sell pair for the same ticker arrives later.
-    await appendBuy({ shares: 50, executionDate: "2026-03-01" });
-    await appendSell({ shares: 50, executionDate: "2026-03-05" });
+    await appendBuy({ shares: 50, executionDate: "2026-03-01" }, "invoice");
+    await appendSell({ shares: 50, executionDate: "2026-03-05" }, "invoice");
     await commitTicker(repos, PORTFOLIO, "COMI");
 
     const secondPass = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
@@ -110,12 +116,12 @@ describe("commitEngine", () => {
   });
 
   it("committing one ticker never touches another ticker's cached rows", async () => {
-    await appendBuy({ ticker: "COMI", shares: 100 });
-    await appendSell({ ticker: "COMI", shares: 100 });
+    await appendBuy({ ticker: "COMI", shares: 100 }, "invoice");
+    await appendSell({ ticker: "COMI", shares: 100 }, "invoice");
     await commitTicker(repos, PORTFOLIO, "COMI");
 
-    await appendBuy({ ticker: "HRHO", shares: 20, price: 10 });
-    await appendSell({ ticker: "HRHO", shares: 20, price: 12 });
+    await appendBuy({ ticker: "HRHO", shares: 20, price: 10 }, "invoice");
+    await appendSell({ ticker: "HRHO", shares: 20, price: 12 }, "invoice");
     await commitTicker(repos, PORTFOLIO, "HRHO");
 
     expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toHaveLength(2);
@@ -131,6 +137,22 @@ describe("commitEngine", () => {
     });
 
     it("appending the transaction that completes a closed position triggers a commit automatically, with no explicit commitTicker call", async () => {
+      // A broker "My Position" capture of 0 units is the corroboration here
+      // (see importVerification.ts's closed-position fix) — chosen instead
+      // of invoice-sourcing because an invoice bypasses per-row net-share
+      // checks unconditionally, which would verify the lone Buy below before
+      // the Sell ever arrives and defeat this test's own "not yet" assertion.
+      await appendAndMaybeCommit(
+        repos,
+        createRawTransaction({
+          kind: "PositionVerificationCapture",
+          source: "position-verification",
+          portfolioId: PORTFOLIO,
+          ticker: "COMI",
+          payload: { ticker: "COMI", units: 0, capturedAt: "2026-01-31T00:00" },
+        })
+      );
+
       const buyPayload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" };
       await appendAndMaybeCommit(repos, createRawTransaction({ kind: "BuyExecution", source: "manual", portfolioId: PORTFOLIO, ticker: "COMI", payload: buyPayload }));
       expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]); // not yet — still Needs Review alone
@@ -158,17 +180,17 @@ describe("commitEngine", () => {
   });
 
   describe("assignPortfolio", () => {
-    async function appendUnassignedBuy(overrides: Partial<BuyExecutionPayload> = {}) {
+    async function appendUnassignedBuy(overrides: Partial<BuyExecutionPayload> = {}, source: "csv" | "invoice" = "csv") {
       const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01", ...overrides };
-      return rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "csv", ticker: "COMI", payload })); // no portfolioId — as Import writes it
+      return rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source, ticker: "COMI", payload })); // no portfolioId — as Import writes it
     }
 
     it("assigning a ticker's unassigned transactions makes them visible to shouldCommit/commitTicker under that portfolio", async () => {
-      await appendUnassignedBuy({ shares: 100 });
+      await appendUnassignedBuy({ shares: 100 }, "invoice");
       await rawTransactions.append(
         createRawTransaction({
           kind: "SellExecution",
-          source: "csv",
+          source: "invoice",
           ticker: "COMI",
           payload: { ticker: "COMI", shares: 100, price: 50, executionDate: "2026-02-05" },
         })
@@ -219,6 +241,21 @@ describe("commitEngine", () => {
 
   describe("retractRawTransaction", () => {
     it("a retracted transaction drops out of the ticker's relevant set — commitTicker clears the cache entry that resurrected it", async () => {
+      // A broker "My Position" capture of 0 units corroborates the closed
+      // round-trip (see importVerification.ts's closed-position fix) —
+      // chosen instead of invoice-sourcing because an invoice bypasses
+      // per-row net-share checks unconditionally: the lone Sell left behind
+      // after retracting the Buy would otherwise still self-verify, instead
+      // of correctly reverting to Needs Review as this test expects.
+      await rawTransactions.append(
+        createRawTransaction({
+          kind: "PositionVerificationCapture",
+          source: "position-verification",
+          portfolioId: PORTFOLIO,
+          ticker: "COMI",
+          payload: { ticker: "COMI", units: 0, capturedAt: "2026-01-31T00:00" },
+        })
+      );
       const buy = await appendBuy({ shares: 100 });
       await appendSell({ shares: 100 });
       await commitTicker(repos, PORTFOLIO, "COMI");
@@ -257,8 +294,8 @@ describe("commitEngine", () => {
 
   describe("renameRawTransactionsTicker", () => {
     it("moves a closed position's committed cache entries from the old ticker to the new one", async () => {
-      await appendBuy({ ticker: "COMI", shares: 100 });
-      await appendSell({ ticker: "COMI", shares: 100 });
+      await appendBuy({ ticker: "COMI", shares: 100 }, "invoice");
+      await appendSell({ ticker: "COMI", shares: 100 }, "invoice");
       await commitTicker(repos, PORTFOLIO, "COMI");
       expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toHaveLength(2);
 
@@ -319,8 +356,8 @@ describe("commitEngine", () => {
   describe("Phase 9.5 — verifyAllDetailed's richer API agrees with commitEngine's existing decisions", () => {
     /** commitEngine.ts never called any new API — it still calls verifyAll() exactly as before. These tests just cross-check the additive verifyAllDetailed()/TickerStatus surface against the ledger/allocation output that same unchanged code path already produces, proving the richer contract introduces no divergence. */
     it("a ticker verifyAllDetailed reports matched:true is exactly the ticker shouldCommit says yes for, and commitTicker's ledger events reflect it", async () => {
-      await appendBuy({ shares: 100 });
-      await appendSell({ shares: 100 }); // closed position, no screenshot required
+      await appendBuy({ shares: 100 }, "invoice");
+      await appendSell({ shares: 100 }, "invoice"); // invoice-corroborated closed position
 
       const all = await rawTransactions.getAll();
       const status = verifyAllDetailed({ transactions: all, positions: [] }).tickers.get("COMI");
@@ -346,8 +383,8 @@ describe("commitEngine", () => {
     });
 
     it("allocations generated via commitTicker are unaffected by reading the richer API alongside it", async () => {
-      await appendBuy({ shares: 100 });
-      await appendSell({ shares: 100 });
+      await appendBuy({ shares: 100 }, "invoice");
+      await appendSell({ shares: 100 }, "invoice");
       await commitTicker(repos, PORTFOLIO, "COMI");
       const events = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
       const lot = events.find((e) => e.type === "LotOpened")!;

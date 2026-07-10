@@ -79,9 +79,17 @@ describe("verificationEngine.verifyAll", () => {
     expect(result.get(b.id)?.verdict).toBe("Needs Review");
   });
 
-  it("a fully closed position (buy + matching sell, net zero, no screenshot needed) is Verified", () => {
+  it("a closed position (buy + matching sell, net zero) with NO independent corroboration is still Needs Review — the JUFO/SKPC closed-position trap", () => {
     const b = buy({ shares: 100 });
     const s = sell({ shares: 100 });
+    const result = run([b, s]);
+    expect(result.get(b.id)?.verdict).toBe("Needs Review");
+    expect(result.get(s.id)?.verdict).toBe("Needs Review");
+  });
+
+  it("a fully closed position (buy + matching sell, net zero) IS Verified once independently corroborated (e.g. invoice-sourced)", () => {
+    const b = buy({ shares: 100, source: "invoice" });
+    const s = sell({ shares: 100, source: "invoice" });
     const result = run([b, s]);
     expect(result.get(b.id)?.verdict).toBe("Verified");
     expect(result.get(s.id)?.verdict).toBe("Verified");

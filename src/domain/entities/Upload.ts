@@ -114,6 +114,17 @@ export interface Upload {
   status: UploadStatus;
   candidates: ParsedTradeCandidate[];
   rawText?: string;
+  /**
+   * The original document's bytes, kept permanently alongside the extracted
+   * `rawText` — an Evidence Repository that only keeps what one parsing pass
+   * happened to read can never be re-examined if extraction logic improves
+   * later, or re-OCR'd from the source if the read was wrong. Optional only
+   * for uploads recorded before this field existed; every new upload sets
+   * it. Never populated for `contentType: "text/plain"`/CSV uploads — the
+   * file's bytes already ARE `rawText` verbatim, so keeping both would be a
+   * pure duplicate.
+   */
+  fileBlob?: Blob;
   errorMessage?: string;
   createdAt: string;
   parsedAt?: string;
