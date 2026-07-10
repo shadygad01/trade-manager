@@ -1,4 +1,4 @@
-import type { TradeRepository, TradeAllocationRepository, VerificationRepository } from "@domain/repositories";
+import type { TradeRepository, TradeAllocationRepository, VerificationRepository, TimelineRepository, PortfolioRepository } from "@domain/repositories";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import {
   createRawTransaction,
@@ -6,6 +6,8 @@ import {
   type SellExecutionPayload,
   type SellAllocationDecisionPayload,
   type PositionVerificationCapturePayload,
+  type DividendPaymentPayload,
+  type CashAdjustmentPayload,
 } from "@domain/entities/RawTransaction";
 import { canonicalKey } from "./ledgerRebuild";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -28,15 +30,19 @@ import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
  */
 
 export interface BackfillRepos extends CommitEngineRepos {
+  portfolios: PortfolioRepository;
   trades: TradeRepository;
   allocations: TradeAllocationRepository;
   verifications: VerificationRepository;
+  timeline: TimelineRepository;
 }
 
 export interface BackfillResult {
   buysBackfilled: number;
   sellOrdersBackfilled: number;
   verificationsBackfilled: number;
+  /** Dividend/CashAdjustment TimelineEvents converted to facts — see PortfolioService.recordDividend/recordCashAdjustment, which only started writing these facts going forward; every pre-existing portfolio's history needs this one-time conversion the same way Trade/TradeAllocation did. */
+  cashEventsBackfilled: number;
 }
 
 export class BackfillAlreadyRanError extends Error {
@@ -150,5 +156,33 @@ export async function backfillRawTransactions(repos: BackfillRepos): Promise<Bac
     );
   }
 
-  return { buysBackfilled: trades.length, sellOrdersBackfilled: sellGroups.size, verificationsBackfilled: verifications.length };
+  // Dividend/CashAdjustment: recordDividend/recordCashAdjustment only start
+  // writing these facts going forward (see PortfolioService.ts) — every
+  // dividend/adjustment already on a pre-existing portfolio's timeline needs
+  // this one-time conversion, the same reason Trade/TradeAllocation needed
+  // one. Reuses the TimelineEvent's own id as the fact's id, matching the
+  // id-correlation those functions now use going forward, so a portfolio
+  // backfilled here and then edited afterward never double-facts the same
+  // event under two different ids. Enumerated from every portfolio, not
+  // just ones with a Trade/Allocation/Verification — a portfolio that has
+  // only ever received a dividend or manual cash top-up must not be missed.
+  const allPortfolios = await repos.portfolios.getAll();
+  let cashEventsBackfilled = 0;
+  for (const portfolio of allPortfolios) {
+    const portfolioId = portfolio.id;
+    const events = await repos.timeline.getByPortfolio(portfolioId);
+    for (const event of events) {
+      if (event.type === "Dividend") {
+        const payload: DividendPaymentPayload = { ticker: event.ticker, amount: event.amount ?? 0, date: event.timestamp.slice(0, 10) };
+        await appendAndMaybeCommit(repos, createRawTransaction({ id: event.id, kind: "DividendPayment", source: "backfill", portfolioId, payload }));
+        cashEventsBackfilled += 1;
+      } else if (event.type === "CashAdjustment") {
+        const payload: CashAdjustmentPayload = { amount: event.amount ?? 0, notes: event.notes ?? "", date: event.timestamp.slice(0, 10) };
+        await appendAndMaybeCommit(repos, createRawTransaction({ id: event.id, kind: "CashAdjustment", source: "backfill", portfolioId, payload }));
+        cashEventsBackfilled += 1;
+      }
+    }
+  }
+
+  return { buysBackfilled: trades.length, sellOrdersBackfilled: sellGroups.size, verificationsBackfilled: verifications.length, cashEventsBackfilled };
 }

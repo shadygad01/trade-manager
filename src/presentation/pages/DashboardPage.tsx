@@ -18,7 +18,8 @@ import {
 } from "recharts";
 import { TrendingUp, TrendingDown, Wallet, PieChart as PieChartIcon, Layers, CircleDollarSign } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { computePositions, type PositionAggregate } from "@application/services/TradeService";
+import type { PositionAggregate } from "@application/services/TradeService";
+import { computeCanonicalPositions } from "@application/services/canonicalHoldings";
 import { computeAnalytics } from "@application/analytics/AnalyticsEngine";
 import { sectorAllocation } from "@application/analytics/calculators/sectorAllocation";
 import { UNCLASSIFIED_SECTOR } from "@domain/value-objects/knownSectors";
@@ -103,7 +104,7 @@ export function DashboardPage() {
     const summaries: PortfolioSummary[] = await Promise.all(
       portfolios.map(async (portfolio) => {
         const [positions, trades, allocations, timelineEvents] = await Promise.all([
-          computePositions(repos, portfolio.id, priceMap),
+          computeCanonicalPositions(repos, portfolio.id, priceMap),
           repos.trades.getByPortfolio(portfolio.id),
           repos.tradeAllocations.getByPortfolio(portfolio.id),
           repos.timeline.getByPortfolio(portfolio.id),

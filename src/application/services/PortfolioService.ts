@@ -1,10 +1,31 @@
 import { createPortfolio, type Portfolio, type PortfolioKind } from "@domain/entities/Portfolio";
 import { createTimelineEvent, type TimelineEvent } from "@domain/entities/TimelineEvent";
+import { createRawTransaction, type CashResetPayload, type DividendPaymentPayload, type CashAdjustmentPayload } from "@domain/entities/RawTransaction";
 import { Money } from "@domain/value-objects/Money";
 import { generateId } from "@domain/value-objects/id";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { getTrackingStartDate, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
+import { appendAndMaybeCommit, retractRawTransaction, type CommitEngineRepos } from "./commitEngine";
+
+/**
+ * Same non-fatal shadow-write discipline as every other dual-write in this
+ * migration (TradeService.ensureBuyFact/ensureSellFacts) — a transient
+ * IndexedDB failure here, or a caller (a test fixture) whose repos bundle
+ * doesn't carry `rawTransactions`, must never break the actual cash/
+ * dividend/timeline mutation these functions exist for. `Partial` because
+ * only the app's real repos singleton carries `rawTransactions`/
+ * `committedLedger` — every existing caller/test keeps compiling and
+ * passing unchanged.
+ */
+async function writeCashFact(repos: Partial<CommitEngineRepos>, portfolioId: string, kind: "CashReset" | "DividendPayment" | "CashAdjustment", payload: CashResetPayload | DividendPaymentPayload | CashAdjustmentPayload, id?: string): Promise<void> {
+  if (!repos.rawTransactions || !repos.committedLedger) return;
+  try {
+    await appendAndMaybeCommit(repos as CommitEngineRepos, createRawTransaction({ id, kind, source: "manual", portfolioId, payload }));
+  } catch (err) {
+    console.error(`writeCashFact(${kind}) failed (shadow write, non-fatal):`, err);
+  }
+}
 
 export interface CreatePortfolioInput {
   name: string;
@@ -69,10 +90,16 @@ export async function renamePortfolio(repos: AppRepositories, portfolioId: strin
  * and portfolio performance is measured against cost basis (see
  * performanceCurve.ts), never against this number.
  */
-export async function setCash(repos: AppRepositories, portfolioId: string, newCash: number): Promise<Portfolio> {
+export async function setCash(repos: AppRepositories & Partial<CommitEngineRepos>, portfolioId: string, newCash: number): Promise<Portfolio> {
   const portfolio = await requirePortfolio(repos, portfolioId);
   const updated = { ...portfolio, cash: Money.from(newCash).toNumber() };
   await repos.portfolios.save(updated);
+  // CashReset is the one RawTransactionKind built for exactly this shape —
+  // an explicit checkpoint asserting the correct balance, not an amount
+  // added/subtracted (see CashResetPayload's own doc comment: replay sums
+  // every cash-affecting fact after the latest one, starting from here).
+  const payload: CashResetPayload = { amount: updated.cash, asOfDate: new Date().toISOString().slice(0, 10) };
+  await writeCashFact(repos, portfolioId, "CashReset", payload);
   return updated;
 }
 
@@ -85,7 +112,7 @@ export interface RecordDividendInput {
 }
 
 export async function recordDividend(
-  repos: AppRepositories,
+  repos: AppRepositories & Partial<CommitEngineRepos>,
   portfolioId: string,
   input: RecordDividendInput
 ): Promise<Portfolio> {
@@ -98,9 +125,10 @@ export async function recordDividend(
   const portfolio = await requirePortfolio(repos, portfolioId);
   const updated = { ...portfolio, cash: Money.from(portfolio.cash).add(Money.from(input.amount)).toNumber() };
   await repos.portfolios.save(updated);
+  const timelineId = generateId();
   await repos.timeline.save(
     createTimelineEvent({
-      id: generateId(),
+      id: timelineId,
       portfolioId,
       type: "Dividend",
       timestamp: input.date ? `${input.date}T00:00` : new Date().toISOString(),
@@ -109,6 +137,11 @@ export async function recordDividend(
       notes: input.notes,
     })
   );
+  // Same id as the TimelineEvent — lets deleteDividend retract this exact
+  // fact by id directly, no signature-matching needed (same id-correlation
+  // convention as TradeService.ensureBuyFact using the Trade's own id).
+  const payload: DividendPaymentPayload = { ticker: input.ticker ? normalizeTicker(input.ticker) : undefined, amount: input.amount, date: input.date ?? new Date().toISOString().slice(0, 10) };
+  await writeCashFact(repos, portfolioId, "DividendPayment", payload, timelineId);
   return updated;
 }
 
@@ -119,7 +152,7 @@ export async function recordDividend(
  * out of cash the same way deleteTrade refunds a buy's cost, and removes
  * the timeline event entirely rather than leaving a zeroed-out placeholder.
  */
-export async function deleteDividend(repos: AppRepositories, event: TimelineEvent): Promise<void> {
+export async function deleteDividend(repos: AppRepositories & Partial<CommitEngineRepos>, event: TimelineEvent): Promise<void> {
   if (event.type !== "Dividend") {
     throw new Error(`deleteDividend called with a non-Dividend event: ${event.type}`);
   }
@@ -127,10 +160,17 @@ export async function deleteDividend(repos: AppRepositories, event: TimelineEven
   const updated = { ...portfolio, cash: Money.from(portfolio.cash).subtract(Money.from(event.amount ?? 0)).toNumber() };
   await repos.portfolios.save(updated);
   await repos.timeline.delete(event.id);
+  if (repos.rawTransactions && repos.committedLedger) {
+    try {
+      await retractRawTransaction(repos as CommitEngineRepos, event.id);
+    } catch (err) {
+      console.error("deleteDividend: retractRawTransaction failed (shadow write, non-fatal):", err);
+    }
+  }
 }
 
 export async function recordCashAdjustment(
-  repos: AppRepositories,
+  repos: AppRepositories & Partial<CommitEngineRepos>,
   portfolioId: string,
   amount: number,
   notes: string
@@ -138,9 +178,10 @@ export async function recordCashAdjustment(
   const portfolio = await requirePortfolio(repos, portfolioId);
   const updated = { ...portfolio, cash: Money.from(portfolio.cash).add(Money.from(amount)).toNumber() };
   await repos.portfolios.save(updated);
+  const timelineId = generateId();
   await repos.timeline.save(
     createTimelineEvent({
-      id: generateId(),
+      id: timelineId,
       portfolioId,
       type: "CashAdjustment",
       timestamp: new Date().toISOString(),
@@ -148,6 +189,8 @@ export async function recordCashAdjustment(
       notes,
     })
   );
+  const payload: CashAdjustmentPayload = { amount, notes, date: new Date().toISOString().slice(0, 10) };
+  await writeCashFact(repos, portfolioId, "CashAdjustment", payload, timelineId);
   return updated;
 }
 

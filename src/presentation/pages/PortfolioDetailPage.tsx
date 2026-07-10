@@ -3,7 +3,8 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { useParams } from "wouter";
 import { Banknote, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser } from "lucide-react";
 import { repos } from "@presentation/lib/data";
-import { computePositions, deleteTrade } from "@application/services/TradeService";
+import { deleteTrade } from "@application/services/TradeService";
+import { computeCanonicalPositions } from "@application/services/canonicalHoldings";
 import {
   setCash,
   recordDividend,
@@ -50,7 +51,7 @@ export function PortfolioDetailPage() {
   const portfolio = useLiveQuery(() => repos.portfolios.getById(id), [id]);
   const positions = useLiveQuery(async (): Promise<Position[]> => {
     const priceMap = await repos.prices.getAllPrices();
-    return computePositions(repos, id, priceMap);
+    return computeCanonicalPositions(repos, id, priceMap);
   }, [id, refreshKey]);
   const reconciliations = useLiveQuery(async (): Promise<PositionReconciliation[]> => {
     if (!positions) return [];
@@ -173,7 +174,7 @@ export function PortfolioDetailPage() {
       const r = reconciliationByTicker.get(p.ticker);
       const ids =
         r && !r.verificationStale && r.quantityMismatch
-          ? suggestDuplicateTradeIds({ openTrades: p.openTrades, computedShares: r.computedShares, verifiedUnits: r.verifiedUnits })
+          ? suggestDuplicateTradeIds({ openTrades: p.openTrades, computedShares: r.computedShares, verifiedUnits: r.verifiedUnits, verifiedAvgCost: r.verifiedAvgCost })
           : [];
       return [p.ticker, ids] as const;
     })

@@ -6,7 +6,6 @@ import { repos } from "@presentation/lib/data";
 import { createPortfolioAndSave, unarchivePortfolio } from "@application/services/PortfolioService";
 import type { Portfolio, PortfolioKind } from "@domain/entities/Portfolio";
 import {
-  computePositions,
   findTickersSplitAcrossPortfolios,
   consolidateTicker,
   findMisnamedTickers,
@@ -14,6 +13,7 @@ import {
   type SplitTickerEntry,
   type MisnamedTickerEntry,
 } from "@application/services/TradeService";
+import { computeCanonicalPositions } from "@application/services/canonicalHoldings";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
@@ -43,7 +43,7 @@ export function PortfoliosPage() {
     const priceMap = await repos.prices.getAllPrices();
     const map = new Map<string, number>();
     for (const p of portfolios) {
-      const positions = await computePositions(repos, p.id, priceMap);
+      const positions = await computeCanonicalPositions(repos, p.id, priceMap);
       const marketValue = positions.reduce((sum: number, pos) => sum + (pos.marketValue ?? pos.costBasis), 0);
       map.set(p.id, marketValue);
     }

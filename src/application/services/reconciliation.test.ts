@@ -107,6 +107,23 @@ describe("suggestDuplicateTradeIds", () => {
     expect(suggested).toEqual(["t2"]);
   });
 
+  it("delegates to the canonical avg-cost-ranked solver when a verified avg cost is available — picking the subset whose surviving avg cost is closest to it", () => {
+    // Removing t1 (50) leaves t2+t3, implied avg (48+55)/2 = 51.5 — farther
+    // from the broker's 54 than removing t2 (48), which leaves t1+t3, avg
+    // (50+55)/2 = 52.5. The canonical solver correctly prefers removing t2.
+    const suggested = suggestDuplicateTradeIds({
+      openTrades: [
+        { id: "t1", entryPrice: 50, shares: 100, remainingShares: 100 },
+        { id: "t2", entryPrice: 48, shares: 100, remainingShares: 100 },
+        { id: "t3", entryPrice: 55, shares: 100, remainingShares: 100 },
+      ],
+      computedShares: 300,
+      verifiedUnits: 200,
+      verifiedAvgCost: 54,
+    });
+    expect(suggested).toEqual(["t2"]);
+  });
+
   it("returns every trade needed to close a gap spanning more than one duplicate", () => {
     // Three 100-share buys (t1 kept, t2/t3 duplicates) computed at 300 vs. a
     // broker-verified 100 — both duplicates must go in one pass, not just one.
