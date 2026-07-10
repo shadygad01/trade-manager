@@ -35,9 +35,9 @@ export interface ParsedTradeCandidate {
    * field existed; those can still pair with an invoice (the original
    * cross-verification rule) but never with each other.
    */
-  source?: "statement" | "invoice" | "orders-screen" | "csv";
+  source?: "statement" | "invoice" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
   /** How this candidate's text was obtained — see RawTransaction.ExtractionMethod's own doc comment. */
-  extractionMethod?: "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry";
+  extractionMethod?: "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry" | "stes-workbook";
   /** Which released BrokerParser version produced this candidate — see RawTransaction.parserVersion's own doc comment. */
   parserVersion?: string;
   /**
@@ -98,12 +98,14 @@ export interface ParsedOrderEvidence {
   parserVersion?: string;
 }
 
-/** A dividend payout read from a broker's "My Position" / dividends history screen. */
+/** A dividend payout read from a broker's "My Position" / dividends history screen, or from an STES workbook DIVIDEND observation. */
 export interface ParsedDividendCandidate {
   ticker: string;
   companyName?: string;
   date: string;
   amount: number;
+  /** Which document type the observation came from (STES imports only) — recorded onto the DividendPayment fact; undefined keeps the pre-STES "position-verification" recording default. */
+  source?: "statement" | "invoice" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
 }
 
 /**

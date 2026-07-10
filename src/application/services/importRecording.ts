@@ -145,15 +145,15 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
     );
   }
 
-  // Dividends are only ever read alongside a "My Position" screen — see
-  // ImportOrchestrator's own routing (parseDividends is called exclusively
-  // in the position-verification branch).
+  // A dividend read alongside a "My Position" screen carries no source of its
+  // own (the pre-STES default); an STES workbook observation carries its
+  // Documents-sheet type instead.
   for (const dividend of dividends) {
     const ticker = dividend.ticker ? normalizeTicker(dividend.ticker) : undefined;
     const payload: DividendPaymentPayload = { ticker, amount: dividend.amount, date: dividend.date };
     await appendAndMaybeCommit(
       repos,
-      createRawTransaction({ kind: "DividendPayment", source: "position-verification", sourceUploadId, ticker, payload })
+      createRawTransaction({ kind: "DividendPayment", source: dividend.source ?? "position-verification", sourceUploadId, ticker, payload })
     );
   }
 

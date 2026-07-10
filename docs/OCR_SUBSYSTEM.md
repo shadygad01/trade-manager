@@ -50,6 +50,8 @@ Implement `BrokerParser` (`src/infrastructure/ocr/parsers/BrokerParser.ts`) and 
 
 Both parsers share `trackedDateRange.ts`'s rolling-cutoff helpers rather than each maintaining their own copy — extend that module, don't fork it, if a new parser needs date-range logic.
 
+One import source lives outside the `BrokerParser` registry entirely: STES v1.1 workbooks (`.xlsx`, the frozen AI exchange contract — see [STANDARD_TRADING_EXCHANGE_SCHEMA.md](STANDARD_TRADING_EXCHANGE_SCHEMA.md)) are binary spreadsheets, not text, so `ImportOrchestrator` routes them to `src/infrastructure/stes/StesWorkbookParser.ts` before any text extraction. The output converges into the exact same `ParsedTradeCandidate`/`ParsedDividendCandidate` shapes and the same downstream pipeline (raw-evidence recording, verification, completeness, evidence graph); the `xlsx` library is dynamically imported so it stays its own lazy chunk, and `trackedDateRange.ts` is reused for the same date-range cutoff.
+
 ## Dividend history extraction
 
 A "My Position" screenshot's "Earned Cash Dividends" section (a per-payout list of date + EGP amount below the position header) is parsed by `BrokerParser.parseDividends` into `ParsedDividendCandidate[]` — one entry per historical payout, dated to when the dividend was actually paid rather than to import time. `ThndrParser.parseDividends` resolves the ticker from the same position-verification header used for units/avg-cost, then regex-matches each `<date> EGP <amount>` row under the section marker; `CsvStatementParser.parseDividends` is a no-op since a transaction CSV export has no such section.

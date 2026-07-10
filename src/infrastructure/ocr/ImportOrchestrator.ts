@@ -9,8 +9,9 @@ import { flatResultIsDeficient, missingFulfilledCount, shouldPreferRowScan } fro
 import { ThndrParser } from "./parsers/ThndrParser";
 import { CsvStatementParser } from "./parsers/CsvStatementParser";
 import { normalizeExtractedText } from "./textNormalize";
+import { isStesWorkbookFile, parseStesWorkbook, STES_PARSER_VERSION } from "../stes/StesWorkbookParser";
 
-export type ImportDocType = "statement" | "orders-screen" | "orders-timeline" | "position-verification";
+export type ImportDocType = "statement" | "orders-screen" | "orders-timeline" | "position-verification" | "stes-workbook";
 
 export interface ImportResult {
   status: "parsed" | "failed";
@@ -65,6 +66,33 @@ export class ImportOrchestrator {
   async importFile(file: File): Promise<ImportResult> {
     const buffer = await file.arrayBuffer();
     const fileHash = await sha256Hex(buffer);
+
+    // STES workbooks are binary spreadsheets — routed before ANY text
+    // extraction, and converging into the exact same ImportResult shape as
+    // every OCR/PDF/CSV document, so everything downstream (Upload archival,
+    // raw-evidence recording, the pending pool, verification/completeness,
+    // the evidence graph) treats an STES upload as just another document.
+    if (isStesWorkbookFile(file)) {
+      const stes = await parseStesWorkbook(buffer);
+      const hasRows = stes.candidates.length > 0 || stes.dividends.length > 0;
+      return {
+        status: stes.ok && hasRows ? "parsed" : "failed",
+        docType: "stes-workbook",
+        candidates: withProvenance(stes.candidates, "stes-workbook", STES_PARSER_VERSION),
+        verifications: [],
+        dividends: stes.dividends,
+        orderEvidences: [],
+        rawText: stes.rawText,
+        warnings:
+          stes.ok && !hasRows && stes.warnings.length === 0
+            ? ["No importable observations were found in the STES workbook."]
+            : stes.warnings,
+        fileHash,
+        // The workbook's bytes are the evidence document — archived like an
+        // image/PDF (rawText above is only a derived rendering of it).
+        fileBlob: file,
+      };
+    }
 
     const isImage = file.type.startsWith("image/");
     const isPdf = file.type === "application/pdf";
