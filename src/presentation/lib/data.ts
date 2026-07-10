@@ -13,6 +13,8 @@ import type { PriceRepository } from "@domain/repositories";
  * satisfies both call sites without the two layers agreeing on a field name.
  * Price data comes from a separate repository since it isn't Dexie-backed.
  */
+export { purgeTickerData, purgeAllData } from "@infrastructure/db/purge";
+
 const baseRepos = createRepositories();
 const priceRepository: PriceRepository = new SnapshotPriceRepository();
 

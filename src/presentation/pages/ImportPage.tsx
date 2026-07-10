@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser, ChevronDown } from "lucide-react";
-import { repos, getImportOrchestrator } from "@presentation/lib/data";
+import { repos, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions } from "@application/services/importRecording";
@@ -867,6 +867,51 @@ export function ImportPage() {
     await Promise.all(uploads.map((u) => repos.uploads.delete(u.id)));
     importSession.clear();
     setRecentFileResults([]);
+  }
+
+  /**
+   * Factory-reset for ONE ticker: permanently deletes everything ever
+   * recorded for it (trades, allocations, timeline, journal, verifications,
+   * raw transactions, ledger caches, and the uploads that carried it — see
+   * purgeTickerData) AND every trace of it in this import session, so
+   * re-uploading its documents starts from a truly blank slate, as if the
+   * stock had never been imported.
+   */
+  async function resetTickerData(ticker: string) {
+    if (!confirm(t("importPage.resetTickerConfirm", { ticker }))) return;
+    try {
+      await purgeTickerData(ticker);
+      importSession.update((prev) => {
+        const droppedKeys = new Set<string>();
+        for (const e of [...prev.pendingCandidates, ...prev.discardedCandidates]) {
+          if (normalizeTicker(e.candidate.ticker) === ticker) droppedKeys.add(e.key);
+        }
+        for (const e of prev.pendingVerifications) if (normalizeTicker(e.verification.ticker) === ticker) droppedKeys.add(e.key);
+        for (const e of prev.pendingDividends) if (normalizeTicker(e.dividend.ticker) === ticker) droppedKeys.add(e.key);
+        for (const e of prev.pendingOrderEvidences) if (normalizeTicker(e.evidence.ticker) === ticker) droppedKeys.add(e.key);
+        const tickerPortfolio = { ...prev.tickerPortfolio };
+        delete tickerPortfolio[ticker];
+        return {
+          ...prev,
+          pendingCandidates: prev.pendingCandidates.filter((e) => !droppedKeys.has(e.key)),
+          pendingVerifications: prev.pendingVerifications.filter((e) => !droppedKeys.has(e.key)),
+          pendingDividends: prev.pendingDividends.filter((e) => !droppedKeys.has(e.key)),
+          pendingOrderEvidences: prev.pendingOrderEvidences.filter((e) => !droppedKeys.has(e.key)),
+          discardedCandidates: prev.discardedCandidates.filter((e) => !droppedKeys.has(e.key)),
+          addedKeys: prev.addedKeys.filter((k) => !droppedKeys.has(k)),
+          acceptedKeys: prev.acceptedKeys.filter((k) => !droppedKeys.has(k)),
+          skippedKeys: prev.skippedKeys.filter((k) => !droppedKeys.has(k)),
+          dismissedKeys: prev.dismissedKeys.filter((k) => !droppedKeys.has(k)),
+          addedTradeIds: Object.fromEntries(Object.entries(prev.addedTradeIds).filter(([k]) => !droppedKeys.has(k))),
+          addedAllocationIds: Object.fromEntries(Object.entries(prev.addedAllocationIds).filter(([k]) => !droppedKeys.has(k))),
+          tickerPortfolio,
+        };
+      });
+      setStage("idle");
+    } catch (e) {
+      setStage("error");
+      setErrorMessage(e instanceof Error ? e.message : t("importPage.resetTickerFailed"));
+    }
   }
 
   /**
@@ -1762,8 +1807,15 @@ export function ImportPage() {
                     const companyName = group.buys[0]?.candidate.companyName ?? group.sells[0]?.candidate.companyName ?? "";
                     const count = tickerResolution.get(ticker)?.transactionCount ?? 0;
                     return (
-                      <li key={ticker} className="rounded-md bg-emerald-500/10 px-3 py-1.5">
-                        {t("importPage.completedTickerEntry", { ticker, company: companyName, count })}
+                      <li key={ticker} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-emerald-500/10 px-3 py-1.5">
+                        <span>{t("importPage.completedTickerEntry", { ticker, company: companyName, count })}</span>
+                        <button
+                          onClick={() => void resetTickerData(ticker)}
+                          title={t("importPage.resetTickerTitle", { ticker })}
+                          className="flex shrink-0 items-center gap-1 rounded-md border border-rose-500/40 px-2 py-0.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
+                        >
+                          <Trash2 size={12} /> {t("importPage.resetTicker")}
+                        </button>
                       </li>
                     );
                   })}
@@ -1814,6 +1866,7 @@ export function ImportPage() {
                 onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
                 onRenameTicker={(newTicker) => void renameTickerGroup(ticker, newTicker)}
                 onRestoreTicker={() => restoreTickerCandidates(ticker)}
+                onResetTicker={() => void resetTickerData(ticker)}
                 orphanedOrderEvidence={orphanedEvidenceByTicker.get(ticker)}
                 existingPortfolioHint={
                   existingNames.length > 0 ? { multiple: existingNames.length > 1, names: existingNames } : undefined
@@ -2000,6 +2053,7 @@ export function TickerGroupCard({
   onAllocateSell,
   onRenameTicker,
   onRestoreTicker,
+  onResetTicker,
   orphanedOrderEvidence,
   existingPortfolioHint,
   mergeSuggestion,
@@ -2073,6 +2127,8 @@ export function TickerGroupCard({
   onRenameTicker: (newTicker: string) => void;
   /** Restores all dismissed/skipped/discarded Buy/Sell rows for this ticker back to pending state. */
   onRestoreTicker?: () => void;
+  /** Permanently erases everything recorded for this ticker (ledger + session) so it can be re-imported from scratch — see ImportPage's resetTickerData. */
+  onResetTicker?: () => void;
   /** Fulfilled order-evidence rows for this ticker that had no matching pending candidate — signals unrecorded historical trades. */
   orphanedOrderEvidence?: ParsedOrderEvidence[];
   existingPortfolioHint: { multiple: boolean; names: string[] } | undefined;
@@ -2313,6 +2369,15 @@ export function TickerGroupCard({
                 className="rounded p-0.5 text-slate-500 hover:text-amber-400 hover:bg-amber-500/10"
               >
                 <RotateCcw size={12} />
+              </button>
+            ) : null}
+            {onResetTicker ? (
+              <button
+                onClick={onResetTicker}
+                title={t("importPage.resetTickerTitle", { ticker })}
+                className="rounded p-0.5 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
+              >
+                <Trash2 size={12} />
               </button>
             ) : null}
           </div>
