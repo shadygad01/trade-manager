@@ -181,6 +181,19 @@ export type RawTransactionPayload =
 
 import { generateId } from "../value-objects/id";
 
+/**
+ * How this fact's text was obtained from the source document — an
+ * independent reliability signal from `confidence` (which reflects
+ * ticker-resolution certainty within already-extracted text, not how
+ * trustworthy the extraction channel itself is). A native PDF/CSV text
+ * layer is machine-generated and essentially lossless; a vision-model or
+ * Tesseract OCR read of a photographed screen has a real, separate
+ * misread risk (glare, crop, a digit misrecognized) that ticker-match
+ * confidence alone never captures. `undefined` only for facts written
+ * before this field existed. See docs/EVIDENCE_ARCHITECTURE.md.
+ */
+export type ExtractionMethod = "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry";
+
 export interface RawTransaction {
   id: string;
   /** Assigned by the repository at append time — never supplied by the caller. */
@@ -194,6 +207,18 @@ export interface RawTransaction {
   /** Indexed top-level field for query performance, mirroring every other ticker-bearing table in this app — not every kind carries one (e.g. CashAdjustment). */
   ticker?: string;
   confidence?: "high" | "medium" | "low";
+  /** See ExtractionMethod's own doc comment — independent of `confidence`. */
+  extractionMethod?: ExtractionMethod;
+  /**
+   * Which released version of the BrokerParser that produced `source`
+   * extracted this fact (e.g. ThndrParser's own exported `PARSER_VERSION`).
+   * Lets a future re-parse of the permanently-stored original document
+   * (Upload.fileBlob) identify exactly which live facts predate a parser
+   * fix, without re-deriving that from `recordedAt` timestamps and a
+   * changelog. Undefined for "manual"/"backfill" sources — no parser ever
+   * ran to version.
+   */
+  parserVersion?: string;
   status: RawTransactionStatus;
   payload: RawTransactionPayload;
   /** The id of an earlier RawTransaction this one corrects or retracts (Correction/Retraction kinds only). */
@@ -211,6 +236,8 @@ export function createRawTransaction(input: {
   sourceUploadId?: string;
   ticker?: string;
   confidence?: "high" | "medium" | "low";
+  extractionMethod?: ExtractionMethod;
+  parserVersion?: string;
   payload: RawTransactionPayload;
   supersedes?: string;
 }): Omit<RawTransaction, "seq"> {
@@ -222,6 +249,8 @@ export function createRawTransaction(input: {
     sourceUploadId: input.sourceUploadId,
     ticker: input.ticker,
     confidence: input.confidence,
+    extractionMethod: input.extractionMethod,
+    parserVersion: input.parserVersion,
     status: "unverified",
     payload: input.payload,
     supersedes: input.supersedes,

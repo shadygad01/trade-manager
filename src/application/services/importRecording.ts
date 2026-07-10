@@ -90,7 +90,17 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       };
       await appendAndMaybeCommit(
         repos,
-        createRawTransaction({ id: key, kind: "BuyExecution", source: candidateSource(candidate), sourceUploadId, ticker, confidence: candidate.confidence, payload })
+        createRawTransaction({
+          id: key,
+          kind: "BuyExecution",
+          source: candidateSource(candidate),
+          sourceUploadId,
+          ticker,
+          confidence: candidate.confidence,
+          extractionMethod: candidate.extractionMethod,
+          parserVersion: candidate.parserVersion,
+          payload,
+        })
       );
     } else {
       const payload: SellExecutionPayload = {
@@ -105,7 +115,17 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       };
       await appendAndMaybeCommit(
         repos,
-        createRawTransaction({ id: key, kind: "SellExecution", source: candidateSource(candidate), sourceUploadId, ticker, confidence: candidate.confidence, payload })
+        createRawTransaction({
+          id: key,
+          kind: "SellExecution",
+          source: candidateSource(candidate),
+          sourceUploadId,
+          ticker,
+          confidence: candidate.confidence,
+          extractionMethod: candidate.extractionMethod,
+          parserVersion: candidate.parserVersion,
+          payload,
+        })
       );
     }
   }
@@ -155,7 +175,17 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
     };
     await appendAndMaybeCommit(
       repos,
-      createRawTransaction({ id: key, kind: "OrderEvidenceCapture", source: "orders-timeline", sourceUploadId, ticker, confidence: evidence.confidence, payload })
+      createRawTransaction({
+        id: key,
+        kind: "OrderEvidenceCapture",
+        source: "orders-timeline",
+        sourceUploadId,
+        ticker,
+        confidence: evidence.confidence,
+        extractionMethod: evidence.extractionMethod,
+        parserVersion: evidence.parserVersion,
+        payload,
+      })
     );
   }
 }

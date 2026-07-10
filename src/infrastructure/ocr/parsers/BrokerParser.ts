@@ -51,6 +51,15 @@ export interface BrokerParser {
   /** Stable identifier, e.g. "thndr". */
   id: string;
 
+  /**
+   * Released version of this parser's extraction logic — stamped onto every
+   * candidate/evidence row it produces (see RawTransaction.parserVersion).
+   * Bump whenever a regex/extraction fix changes what this parser reads from
+   * a document, so a permanently-stored original (Upload.fileBlob) can later
+   * be identified as worth re-parsing.
+   */
+  version: string;
+
   /** True when the extracted text looks like a document this broker parser understands at all (used for OCR fallback + routing decisions). */
   looksLikeOwnDocument(text: string): boolean;
 

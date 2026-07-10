@@ -1,5 +1,6 @@
 import type { ParsedDividendCandidate, ParsedOrderEvidence, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
+import type { ExtractionMethod } from "@domain/entities/RawTransaction";
 import { extractPdfText } from "./pdfText";
 import { loadImageToCanvas, cropHeaderBand, preprocessForOcr, segmentOrderRows } from "./imagePreprocess";
 import { recognizeWithFallback, recognizeBatch } from "./tesseractClient";
@@ -24,6 +25,22 @@ export interface ImportResult {
   warnings: string[];
   /** SHA-256 hex digest of the file's bytes — callers persisting an Upload entity use this for its fileHash field / per-file dedup. */
   fileHash: string;
+  /**
+   * The original file's bytes, for callers persisting a permanent Evidence
+   * Repository record (see Upload.fileBlob) — undefined only for plain-text/
+   * CSV files, whose bytes already equal `rawText` verbatim, so storing both
+   * would be a pure duplicate.
+   */
+  fileBlob?: Blob;
+}
+
+/** Stamps every row with how its text was obtained and which parser version read it — see ExtractionMethod/BrokerParser.version's own doc comments. Applied once, here, rather than inside every parser, so ThndrParser/CsvStatementParser stay unaware of the file-level channel that invoked them. */
+function withProvenance<T extends { extractionMethod?: ExtractionMethod; parserVersion?: string }>(
+  rows: T[],
+  extractionMethod: ExtractionMethod,
+  parserVersion: string,
+): T[] {
+  return rows.map((row) => ({ ...row, extractionMethod, parserVersion }));
 }
 
 async function sha256Hex(buffer: ArrayBuffer): Promise<string> {
@@ -51,6 +68,10 @@ export class ImportOrchestrator {
 
     const isImage = file.type.startsWith("image/");
     const isPdf = file.type === "application/pdf";
+    // A File already IS a Blob — no re-read needed. Only for image/PDF
+    // uploads (see Upload.fileBlob's own doc comment on why CSV is excluded).
+    const fileBlob: Blob | undefined = isImage || isPdf ? file : undefined;
+    const extractionMethod: ExtractionMethod = isImage ? "ocr-tesseract" : isPdf ? "native-pdf-text" : "csv-text";
     let rawText = "";
     let sourceCanvas: HTMLCanvasElement | null = null;
 
@@ -92,6 +113,7 @@ export class ImportOrchestrator {
         rawText,
         warnings: ["No text could be read from the file — try another file."],
         fileHash,
+        fileBlob,
       };
     }
 
@@ -121,6 +143,7 @@ export class ImportOrchestrator {
             rawText,
             warnings: ["Recognized a position screen but couldn't read the ticker/units — try a clearer screenshot."],
             fileHash,
+            fileBlob,
           };
         }
         return {
@@ -133,6 +156,7 @@ export class ImportOrchestrator {
           rawText,
           warnings: [],
           fileHash,
+          fileBlob,
         };
       }
     }
@@ -158,6 +182,7 @@ export class ImportOrchestrator {
           rawText,
           warnings: ["Recognized an Orders history screen but couldn't read any order rows — try a clearer or larger screenshot."],
           fileHash,
+          fileBlob,
         };
       }
       const warnings: string[] = [];
@@ -172,10 +197,11 @@ export class ImportOrchestrator {
         candidates: [],
         verifications: [],
         dividends: [],
-        orderEvidences: evidences,
+        orderEvidences: withProvenance(evidences, extractionMethod, parser.version),
         rawText,
         warnings,
         fileHash,
+        fileBlob,
       };
     }
 
@@ -183,7 +209,18 @@ export class ImportOrchestrator {
     for (const parser of candidateParsers) {
       const candidates = parser.parseStatementText(rawText);
       if (candidates.length > 0) {
-        return { status: "parsed", docType: "statement", candidates, verifications: [], dividends: [], orderEvidences: [], rawText, warnings: [], fileHash };
+        return {
+          status: "parsed",
+          docType: "statement",
+          candidates: withProvenance(candidates, extractionMethod, parser.version),
+          verifications: [],
+          dividends: [],
+          orderEvidences: [],
+          rawText,
+          warnings: [],
+          fileHash,
+          fileBlob,
+        };
       }
     }
 
@@ -265,13 +302,14 @@ export class ImportOrchestrator {
         return {
           status: "parsed",
           docType: "orders-screen",
-          candidates,
+          candidates: withProvenance(candidates, extractionMethod, parser.version),
           verifications: [],
           dividends: [],
           orderEvidences: [],
           rawText: rawText + rowScanLog,
           warnings,
           fileHash,
+          fileBlob,
         };
       }
     }
@@ -302,6 +340,7 @@ export class ImportOrchestrator {
             : "No transactions found in the file. Make sure it's a supported broker report.",
       ],
       fileHash,
+      fileBlob,
     };
   }
 }

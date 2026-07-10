@@ -139,14 +139,22 @@ function tickerRowSignature(tickerEntries: TradeCandidateEntry[]): string {
     .join(";");
 }
 
-/** Which OTHER document type corroborated a cross-source-verified entry — findCrossSourceVerifiedKeys itself only returns which keys are verified, not by which pairing, so this re-derives just the grouping (via the same exported signature key), not the decision logic. */
-function corroboratingSourceLabel(entry: TradeCandidateEntry, allEntries: TradeCandidateEntry[]): EvidenceType | undefined {
+/**
+ * Which OTHER document type (and specific transaction) corroborated a
+ * cross-source-verified entry — findCrossSourceVerifiedKeys itself only
+ * returns which keys are verified, not by which pairing, so this re-derives
+ * just the grouping (via the same exported signature key), not the decision
+ * logic. Returns the donor's own key alongside the label so the caller can
+ * record a real transaction-to-transaction edge (EvidenceItem.
+ * matchedTransactionId), not just a description of the corroboration.
+ */
+function corroboratingSource(entry: TradeCandidateEntry, allEntries: TradeCandidateEntry[]): { type: EvidenceType; donorKey: string } | undefined {
   const sig = pendingCandidateSignature(entry.candidate);
   const donor = allEntries.find(
     (o) => o.key !== entry.key && pendingCandidateSignature(o.candidate) === sig && o.candidate.source !== undefined && o.candidate.source !== entry.candidate.source
   );
   if (!donor?.candidate.source) return undefined;
-  return (`matched-${donor.candidate.source}` as EvidenceType);
+  return { type: `matched-${donor.candidate.source}` as EvidenceType, donorKey: donor.key };
 }
 
 export interface VerifyAllParams {
@@ -359,8 +367,15 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
     });
   }
 
-  const VERIFIED_REASONS = new Set(["no-shares-to-verify", "closed-position", "invoice-verified", "cross-verified", "orders-verified", "matched"]);
-
+  // checkTickerMatch's own `matched` boolean is now the single canonical
+  // trustworthiness signal (see importVerification.ts) — it already reflects
+  // every corroboration rule this engine needs, including the closed-
+  // position corroboration requirement. A separate VERIFIED_REASONS string
+  // set used to duplicate that same judgment here, out of sync with the one
+  // `matched` itself makes (an uncorroborated "closed-position" reason used
+  // to read as "verified" here even after checkTickerMatch stopped trusting
+  // it) — removed in favor of reading `matched` directly, so there's exactly
+  // one place this decision is made.
   const result = new Map<string, TransactionVerification>();
   for (const entry of entries) {
     const evidence: EvidenceItem[] = [];
@@ -394,15 +409,21 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
       });
     }
 
-    const sourceLabel = corroboratingSourceLabel(entry, entries);
-    if (sourceLabel) evidence.push({ type: sourceLabel, detail: "Independently corroborated by a second document type describing the same execution." });
+    const corroboration = corroboratingSource(entry, entries);
+    if (corroboration) {
+      evidence.push({
+        type: corroboration.type,
+        matchedTransactionId: corroboration.donorKey,
+        detail: "Independently corroborated by a second document type describing the same execution.",
+      });
+    }
     if (aggregatedKeys.has(entry.key)) evidence.push({ type: "matched-statement-aggregate", detail: "This statement row's total is exactly explained by a group of other executions." });
     if (orderConfirmed.has(entry.key)) evidence.push({ type: "matched-order", detail: "Confirmed by a fulfilled row on the broker's own Orders-history screen." });
 
     const reason = tickerReason.get(ticker);
-    if (reason && VERIFIED_REASONS.has(reason.reason)) {
+    if (reason && reason.matched) {
       evidence.push({ type: "matched-position", detail: `Ticker-level reconciliation: ${reason.reason}.` });
-    } else if (reason && (reason.reason === "mismatch" || reason.reason === "no-verification")) {
+    } else if (reason && !reason.matched) {
       evidence.push({ type: "contradicted-position-mismatch", detail: `Ticker-level reconciliation: ${reason.reason}.` });
     }
 
@@ -428,7 +449,7 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
     const hasDirectMatch = evidence.some(
       (e) => e.type !== "contradicted-wrong-ticker" && e.type !== "contradicted-position-mismatch" && e.type !== "matched-position" && e.type !== "contradicted-date-misread"
     );
-    const tickerVerified = reason !== undefined && VERIFIED_REASONS.has(reason.reason);
+    const tickerVerified = reason !== undefined && reason.matched;
 
     let verdict: VerificationVerdict;
     if (isDuplicate) {

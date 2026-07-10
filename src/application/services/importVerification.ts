@@ -119,6 +119,21 @@ export interface TickerMatchStatus {
  * recount. Exactly like the invoice/cross-verified rules, this only ever
  * substitutes for a MISSING position screenshot — an actual mismatch against
  * a real one still blocks.
+ *
+ * `reason === "closed-position"` alone is deliberately NOT sufficient to set
+ * `matched: true` (see the corroboration check below) — net-zero (buys
+ * exactly cancel sells) is indistinguishable, by arithmetic alone, from a
+ * batch that's missing an equal, canceling buy+sell pair before or after it.
+ * completenessEngine.ts documents the same rule from the historical-
+ * completeness side (real cases: JUFO, SKPC — a ticker whose visible history
+ * happened to net to zero, verified as "matched" on that arithmetic alone,
+ * while an actual missing Buy/Sell sat just outside the imported window).
+ * `checkTickerMatch` used to auto-match this case unconditionally; the fix is
+ * to require the SAME independent corroboration signals (invoice/cross/
+ * orders-verified) it already requires for a NON-zero net position — never a
+ * broker "My Position" recount here, since a closed ticker never appears on
+ * one (see the reason ordering below: closed-position is checked only after
+ * the three corroboration branches, not before them).
  */
 export function checkTickerMatch(params: {
   hasShares: boolean;
@@ -148,9 +163,10 @@ export function checkTickerMatch(params: {
     };
   }
   if (params.verifiedUnits === undefined) {
-    if (Math.abs(netShares) < 1e-6) {
-      return { matched: true, reason: "closed-position", netShares, ...common };
-    }
+    // Corroboration checked BEFORE the closed-position shortcut, and applies
+    // equally whether netShares is zero or not — these three signals are
+    // independent, per-transaction evidence, always strictly stronger than
+    // "the arithmetic happens to cancel."
     if (params.allPendingFromInvoice) {
       return { matched: true, reason: "invoice-verified", netShares, ...common };
     }
@@ -159,6 +175,15 @@ export function checkTickerMatch(params: {
     }
     if (params.allPendingOrderConfirmed) {
       return { matched: true, reason: "orders-verified", netShares, ...common };
+    }
+    if (Math.abs(netShares) < 1e-6) {
+      // Net-zero with NO independent corroboration: never auto-matched (see
+      // the doc comment above). Never a "get a My Position screenshot" ask
+      // either — a closed position can't prove itself via a document that
+      // only ever lists open holdings; the caller's evidence-recommendation
+      // step (completenessEngine.recoveryPlan) is what names the actual next
+      // document to request.
+      return { matched: false, reason: "closed-position", netShares, ...common };
     }
     // No broker screenshot and no alternative verification — indicate which
     // side the surplus/shortage sits on so the user knows where to look.

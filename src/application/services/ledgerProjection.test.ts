@@ -238,6 +238,21 @@ describe("ledgerProjection — the legacy ledger auto-corrects when better histo
       { lotRef: canonicalKey({ side: "BUY", ticker: "COMI", date: "2026-01-05", shares: 100, price: 45.5 }), shares: 100 },
     ]);
 
+    // Closed position (buy == sell) with no independent corroboration is no
+    // longer auto-verified (see importVerification.ts's closed-position
+    // fix) — this test is about allocation-replay plumbing, not verification
+    // policy, so a corroborating fact (a broker position capture confirming
+    // zero units held) is added directly to reach the same terminal,
+    // committable state the test is actually exercising.
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        kind: "PositionVerificationCapture",
+        source: "position-verification",
+        ticker: "COMI",
+        payload: { ticker: "COMI", units: 0, capturedAt: "2026-02-02T00:00" },
+      })
+    );
+
     // Proof the references resolve: the committed cache contains the replayed allocation.
     await assignPortfolio(repos, "COMI", "p1");
     await commitTicker(repos, "p1", "COMI");
