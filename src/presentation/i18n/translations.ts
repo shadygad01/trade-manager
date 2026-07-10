@@ -491,6 +491,17 @@ export const en: Dict = {
       "Restore this backup? ({{summary}})\n\nThis REPLACES everything currently in this browser — every portfolio, trade, allocation, timeline event, journal entry and verification not in this file will be permanently deleted. This cannot be undone.",
     restoredSuccess: "Restored {{summary}}.",
     restoreFailed: "Restore failed.",
+    resetTitle: "Reset everything",
+    resetDescription:
+      "Permanently deletes every portfolio, trade, allocation, timeline event, journal entry, verification, uploaded-file record and imported raw transaction — the app starts over as if freshly installed.",
+    resetWarning: "This cannot be undone. Download a backup first if there's any chance you'll want this data back.",
+    resetButton: "Reset all data",
+    resetting: "Resetting…",
+    resetConfirm:
+      "Reset ALL data? Every portfolio, trade and record stored in this browser will be permanently deleted, and the system starts over completely fresh. This cannot be undone.",
+    resetConfirmFinal: "Last check: are you absolutely sure you want to erase everything and start over?",
+    resetDone: "All data erased — the system is back to a fresh start.",
+    resetFailed: "Reset failed.",
   },
   rebuild: {
     title: "Rebuild Ledger from Source Documents",
@@ -614,6 +625,11 @@ export const en: Dict = {
       "{{ticker}}'s existing position already matches the broker's count on its own — every transaction extracted in this batch looks like it's re-describing shares already on the ledger, just split into different dates/lots than before. Discard all {{extra}} extra shares' worth of pending rows for {{ticker}}?",
     discardAllPendingFor: "Discard all pending for {{ticker}}",
     restoreTickerRows: "Restore dismissed/skipped rows for {{ticker}}",
+    resetTicker: "Reset",
+    resetTickerTitle: "Erase everything recorded for {{ticker}} — trades, timeline, verifications and its uploaded files — so it can be re-imported from scratch.",
+    resetTickerConfirm:
+      "Reset {{ticker}} completely?\n\nEvery trade, allocation, timeline event, verification and uploaded-file record for {{ticker}} will be permanently deleted (its cash impact is refunded to the portfolio), and its rows are cleared from this import session — so you can re-upload its documents as if it were a brand-new stock. This cannot be undone.",
+    resetTickerFailed: "Failed to reset this ticker.",
     orphanedEvidenceBanner: "Position verified against the broker's count, but {{n}} uploaded transaction(s) have no matching trade in your ledger — they may be historical buys that were sold before this screenshot. Upload a Statement or Orders screenshot covering those dates to record the full history, or discard the evidence rows if they're already captured elsewhere.",
     mismatchReconcileBanner: (v: TranslationVars) =>
       `Mismatch: this batch's rows{{existingSuffix}} total {{netShares}} shares, but the broker's "My Position" screenshot — the trusted source — shows {{verified}}. Removing the ${enPlural(Number(v.removeCount), "highlighted row", "{{removeCount}} highlighted rows")} below leaves exactly {{verified}}{{avgCostSuffix}}.{{alternativesSuffix}}`,
@@ -1185,6 +1201,17 @@ export const ar: Dict = {
       "استعادة هذه النسخة الاحتياطية؟ ({{summary}})\n\nهذا سيستبدل كل شيء موجود حاليًا في هذا المتصفح — كل محفظة وصفقة ودفعة وحدث زمني ومذكرة وتحقق غير موجود في هذا الملف سيُحذف نهائيًا. لا يمكن التراجع عن هذا.",
     restoredSuccess: "تمت استعادة {{summary}}.",
     restoreFailed: "فشلت الاستعادة.",
+    resetTitle: "إعادة تعيين كل شيء",
+    resetDescription:
+      "يحذف نهائيًا كل المحافظ والصفقات والدفعات والأحداث الزمنية والمذكرات والتحققات وسجل الملفات المرفوعة والمعاملات الخام المستوردة — يبدأ التطبيق من جديد كأنه مثبَّت للتو.",
+    resetWarning: "لا يمكن التراجع عن هذا. نزّل نسخة احتياطية أولًا إن كان هناك أي احتمال أن تحتاج هذه البيانات لاحقًا.",
+    resetButton: "مسح كل البيانات",
+    resetting: "جارٍ المسح…",
+    resetConfirm:
+      "مسح كل البيانات؟ ستُحذف نهائيًا كل محفظة وصفقة وسجل مخزَّن في هذا المتصفح، ويعود النظام جديدًا تمامًا. لا يمكن التراجع عن هذا.",
+    resetConfirmFinal: "تأكيد أخير: هل أنت متأكد تمامًا أنك تريد مسح كل شيء والبدء من جديد؟",
+    resetDone: "تم مسح كل البيانات — عاد النظام جديدًا تمامًا.",
+    resetFailed: "فشلت إعادة التعيين.",
   },
   rebuild: {
     title: "إعادة بناء السجل من المستندات المصدر",
@@ -1309,6 +1336,11 @@ export const ar: Dict = {
       "مركز {{ticker}} الحالي يطابق بالفعل عدد الوسيط من تلقاء نفسه — كل معاملة مستخرجة في هذه الدفعة تبدو وكأنها تعيد وصف أسهم مسجّلة بالفعل، لكن مقسّمة إلى تواريخ/دفعات مختلفة عمّا كانت عليه. حذف كل الصفوف المعلّقة الزائدة (بقيمة {{extra}} سهم) لـ {{ticker}}؟",
     discardAllPendingFor: "حذف كل المعلّق لـ {{ticker}}",
     restoreTickerRows: "استعادة الصفوف المحذوفة/المتجاوزة لـ {{ticker}}",
+    resetTicker: "إعادة تعيين",
+    resetTickerTitle: "مسح كل ما هو مسجَّل لسهم {{ticker}} — الصفقات والأحداث الزمنية والتحققات وملفاته المرفوعة — لإعادة استيراده من الأول.",
+    resetTickerConfirm:
+      "إعادة تعيين {{ticker}} بالكامل؟\n\nستُحذف نهائيًا كل الصفقات والدفعات والأحداث الزمنية والتحققات وسجل الملفات المرفوعة الخاصة بـ {{ticker}} (ويُرَدّ أثرها النقدي إلى المحفظة)، وتُمسح صفوفه من جلسة الاستيراد الحالية — لتتمكن من رفع مستنداته من جديد كأنه سهم جديد تمامًا. لا يمكن التراجع عن هذا.",
+    resetTickerFailed: "فشلت إعادة تعيين هذا السهم.",
     orphanedEvidenceBanner: "المركز مؤكَّد مقارنةً بعدد الوسيط، لكن {{n}} معاملة/معاملات محمَّلة ليس لها أي صفقة مقابلة في السجل — قد تكون مشتريات تاريخية بِيعت قبل هذه اللقطة. ارفع كشف حساب أو لقطة أوامر تغطّي تلك التواريخ لتسجيل التاريخ الكامل، أو احذف صفوف الدليل إذا كانت مسجَّلة في مكان آخر.",
     mismatchReconcileBanner: (v: TranslationVars) =>
       `عدم تطابق: صفوف هذه الدفعة{{existingSuffix}} مجموعها {{netShares}} سهمًا، لكن لقطة شاشة "مركزي" من الوسيط — المصدر الموثوق — تُظهر {{verified}}. حذف ${arPlural(Number(v.removeCount), "", "الصف المميَّز", "الصفين المميَّزين", "{{removeCount}} صفوف مميَّزة")} أدناه يترك بالضبط {{verified}}{{avgCostSuffix}}.{{alternativesSuffix}}`,

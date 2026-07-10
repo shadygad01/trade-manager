@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Download, Upload, AlertTriangle, HardDriveDownload } from "lucide-react";
-import { repos } from "@presentation/lib/data";
+import { Download, Upload, AlertTriangle, HardDriveDownload, Trash2 } from "lucide-react";
+import { repos, purgeAllData } from "@presentation/lib/data";
+import { importSession } from "@presentation/lib/importSession";
 import { exportLedger, importLedger, parseLedgerSnapshot } from "@application/services/BackupService";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { RebuildLedgerPanel } from "@presentation/components/RebuildLedgerPanel";
@@ -25,6 +26,9 @@ export function DataPage() {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetSuccess, setResetSuccess] = useState<string | null>(null);
 
   const stats = useLiveQuery(async () => {
     const [portfolios, trades, timelineEvents] = await Promise.all([
@@ -78,6 +82,23 @@ export function DataPage() {
       setImportError(e instanceof Error ? e.message : t("data.restoreFailed"));
     } finally {
       setImporting(false);
+    }
+  }
+
+  async function handleResetAll() {
+    if (!confirm(t("data.resetConfirm"))) return;
+    if (!confirm(t("data.resetConfirmFinal"))) return;
+    setResetting(true);
+    setResetError(null);
+    setResetSuccess(null);
+    try {
+      await purgeAllData();
+      importSession.clear();
+      setResetSuccess(t("data.resetDone"));
+    } catch (e) {
+      setResetError(e instanceof Error ? e.message : t("data.resetFailed"));
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -143,6 +164,26 @@ export function DataPage() {
 
       <div className="mt-4">
         <RebuildLedgerPanel />
+      </div>
+
+      <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/5 p-5">
+        <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold text-rose-300">
+          <Trash2 size={16} /> {t("data.resetTitle")}
+        </h3>
+        <p className="mb-2 text-sm text-slate-400">{t("data.resetDescription")}</p>
+        <p className="mb-4 flex items-start gap-1.5 text-xs text-amber-400">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          {t("data.resetWarning")}
+        </p>
+        <button
+          onClick={() => void handleResetAll()}
+          disabled={resetting}
+          className="flex items-center gap-1.5 rounded-md bg-rose-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-rose-400 disabled:opacity-50"
+        >
+          <Trash2 size={16} /> {resetting ? t("data.resetting") : t("data.resetButton")}
+        </button>
+        {resetError ? <p className="mt-2 text-sm text-rose-400">{resetError}</p> : null}
+        {resetSuccess ? <p className="mt-2 text-sm text-emerald-400">{resetSuccess}</p> : null}
       </div>
     </div>
   );
