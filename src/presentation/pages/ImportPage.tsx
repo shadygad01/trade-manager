@@ -1696,7 +1696,7 @@ export function ImportPage() {
             <input
               type="file"
               multiple
-              accept="image/*,application/pdf,text/csv,.csv"
+              accept="image/*,application/pdf,text/csv,.csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
               onChange={(e) => {
                 const chosen = Array.from(e.target.files ?? []);

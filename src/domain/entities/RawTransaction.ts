@@ -37,6 +37,14 @@ export type RawTransactionSource =
   | "orders-timeline"
   | "position-verification"
   | "csv"
+  /** STES workbook observations whose Documents-sheet type has no dedicated source of its own: a broker push notification. */
+  | "notification"
+  /** STES: a broker email (other than the Email Invoice PDF, which stays "invoice"). */
+  | "email"
+  /** STES: a screenshot of an unspecified broker screen — unlike "orders-screen"/"position-verification", which screen it shows is unknown. */
+  | "screenshot"
+  /** STES: a document the extracting AI could only classify as PDF/OTHER — real evidence, but of an unidentifiable document type. */
+  | "other-document"
   | "manual"
   /** A one-time conversion of a Trade/TradeAllocation/PositionVerification that was already committed under the pre-migration architecture — already vetted and reconciled once, under the rules that applied at the time. Never the same as "manual" (a real user-typed trade with no prior history) or an OCR document type (no such document exists for this row). */
   | "backfill";
@@ -192,7 +200,7 @@ import { generateId } from "../value-objects/id";
  * confidence alone never captures. `undefined` only for facts written
  * before this field existed. See docs/EVIDENCE_ARCHITECTURE.md.
  */
-export type ExtractionMethod = "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry";
+export type ExtractionMethod = "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry" | "stes-workbook";
 
 export interface RawTransaction {
   id: string;

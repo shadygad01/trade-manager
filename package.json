@@ -25,6 +25,7 @@
     "recharts": "^2.15.0",
     "tesseract.js": "^7.0.0",
     "wouter": "^3.3.5",
+    "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {

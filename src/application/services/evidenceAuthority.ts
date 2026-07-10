@@ -45,6 +45,11 @@ const AUTHORITY_RANK: Record<Exclude<RawTransactionSource, "position-verificatio
   "orders-timeline": 2,
   /** Generic CSV export — broker-authored but not one of this app's named document types. */
   csv: 1,
+  /** STES-only source types (see RawTransactionSource): real broker-originated evidence, but terse (a push notification), unstructured (a generic email), or of an unidentified screen/document — none carries the field completeness of a named document type, so they share the generic tier. Ties favor neither, which is exactly right when two of these disagree. */
+  notification: 1,
+  email: 1,
+  screenshot: 1,
+  "other-document": 1,
   /** User-typed, no document behind it at all. */
   manual: 0,
   /** A one-time pre-migration conversion, already vetted under the rules that applied at the time — see RawTransactionSource's own doc comment. */
