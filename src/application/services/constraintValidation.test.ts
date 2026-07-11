@@ -62,6 +62,30 @@ describe("buildInventoryFacts + evaluateInventoryConstraint", () => {
     expect(facts.holdingsRemaining).toBeUndefined();
     expect(evaluateInventoryConstraint(facts)).toEqual([]);
   });
+
+  // The broker-record trust policy: an official-broker-excel-sourced open
+  // position is never required to reconcile against a "My Position"
+  // screenshot, even a disagreeing one — checkTickerMatch already surfaces
+  // that disagreement as a non-blocking secondaryMismatch, never a
+  // contradiction. Before this fix, evaluateInventoryConstraint recomputed
+  // the same calculated-vs-Holdings comparison with no knowledge of the
+  // ticker's trust tier, silently reintroducing the "needs corroboration"
+  // verdict checkTickerMatch had already ruled out.
+  it("is satisfied for a broker-excel-verified open position even when a disagreeing 'My Position' screenshot exists", () => {
+    const status = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 100,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 70, // disagrees with the calculated 100 — never a contradiction here
+      allPendingFromOfficialBrokerExcel: true,
+    });
+    expect(status.reason).toBe("broker-excel-verified");
+    expect(status.secondaryMismatch).toBe(true);
+    const facts = buildInventoryFacts("PHAR", status);
+    expect(facts.brokerExcelVerified).toBe(true);
+    expect(evaluateInventoryConstraint(facts)).toEqual([]);
+  });
 });
 
 describe("diagnoseInventoryContradiction", () => {
