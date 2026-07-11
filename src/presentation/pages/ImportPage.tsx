@@ -2935,9 +2935,24 @@ function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
     );
   }
   if (status.reason === "broker-excel-verified") {
+    // secondaryMismatch is deliberately never a blocking/downgrading state —
+    // the Excel-sourced batch stays "Verified" (the emerald badge below)
+    // regardless; a disagreeing screenshot is only ever an additional,
+    // informational note alongside it, for the user to look at when
+    // convenient, never a gate on anything.
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> {t("importPage.matchBrokerExcelVerified")}
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+          <ShieldCheck size={11} /> {t("importPage.matchBrokerExcelVerified")}
+        </span>
+        {status.secondaryMismatch && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
+            title={t("importPage.matchSecondaryMismatchTooltip")}
+          >
+            <ShieldAlert size={11} /> {t("importPage.matchSecondaryMismatch")}
+          </span>
+        )}
       </span>
     );
   }

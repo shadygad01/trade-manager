@@ -167,7 +167,7 @@ describe("checkTickerMatch", () => {
     expect(result.netShares).toBe(37);
   });
 
-  it("still blocks a broker-Excel-sourced batch if a broker screenshot exists and actually mismatches — the trust policy never overrides a real, present discrepancy", () => {
+  it("stays broker-excel-verified even when a broker screenshot disagrees — the Excel remains authoritative, the screenshot is only flagged as a secondary-source mismatch", () => {
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 10,
@@ -176,11 +176,40 @@ describe("checkTickerMatch", () => {
       verifiedUnits: 30,
       allPendingFromOfficialBrokerExcel: true,
     });
-    expect(result.matched).toBe(false);
-    expect(result.reason).toBe("mismatch");
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBe("broker-excel-verified");
+    expect(result.secondaryMismatch).toBe(true);
   });
 
-  it("prefers invoice-verified over broker-excel-verified when both are somehow true (invoice checked first)", () => {
+  it("reports no secondary mismatch when a broker-excel batch's screenshot actually agrees", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: 37,
+      allPendingFromOfficialBrokerExcel: true,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBe("broker-excel-verified");
+    expect(result.secondaryMismatch).toBe(false);
+  });
+
+  it("reports no secondary mismatch when a broker-excel batch has no screenshot at all", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: undefined,
+      allPendingFromOfficialBrokerExcel: true,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBe("broker-excel-verified");
+    expect(result.secondaryMismatch).toBe(false);
+  });
+
+  it("prefers broker-excel-verified when both flags are somehow true (impossible in real data — a candidate's source is a single value — but the broker-excel check runs first since it also overrides a disagreeing screenshot, which invoice's own check does not)", () => {
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 10,
@@ -190,7 +219,7 @@ describe("checkTickerMatch", () => {
       allPendingFromInvoice: true,
       allPendingFromOfficialBrokerExcel: true,
     });
-    expect(result.reason).toBe("invoice-verified");
+    expect(result.reason).toBe("broker-excel-verified");
   });
 
   it("trusts a cross-verified batch (an OCR read corroborated by an independent invoice) with no broker screenshot at all", () => {
