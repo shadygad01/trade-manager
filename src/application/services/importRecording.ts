@@ -1,6 +1,6 @@
-import type { ParsedTradeCandidate, ParsedDividendCandidate, ParsedOrderEvidence } from "@domain/entities/Upload";
+import type { ParsedTradeCandidate, ParsedDividendCandidate, ParsedOrderEvidence, ParsedCancelledOrder } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
-import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type PositionVerificationCapturePayload, type OrderEvidenceCapturePayload, type DividendPaymentPayload, type RawTransactionSource } from "@domain/entities/RawTransaction";
+import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type PositionVerificationCapturePayload, type OrderEvidenceCapturePayload, type DividendPaymentPayload, type CancelledOrderPayload, type RawTransactionSource } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 
@@ -61,6 +61,8 @@ export interface ImportRecordingInput {
   dividends: ParsedDividendCandidate[];
   /** Same `key`-as-`id` treatment as `candidates`, for the same reason — an Orders-screenshot row can be individually discarded too (see ImportPage.tsx's discardOrderEvidence). */
   orderEvidences: { key: string; evidence: ParsedOrderEvidence }[];
+  /** Fully-cancelled orders (STES only) — recorded as `CancelledOrder` facts, audit trail only. Never read by commitEngine's Buy/Sell fold, never a candidate, never gated on a session key since nothing about them is ever committed/discardable the way a trade candidate is. */
+  cancelledOrders: ParsedCancelledOrder[];
 }
 
 function candidateSource(candidate: ParsedTradeCandidate): RawTransactionSource {
@@ -72,7 +74,7 @@ function candidateSource(candidate: ParsedTradeCandidate): RawTransactionSource 
 }
 
 export async function recordImportedRawTransactions(repos: ImportRecordingRepos, input: ImportRecordingInput): Promise<void> {
-  const { sourceUploadId, candidates, verifications, dividends, orderEvidences } = input;
+  const { sourceUploadId, candidates, verifications, dividends, orderEvidences, cancelledOrders } = input;
 
   for (const { key, candidate } of candidates) {
     const ticker = normalizeTicker(candidate.ticker);
@@ -186,6 +188,30 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
         parserVersion: evidence.parserVersion,
         payload,
       })
+    );
+  }
+
+  // Fully-cancelled orders: audit trail only. This RawTransactionKind is
+  // never read by commitEngine's Buy/Sell fold (relevantTradeTransactions
+  // only ever selects "BuyExecution"/"SellExecution") and never read by
+  // TradeService/computePositions — so it is structurally incapable of
+  // creating a Ledger Entry or affecting Holdings, not just conventionally
+  // excluded.
+  for (const cancelledOrder of cancelledOrders) {
+    const ticker = normalizeTicker(cancelledOrder.ticker);
+    const payload: CancelledOrderPayload = {
+      ticker,
+      side: cancelledOrder.side,
+      originalShares: cancelledOrder.originalShares,
+      originalPrice: cancelledOrder.originalPrice,
+      date: cancelledOrder.date,
+      time: cancelledOrder.time,
+      brokerStatus: cancelledOrder.brokerStatus,
+      companyName: cancelledOrder.companyName,
+    };
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ kind: "CancelledOrder", source: cancelledOrder.source ?? "statement", sourceUploadId, ticker, payload })
     );
   }
 }

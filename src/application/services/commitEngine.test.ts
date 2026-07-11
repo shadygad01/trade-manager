@@ -64,6 +64,31 @@ describe("commitEngine", () => {
     expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(false);
   });
 
+  it("a CancelledOrder fact is structurally invisible to the commit engine — never a subject, never blocks or enables a commit, never becomes a ledger event", async () => {
+    await rawTransactions.append(
+      createRawTransaction({
+        kind: "CancelledOrder",
+        source: "orders-screen",
+        portfolioId: PORTFOLIO,
+        ticker: "COMI",
+        payload: { ticker: "COMI", side: "BUY", originalShares: 100, originalPrice: 45.5, date: "2026-02-01", brokerStatus: "Cancelled" },
+      })
+    );
+    // Alone, a CancelledOrder is not a Buy/Sell — nothing to commit.
+    expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(false);
+
+    // Alongside a real, independently-corroborated buy+sell, the
+    // CancelledOrder fact changes nothing about the outcome — same verdict,
+    // same ledger, as if it were never appended at all.
+    await appendBuy({ shares: 100 }, "invoice");
+    await appendSell({ shares: 100 }, "invoice");
+    expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(true);
+    await commitTicker(repos, PORTFOLIO, "COMI");
+    const events = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
+    expect(events.map((e) => e.type).sort()).toEqual(["LotOpened", "SellRecorded"]);
+    expect(events).toHaveLength(2); // the CancelledOrder never produced a third event
+  });
+
   it("commitTicker writes a LotOpened event for a verified buy and it's readable back from the cache", async () => {
     await appendBuy({ shares: 100 }, "invoice");
     await appendSell({ shares: 100 }, "invoice"); // invoice-corroborated closed position -> both verify

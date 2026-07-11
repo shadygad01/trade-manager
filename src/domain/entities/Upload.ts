@@ -55,12 +55,41 @@ export interface ParsedTradeCandidate {
   /**
    * STES-only: set when the extracting AI wrote "Needs Confirmation" into
    * the row's Extraction Notes cell (see STANDARD_TRADING_EXCHANGE_SCHEMA.md)
-   * — a partial-fill execution whose exact final numbers still need
-   * confirming against the broker invoice. Committing this candidate flags
-   * the resulting Trade/TradeAllocation `confirmationStatus: "pending"`
-   * instead of leaving the signal to rot in free text.
+   * — a partial-fill execution (broker status "Partially filled" /
+   * "Partially filled, canceled" / "Partial fill") whose exact final numbers
+   * still need confirming against the broker invoice. This candidate is
+   * deliberately NEVER committed straight to a Trade/TradeAllocation — see
+   * `createPendingExecution` in `application/services/pendingExecutions.ts`
+   * — so it can never affect Holdings/cost basis/cash or be allocatable
+   * before the invoice confirms it.
    */
   needsConfirmation?: boolean;
+  /** The broker's own status text, preserved when `needsConfirmation` is set — e.g. "Partially filled, canceled". Undefined when `needsConfirmation` is unset. */
+  brokerStatus?: string;
+}
+
+/**
+ * A fully-cancelled order (broker status "Cancelled" — zero shares ever
+ * executed) read from an STES `Transaction Type: CANCELLED` observation.
+ * Deliberately NOT a `ParsedTradeCandidate`: there is no execution to
+ * report, so this never enters the Buy/Sell import path at all — it is
+ * recorded as its own `RawTransactionKind: "CancelledOrder"` fact (audit
+ * trail only) and is structurally incapable of creating a Ledger Entry or
+ * affecting Holdings, since nothing downstream (commitEngine, TradeService,
+ * computePositions) ever reads that fact kind.
+ */
+export interface ParsedCancelledOrder {
+  ticker: string;
+  companyName?: string;
+  side?: "BUY" | "SELL";
+  /** As originally placed (the order's intended size/price) — never executed, kept for audit context only. */
+  originalShares?: number;
+  originalPrice?: number;
+  date: string;
+  time?: string;
+  /** The broker's own status text, preserved verbatim — e.g. "Cancelled". */
+  brokerStatus: string;
+  source?: "statement" | "invoice" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
 }
 
 /**

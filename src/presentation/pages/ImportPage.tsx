@@ -6,6 +6,7 @@ import { repos, getImportOrchestrator, purgeTickerData } from "@presentation/lib
 import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions } from "@application/services/importRecording";
+import { createPendingExecutionRecord } from "@application/services/pendingExecutions";
 import { assignPortfolio, retractRawTransaction } from "@application/services/commitEngine";
 import {
   findDuplicateBuyMatch,
@@ -505,6 +506,7 @@ export function ImportPage() {
               verifications: result.verifications,
               dividends: result.dividends,
               orderEvidences: newOrderEvidenceEntries,
+              cancelledOrders: result.cancelledOrders,
             });
           } catch (err) {
             console.error("recordImportedRawTransactions failed (shadow write, non-fatal):", err);
@@ -632,6 +634,34 @@ export function ImportPage() {
   async function addBuyCandidate(entry: CandidateEntry, ticker: string) {
     try {
       const portfolioId = portfolioForTicker(ticker);
+
+      // A partial-fill execution (STES "Needs Confirmation") is never
+      // committed to a Trade here — see the audit that produced
+      // pendingExecutions.ts: doing so used to affect Holdings/cost basis/
+      // cash before any invoice existed, a real bug. It's recorded as a
+      // PendingExecution instead (no Ledger Entry, no Holdings impact) and
+      // leaves this review pool the same way a normal commit would; the
+      // broker-invoice upload/confirm flow lives on PortfolioDetailPage.
+      if (entry.candidate.needsConfirmation) {
+        await createPendingExecutionRecord(repos, {
+          portfolioId,
+          ticker,
+          companyName: entry.candidate.companyName,
+          side: "BUY",
+          originalShares: entry.candidate.shares,
+          originalPrice: entry.candidate.price,
+          originalFees: entry.candidate.fees,
+          originalTaxes: entry.candidate.taxes,
+          executionDate: entry.candidate.date,
+          executionTime: entry.candidate.time,
+          brokerStatus: entry.candidate.brokerStatus ?? "Needs Confirmation",
+          transactionNumber: entry.candidate.transactionNumber,
+        });
+        importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+        clearRowError(entry.key);
+        return;
+      }
+
       const { trade } = await recordBuy(repos, {
         portfolioId,
         ticker,
@@ -644,13 +674,49 @@ export function ImportPage() {
         executionTime: entry.candidate.time ?? "00:00",
         notes: "Imported from screenshot/PDF",
         transactionNumber: entry.candidate.transactionNumber,
-        needsConfirmation: entry.candidate.needsConfirmation,
       });
       importSession.update((prev) => ({
         ...prev,
         addedKeys: [...prev.addedKeys, entry.key],
         addedTradeIds: { ...prev.addedTradeIds, [entry.key]: trade.id },
       }));
+      clearRowError(entry.key);
+    } catch (e) {
+      setRowError(entry.key, e);
+    }
+  }
+
+  /**
+   * A SELL candidate normally always opens the allocation modal (ADR-002 —
+   * this app never auto-picks which lot a sell closes). A partial-fill
+   * ("Needs Confirmation") candidate skips that entirely: which lot(s) it
+   * closes can't even be decided yet, since the executed quantity itself
+   * isn't confirmed — it becomes a PendingExecution instead, and the
+   * allocation step happens later, after the invoice is confirmed, from
+   * PortfolioDetailPage.
+   */
+  async function allocateOrPendSell(entry: CandidateEntry, ticker: string) {
+    if (!entry.candidate.needsConfirmation) {
+      setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate });
+      return;
+    }
+    try {
+      const portfolioId = portfolioForTicker(ticker);
+      await createPendingExecutionRecord(repos, {
+        portfolioId,
+        ticker,
+        companyName: entry.candidate.companyName,
+        side: "SELL",
+        originalShares: entry.candidate.shares,
+        originalPrice: entry.candidate.price,
+        originalFees: entry.candidate.fees,
+        originalTaxes: entry.candidate.taxes,
+        executionDate: entry.candidate.date,
+        executionTime: entry.candidate.time,
+        brokerStatus: entry.candidate.brokerStatus ?? "Needs Confirmation",
+        transactionNumber: entry.candidate.transactionNumber,
+      });
+      importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
       clearRowError(entry.key);
     } catch (e) {
       setRowError(entry.key, e);
@@ -1864,7 +1930,7 @@ export function ImportPage() {
                 onDiscardPendingKeys={discardPendingCandidateKeys}
                 onDiscardAllPending={() => discardAllPendingForTicker(ticker)}
                 onConfirmTicker={() => void confirmTicker(ticker)}
-                onAllocateSell={(entry) => setSellCandidate({ key: entry.key, ticker, portfolioId: portfolioForTicker(ticker), candidate: entry.candidate })}
+                onAllocateSell={(entry) => void allocateOrPendSell(entry, ticker)}
                 onRenameTicker={(newTicker) => void renameTickerGroup(ticker, newTicker)}
                 onRestoreTicker={() => restoreTickerCandidates(ticker)}
                 onResetTicker={() => void resetTickerData(ticker)}
@@ -1899,7 +1965,6 @@ export function ImportPage() {
               executionDate: sellCandidate.candidate.date,
               executionTime: sellCandidate.candidate.time,
               transactionNumber: sellCandidate.candidate.transactionNumber,
-              needsConfirmation: sellCandidate.candidate.needsConfirmation,
             }}
             onDone={(created) => {
               importSession.update((prev) => ({

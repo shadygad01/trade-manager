@@ -6,6 +6,7 @@ import type {
   JournalRepository,
   VerificationRepository,
   UploadRepository,
+  PendingExecutionRepository,
 } from "@domain/repositories";
 
 export interface AppRepositories {
@@ -17,4 +18,5 @@ export interface AppRepositories {
   verifications: VerificationRepository;
   /** Read by ledgerRebuild.ts as the ONLY source of parsed trade candidates it's allowed to reconstruct the ledger from — never the ledger itself. */
   uploads: UploadRepository;
+  pendingExecutions: PendingExecutionRepository;
 }

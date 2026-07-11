@@ -48,8 +48,6 @@ export interface RecordBuyInput {
   strategyTags?: string[];
   /** Broker-assigned unique execution ID (e.g. Thndr's Invoice "Transaction No.") when the source document carried one — see Trade.transactionNumber. */
   transactionNumber?: string;
-  /** See Trade.confirmationStatus — set when the source candidate was read from a partial-fill execution still awaiting broker-invoice confirmation. */
-  needsConfirmation?: boolean;
 }
 
 export interface RecordBuyResult {
@@ -126,25 +124,22 @@ export async function recordBuy(repos: AppRepositories & Partial<CommitEngineRep
   const currentCash = Money.from(portfolio.cash);
 
   const normalizedTicker = normalizeTicker(input.ticker);
-  const trade: Trade = {
-    ...createTrade({
-      id: generateId(),
-      portfolioId: input.portfolioId,
-      ticker: normalizedTicker,
-      companyName: input.companyName,
-      sector: input.sector ?? sectorForTicker(normalizedTicker),
-      shares: input.shares,
-      entryPrice: input.entryPrice,
-      fees,
-      taxes,
-      executionDate: input.executionDate,
-      executionTime: input.executionTime,
-      notes: input.notes,
-      strategyTags: input.strategyTags,
-      transactionNumber: input.transactionNumber,
-    }),
-    confirmationStatus: input.needsConfirmation ? "pending" : undefined,
-  };
+  const trade: Trade = createTrade({
+    id: generateId(),
+    portfolioId: input.portfolioId,
+    ticker: normalizedTicker,
+    companyName: input.companyName,
+    sector: input.sector ?? sectorForTicker(normalizedTicker),
+    shares: input.shares,
+    entryPrice: input.entryPrice,
+    fees,
+    taxes,
+    executionDate: input.executionDate,
+    executionTime: input.executionTime,
+    notes: input.notes,
+    strategyTags: input.strategyTags,
+    transactionNumber: input.transactionNumber,
+  });
   await repos.trades.save(trade);
 
   const updatedPortfolio = { ...portfolio, cash: currentCash.subtract(totalCost).toNumber() };
@@ -171,79 +166,6 @@ export async function recordBuy(repos: AppRepositories & Partial<CommitEngineRep
   }
 
   return { trade };
-}
-
-export interface ConfirmPendingBuyInput {
-  shares: number;
-  price: number;
-  fees?: number;
-  taxes?: number;
-  transactionNumber?: string;
-}
-
-/**
- * Resolves a `confirmationStatus: "pending"` Trade (a partial-fill BUY
- * imported from STES, awaiting its broker invoice) with the invoice's own
- * authoritative numbers. Guarded to only ever correct `shares` when nothing
- * has been sold against the trade yet (`remainingShares === shares`) — the
- * same invariant `deleteTrade` already enforces, for the same reason: once a
- * TradeAllocation exists it was sized against the trade's ORIGINAL share
- * count, and silently changing that out from under it would corrupt the
- * allocation's own history rather than just this trade's.
- */
-export async function confirmPendingBuy(
-  repos: AppRepositories & Partial<CommitEngineRepos>,
-  tradeId: string,
-  confirmed: ConfirmPendingBuyInput
-): Promise<RecordBuyResult> {
-  const trade = await repos.trades.getById(tradeId);
-  if (!trade) {
-    throw new Error(`Trade not found: ${tradeId}`);
-  }
-  if (trade.confirmationStatus !== "pending") {
-    throw new Error(`Trade ${tradeId} is not awaiting confirmation.`);
-  }
-  if (confirmed.shares !== trade.shares && trade.remainingShares !== trade.shares) {
-    throw new Error(
-      "This trade already has shares closed against it (a sell allocation exists) — its share count can't be corrected without corrupting that history. Resolve the allocation manually first."
-    );
-  }
-
-  const portfolio = await repos.portfolios.getById(trade.portfolioId);
-  if (!portfolio) {
-    throw new Error(`Portfolio not found: ${trade.portfolioId}`);
-  }
-
-  const fees = confirmed.fees ?? 0;
-  const taxes = confirmed.taxes ?? 0;
-  const oldTotalCost = Money.from(trade.shares * trade.entryPrice).add(Money.from(trade.fees)).add(Money.from(trade.taxes));
-  const newTotalCost = Money.from(confirmed.shares * confirmed.price).add(Money.from(fees)).add(Money.from(taxes));
-  const cashDelta = newTotalCost.subtract(oldTotalCost);
-  await repos.portfolios.save({ ...portfolio, cash: Money.from(portfolio.cash).subtract(cashDelta).toNumber() });
-
-  const updatedTrade: Trade = {
-    ...trade,
-    shares: confirmed.shares,
-    entryPrice: confirmed.price,
-    fees,
-    taxes,
-    // Preserves whatever's already allocated: the guard above only allows a
-    // real shares delta when nothing has been sold yet (remainingShares ===
-    // shares), so this reduces to `confirmed.shares` in that case, and to
-    // the unchanged `trade.remainingShares` when only price/fees/taxes moved.
-    remainingShares: trade.remainingShares + (confirmed.shares - trade.shares),
-    transactionNumber: confirmed.transactionNumber ?? trade.transactionNumber,
-    confirmationStatus: "verified",
-  };
-  await repos.trades.save(updatedTrade);
-
-  const events = await repos.timeline.getByPortfolio(trade.portfolioId);
-  const buyEvent = events.find((e) => e.type === "Buy" && e.relatedTradeIds?.includes(tradeId));
-  if (buyEvent) {
-    await repos.timeline.save({ ...buyEvent, amount: -newTotalCost.toNumber(), shares: confirmed.shares });
-  }
-
-  return { trade: updatedTrade };
 }
 
 /**
@@ -495,8 +417,6 @@ export interface RecordSellInput {
   executionTime: string;
   /** Broker-assigned unique execution ID for the sell order this allocates (e.g. Thndr's Invoice "Transaction No.") — applied to every resulting allocation row, same as sellGroupId. See TradeAllocation.transactionNumber. */
   transactionNumber?: string;
-  /** See TradeAllocation.confirmationStatus — applied to every resulting allocation row, same as transactionNumber. */
-  needsConfirmation?: boolean;
 }
 
 export interface RecordSellResult {
@@ -542,25 +462,22 @@ export async function recordSell(repos: AppRepositories & Partial<CommitEngineRe
       );
     }
 
-    const allocation: TradeAllocation = {
-      ...createTradeAllocation({
-        id: generateId(),
-        sellGroupId,
-        portfolioId: input.portfolioId,
-        tradeId: trade.id,
-        ticker,
-        sharesClosed: line.shares,
-        exitPrice: line.exitPrice,
-        fees: line.fees,
-        taxes: line.taxes,
-        executionDate: input.executionDate,
-        executionTime: input.executionTime,
-        notes: line.notes,
-        exitReason: line.exitReason,
-        transactionNumber: input.transactionNumber,
-      }),
-      confirmationStatus: input.needsConfirmation ? "pending" : undefined,
-    };
+    const allocation: TradeAllocation = createTradeAllocation({
+      id: generateId(),
+      sellGroupId,
+      portfolioId: input.portfolioId,
+      tradeId: trade.id,
+      ticker,
+      sharesClosed: line.shares,
+      exitPrice: line.exitPrice,
+      fees: line.fees,
+      taxes: line.taxes,
+      executionDate: input.executionDate,
+      executionTime: input.executionTime,
+      notes: line.notes,
+      exitReason: line.exitReason,
+      transactionNumber: input.transactionNumber,
+    });
     await repos.allocations.save(allocation);
     createdAllocations.push(allocation);
     closedTrades.push(trade);
@@ -686,132 +603,6 @@ async function ensureSellFacts(
   );
 
   await assignPortfolio(repos, ticker, input.portfolioId);
-}
-
-export interface ConfirmPendingSellInput {
-  shares: number;
-  price: number;
-  fees?: number;
-  taxes?: number;
-  transactionNumber?: string;
-}
-
-export interface ConfirmPendingSellResult {
-  allocations: TradeAllocation[];
-}
-
-/**
- * Resolves every `confirmationStatus: "pending"` TradeAllocation sharing one
- * `sellGroupId` (a partial-fill SELL imported from STES) with the invoice's
- * own authoritative numbers.
- *
- * A single-lot sell (the common case) gets its shares/price/fees/taxes
- * corrected outright, symmetrically adjusting the source trade's
- * `remainingShares` for any shares delta. A multi-lot sell only auto-applies
- * a shares change when there's exactly one lot to apply it to — deciding
- * which of several lots absorbs a share-count correction is exactly the kind
- * of explicit allocation decision this app never auto-picks (ADR-002), so
- * that case is refused with a clear error instead. Price/fees/taxes-only
- * corrections (shares unchanged) are always safe regardless of lot count:
- * the confirmed price applies to every lot, fees/taxes split proportionally
- * by each lot's own share of the total (the last lot absorbs any rounding
- * remainder so the parts sum exactly to the confirmed total).
- */
-export async function confirmPendingSell(
-  repos: AppRepositories & Partial<CommitEngineRepos>,
-  sellGroupId: string,
-  confirmed: ConfirmPendingSellInput
-): Promise<ConfirmPendingSellResult> {
-  const allAllocations = await repos.allocations.getAll();
-  const group = allAllocations.filter((a) => a.sellGroupId === sellGroupId);
-  if (group.length === 0) {
-    throw new Error(`Sell ${sellGroupId} not found.`);
-  }
-  if (group.some((a) => a.confirmationStatus !== "pending")) {
-    throw new Error(`Sell ${sellGroupId} is not awaiting confirmation.`);
-  }
-
-  const portfolio = await repos.portfolios.getById(group[0].portfolioId);
-  if (!portfolio) {
-    throw new Error(`Portfolio not found: ${group[0].portfolioId}`);
-  }
-
-  const oldTotalShares = group.reduce((sum, a) => sum + a.sharesClosed, 0);
-  const oldFees = group.reduce((sum, a) => sum + a.fees, 0);
-  const oldTaxes = group.reduce((sum, a) => sum + a.taxes, 0);
-  const oldNetProceeds = group.reduce(
-    (sum, a) => sum + Money.from(a.sharesClosed * a.exitPrice).subtract(Money.from(a.fees)).subtract(Money.from(a.taxes)).toNumber(),
-    0
-  );
-
-  const confirmedFees = confirmed.fees ?? oldFees;
-  const confirmedTaxes = confirmed.taxes ?? oldTaxes;
-
-  if (confirmed.shares !== oldTotalShares && group.length > 1) {
-    throw new Error(
-      `Sell ${sellGroupId} closed ${group.length} lots — an invoice-confirmed share count that differs from what was originally allocated can't be auto-applied across multiple lots. Resolve the allocation manually first.`
-    );
-  }
-
-  const updatedAllocations: TradeAllocation[] = [];
-  let feesAssigned = Money.zero();
-  let taxesAssigned = Money.zero();
-
-  for (let i = 0; i < group.length; i++) {
-    const allocation = group[i];
-    const isLast = i === group.length - 1;
-    const sharesClosed = group.length === 1 ? confirmed.shares : allocation.sharesClosed;
-    const shareOfTotal = oldTotalShares > 0 ? allocation.sharesClosed / oldTotalShares : 1 / group.length;
-    const fees = isLast
-      ? Money.from(confirmedFees).subtract(feesAssigned).toNumber()
-      : Money.from(Math.round(confirmedFees * shareOfTotal * 100) / 100).toNumber();
-    const taxes = isLast
-      ? Money.from(confirmedTaxes).subtract(taxesAssigned).toNumber()
-      : Money.from(Math.round(confirmedTaxes * shareOfTotal * 100) / 100).toNumber();
-    feesAssigned = feesAssigned.add(Money.from(fees));
-    taxesAssigned = taxesAssigned.add(Money.from(taxes));
-
-    const updated: TradeAllocation = {
-      ...allocation,
-      sharesClosed,
-      exitPrice: confirmed.price,
-      fees,
-      taxes,
-      transactionNumber: confirmed.transactionNumber ?? allocation.transactionNumber,
-      confirmationStatus: "verified",
-    };
-    await repos.allocations.save(updated);
-    updatedAllocations.push(updated);
-
-    if (group.length === 1) {
-      const trade = await repos.trades.getById(allocation.tradeId);
-      if (!trade) {
-        throw new Error(`Trade not found: ${allocation.tradeId}`);
-      }
-      const delta = sharesClosed - allocation.sharesClosed;
-      const newRemaining = trade.remainingShares - delta;
-      if (newRemaining < 0 || newRemaining > trade.shares) {
-        throw new Error(
-          `The invoice-confirmed quantity (${confirmed.shares}) can't be applied to trade ${trade.id}: it would leave ${newRemaining} remaining shares, outside [0, ${trade.shares}].`
-        );
-      }
-      await repos.trades.saveRemainingShares(trade.id, newRemaining);
-    }
-  }
-
-  const newNetProceeds = Money.from(confirmed.shares * confirmed.price).subtract(Money.from(confirmedFees)).subtract(Money.from(confirmedTaxes)).toNumber();
-  const cashDelta = Money.from(newNetProceeds).subtract(Money.from(oldNetProceeds));
-  await repos.portfolios.save({ ...portfolio, cash: Money.from(portfolio.cash).add(cashDelta).toNumber() });
-
-  const events = await repos.timeline.getByPortfolio(group[0].portfolioId);
-  const sellEvent = events.find(
-    (e) => (e.type === "Sell" || e.type === "PartialSell") && group.some((a) => e.relatedAllocationIds?.includes(a.id))
-  );
-  if (sellEvent) {
-    await repos.timeline.save({ ...sellEvent, amount: newNetProceeds, shares: confirmed.shares });
-  }
-
-  return { allocations: updatedAllocations };
 }
 
 export interface MoveTradeResult {

@@ -9,6 +9,7 @@ import type { Upload } from "@domain/entities/Upload";
 import type { RawTransaction } from "@domain/entities/RawTransaction";
 import type { LedgerEvent } from "@domain/entities/LedgerEvent";
 import type { Allocation } from "@domain/entities/Allocation";
+import type { PendingExecution } from "@domain/entities/PendingExecution";
 
 /** Storage row wrapping a LedgerEvent with the (portfolioId, ticker) keying Dexie needs — never exposed outside DexieCommittedLedgerRepository. `id` is composite (`portfolioId|eventId`) because LedgerEvent.eventId alone isn't unique across portfolios: two different portfolios could coincidentally hold economically identical trades. */
 export interface LedgerCacheRow {
@@ -37,6 +38,7 @@ export class PortfolioOsDatabase extends Dexie {
   rawTransactions!: EntityTable<RawTransaction, "id">;
   ledgerCache!: EntityTable<LedgerCacheRow, "id">;
   allocationsCache!: EntityTable<AllocationCacheRow, "id">;
+  pendingExecutions!: EntityTable<PendingExecution, "id">;
 
   constructor(name = "PortfolioOsDatabase") {
     super(name);
@@ -85,6 +87,26 @@ export class PortfolioOsDatabase extends Dexie {
       rawTransactions: "&id, seq, portfolioId, kind, ticker",
       ledgerCache: "&id, portfolioId, ticker, [portfolioId+ticker]",
       allocationsCache: "&id, portfolioId, ticker, [portfolioId+ticker]",
+    });
+
+    // Additive again: v1/v2/v3 tables re-listed verbatim, plus
+    // pendingExecutions — partial-fill executions held outside the
+    // Trade/TradeAllocation ledger until their broker invoice is confirmed
+    // (see PendingExecution's own doc comment for why this is its own table
+    // rather than a flag on Trade/TradeAllocation: a flagged-but-already-
+    // created Trade was the actual bug this table fixes).
+    this.version(4).stores({
+      portfolios: "&id, kind, archivedAt",
+      trades: "&id, portfolioId, ticker, [portfolioId+ticker], executionDate",
+      tradeAllocations: "&id, portfolioId, tradeId, ticker, sellGroupId, [portfolioId+ticker]",
+      timelineEvents: "&id, portfolioId, type, ticker, timestamp",
+      journalEntries: "&id, tradeId, portfolioId",
+      verifications: "&id, portfolioId, ticker, [portfolioId+ticker], capturedAt",
+      uploads: "&id, portfolioId, fileHash, [portfolioId+fileHash], status",
+      rawTransactions: "&id, seq, portfolioId, kind, ticker",
+      ledgerCache: "&id, portfolioId, ticker, [portfolioId+ticker]",
+      allocationsCache: "&id, portfolioId, ticker, [portfolioId+ticker]",
+      pendingExecutions: "&id, portfolioId, ticker, [portfolioId+ticker], verificationStatus",
     });
   }
 }
