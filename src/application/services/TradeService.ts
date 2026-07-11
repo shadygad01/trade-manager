@@ -11,7 +11,7 @@ import type { AppRepositories } from "./types";
 import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolio, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 import { canonicalKey } from "./ledgerRebuild";
 import { resolveLotRef } from "./ledgerProjection";
-import { isRetracted, findUnclaimedSellExecutionFact } from "./rawTransactionFolds";
+import { isRetracted, resolveCurrentTicker, findUnclaimedSellExecutionFact } from "./rawTransactionFolds";
 import {
   createRawTransaction,
   type BuyExecutionPayload,
@@ -85,8 +85,14 @@ async function ensureBuyFact(repos: CommitEngineRepos & Partial<AppRepositories>
     (await repos.trades!.getByPortfolio(trade.portfolioId)).filter((t) => t.id !== trade.id).map((t) => t.id)
   );
   const liveMatch = all.find((t) => {
-    if (t.kind !== "BuyExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== ticker) return false;
+    if (t.kind !== "BuyExecution") return false;
     if (isRetracted(all, t.id)) return false;
+    // Resolved through any live Correction (see rawTransactionFolds.ts's
+    // resolveCurrentTicker doc comment) — reading t.ticker directly here
+    // caused the same "stops recognizing a renamed fact" bug already fixed
+    // in isTickerFullyOfficialBrokerExcelSourced and findUnclaimedSellExecutionFact.
+    const resolvedTicker = resolveCurrentTicker(all, t);
+    if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== ticker) return false;
     if (otherTradeIds.has(t.id)) return false;
     const p = t.payload as BuyExecutionPayload;
     return canonicalKey({ side: "BUY", ticker, date: p.executionDate, shares: p.shares, price: p.price }) === key;

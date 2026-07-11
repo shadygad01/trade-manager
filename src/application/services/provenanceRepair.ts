@@ -6,7 +6,7 @@ import {
 } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { appendAndMaybeCommit, retractRawTransaction, type CommitEngineRepos } from "./commitEngine";
-import { isRetracted, findUnclaimedSellExecutionFact } from "./rawTransactionFolds";
+import { isRetracted, resolveCurrentTicker, findUnclaimedSellExecutionFact } from "./rawTransactionFolds";
 
 /**
  * One-time repair for data already written before ensureSellFacts
@@ -72,9 +72,14 @@ export async function dryRunProvenanceRepair(repos: CommitEngineRepos): Promise<
     const currentFact = all.find((t) => t.id === decisionPayload.sellExecutionId && t.kind === "SellExecution");
     if (!currentFact || isRetracted(all, currentFact.id)) continue;
     if (currentFact.source !== "manual") continue; // not the old bug's exact, known signature
-    if (currentFact.ticker === undefined) continue;
+    const resolvedTicker = resolveCurrentTicker(all, currentFact);
+    if (resolvedTicker === undefined) continue;
 
-    const ticker = normalizeTicker(currentFact.ticker);
+    // Resolved through any live Correction, not read from currentFact.ticker
+    // directly — otherwise a wrongly-sourced fact written under a
+    // since-corrected ticker name would search for its correct twin under
+    // the OLD name, never finding it under the ticker it was renamed to.
+    const ticker = normalizeTicker(resolvedTicker);
     const factPayload = currentFact.payload as SellExecutionPayload;
 
     // Excludes currentFact itself (already claimed by this very decision) —

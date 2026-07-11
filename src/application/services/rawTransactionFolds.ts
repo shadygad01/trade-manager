@@ -87,9 +87,16 @@ export function findUnclaimedSellExecutionFact(
       .map((t) => (t.payload as SellAllocationDecisionPayload).sellExecutionId),
   );
   return all.find((t) => {
-    if (t.kind !== "SellExecution" || t.ticker === undefined) return false;
-    if (normalizeTicker(t.ticker) !== ticker) return false;
+    if (t.kind !== "SellExecution") return false;
     if (isRetracted(all, t.id)) return false;
+    // Resolved through any live Correction, not read from t.ticker directly
+    // — a fact's own ticker field is immutable, so a candidate written
+    // under a since-corrected ticker (e.g. an OCR misread fixed via
+    // TradeService.renameTickerEverywhere) would otherwise never match
+    // again under its current, corrected name. Same bug class as
+    // reconciliation.ts's isTickerFullyOfficialBrokerExcelSourced.
+    const resolvedTicker = resolveCurrentTicker(all, t);
+    if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== ticker) return false;
     if (claimedIds.has(t.id)) return false;
     const p = t.payload as SellExecutionPayload;
     return p.executionDate === match.executionDate && p.shares === match.shares && p.price === match.price;

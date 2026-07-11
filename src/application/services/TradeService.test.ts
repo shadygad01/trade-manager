@@ -689,6 +689,48 @@ describe("recordSell", () => {
     expect(isTickerFullyOfficialBrokerExcelSourced(facts, "CLHO")).toBe(true);
   });
 
+  it("adopts an already-existing BuyExecution fact even when it was extracted under a ticker later renamed via a Correction fact", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+
+    // Extraction-time write under an OCR-misread ticker name.
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "CLHOA",
+        payload: { ticker: "CLHOA", shares: 3000, price: 0.38, executionDate: "2026-01-05", executionTime: "10:00" },
+      }),
+    );
+    // A Correction fixes the ticker name (e.g. via renameTickerEverywhere)
+    // BEFORE the user ever confirms the buy — the fact's own `.ticker` field
+    // stays "CLHOA" forever; only a live Correction records the rename.
+    await repos.rawTransactions.append(
+      createRawTransaction({ kind: "Correction", source: "manual", payload: { targetId: "extracted-buy-1", patch: { ticker: "CLHO" } } }),
+    );
+
+    // recordBuy is called under the CORRECTED name — ensureBuyFact must
+    // still recognize "extracted-buy-1" as the live match and adopt it,
+    // not read its immutable, stale `.ticker` field directly and miss it.
+    await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      shares: 3000,
+      entryPrice: 0.38,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    const buyFacts = facts.filter((f) => f.kind === "BuyExecution");
+    expect(buyFacts).toHaveLength(1);
+    expect(buyFacts[0].id).toBe("extracted-buy-1");
+    expect(buyFacts[0].source).toBe("official-broker-excel");
+
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "CLHO")).toBe(true);
+  });
+
   it("never merges two genuinely different sells that coincidentally share the same ticker/date/shares/price — each still gets its own fact", async () => {
     const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(100_000)] }));
     const buy1 = await recordBuy(repos, {
