@@ -140,6 +140,22 @@ describe("isTickerFullyOfficialBrokerExcelSourced", () => {
     const retraction = { ...createRawTransaction({ kind: "Retraction", source: "manual", payload: { targetId: "b1" } }), seq: 2 };
     expect(isTickerFullyOfficialBrokerExcelSourced([fact, retraction], "COMI")).toBe(false);
   });
+
+  // Systemic audit finding: a fact's own `ticker` field is immutable — a
+  // ticker rename/correction (TradeService.renameTickerEverywhere) is its
+  // own separate Correction fact, never an edit in place. Reading
+  // `payload.ticker` directly (the pre-fix implementation) silently stopped
+  // recognizing a renamed ticker's facts under its NEW name at all.
+  it("still recognizes a ticker as fully Excel-sourced after it's been renamed via a Correction fact", () => {
+    const fact = buyFact({ id: "b1", source: "official-broker-excel", ticker: "COMI" });
+    const correction = {
+      ...createRawTransaction({ kind: "Correction", source: "manual", payload: { targetId: "b1", patch: { ticker: "HRHO" } } }),
+      seq: 2,
+    };
+    expect(isTickerFullyOfficialBrokerExcelSourced([fact, correction], "HRHO")).toBe(true);
+    // The OLD ticker name no longer resolves to this fact at all.
+    expect(isTickerFullyOfficialBrokerExcelSourced([fact, correction], "COMI")).toBe(false);
+  });
 });
 
 describe("suggestDuplicateTradeIds", () => {
