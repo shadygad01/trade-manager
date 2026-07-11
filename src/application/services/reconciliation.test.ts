@@ -30,19 +30,19 @@ function verification(overrides: Partial<PositionVerification> = {}): PositionVe
 
 describe("reconcilePositions", () => {
   it("flags no mismatch when computed matches verified", () => {
-    const [result] = reconcilePositions([position("COMI", 100)], [verification()], [], []);
+    const [result] = reconcilePositions([position("COMI", 100)], [verification()], [], [], []);
     expect(result.quantityMismatch).toBe(false);
     expect(result.quantityShortfall).toBe(false);
   });
 
   it("flags quantityMismatch when computed exceeds verified", () => {
-    const [result] = reconcilePositions([position("COMI", 150)], [verification()], [], []);
+    const [result] = reconcilePositions([position("COMI", 150)], [verification()], [], [], []);
     expect(result.quantityMismatch).toBe(true);
     expect(result.quantityShortfall).toBe(false);
   });
 
   it("flags quantityShortfall when computed is below verified", () => {
-    const [result] = reconcilePositions([position("COMI", 50)], [verification()], [], []);
+    const [result] = reconcilePositions([position("COMI", 50)], [verification()], [], [], []);
     expect(result.quantityShortfall).toBe(true);
     expect(result.quantityMismatch).toBe(false);
   });
@@ -57,7 +57,7 @@ describe("reconcilePositions", () => {
       executionDate: "2026-06-15",
       executionTime: "10:00",
     });
-    const [result] = reconcilePositions([position("COMI", 150)], [verification()], [trade], []);
+    const [result] = reconcilePositions([position("COMI", 150)], [verification()], [trade], [], []);
     expect(result.verificationStale).toBe(true);
     expect(result.quantityMismatch).toBe(false);
     expect(result.quantityShortfall).toBe(false);
@@ -75,7 +75,7 @@ describe("reconcilePositions", () => {
       executionDate: "2026-06-20",
       executionTime: "10:00",
     });
-    const [result] = reconcilePositions([position("COMI", 50)], [verification()], [], [allocation]);
+    const [result] = reconcilePositions([position("COMI", 50)], [verification()], [], [allocation], []);
     expect(result.verificationStale).toBe(true);
     expect(result.quantityShortfall).toBe(false);
   });
@@ -83,19 +83,19 @@ describe("reconcilePositions", () => {
   it("uses the most recent verification when multiple exist for a ticker", () => {
     const older = verification({ id: "v-old", capturedAt: "2026-01-01T00:00", units: 999 });
     const newer = verification({ id: "v-new", capturedAt: "2026-06-01T00:00", units: 100 });
-    const [result] = reconcilePositions([position("COMI", 100)], [older, newer], [], []);
+    const [result] = reconcilePositions([position("COMI", 100)], [older, newer], [], [], []);
     expect(result.verifiedUnits).toBe(100);
     expect(result.quantityMismatch).toBe(false);
   });
 
   it("reports a verified position even when there are zero computed shares (shortfall)", () => {
-    const [result] = reconcilePositions([], [verification({ units: 30 })], [], []);
+    const [result] = reconcilePositions([], [verification({ units: 30 })], [], [], []);
     expect(result.computedShares).toBe(0);
     expect(result.quantityShortfall).toBe(true);
   });
 
   it("skips tickers with no verification at all", () => {
-    const results = reconcilePositions([position("HRHO", 10)], [], [], []);
+    const results = reconcilePositions([position("HRHO", 10)], [], [], [], []);
     expect(results).toHaveLength(0);
   });
 

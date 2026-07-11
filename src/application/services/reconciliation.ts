@@ -151,16 +151,20 @@ export function latestByTicker(verifications: PositionVerification[]): Map<strin
  * trust policy, that whole comparison no longer applies once the Excel
  * export alone already confirms the position; a stray disagreeing
  * screenshot is not this module's concern to surface for such a ticker.
- * `rawTransactions` defaults to empty for callers that haven't started
- * fetching it (equivalent to "no ticker is Excel-sourced," i.e. unchanged
- * legacy behavior).
+ * `rawTransactions` is deliberately REQUIRED, not optional/defaulted —
+ * an architectural-audit finding was that a defaulted-to-`[]` parameter here
+ * would let any future caller silently bypass the trust policy (an omitted
+ * argument reading as "no ticker is Excel-sourced" with no compiler or
+ * runtime signal anything was skipped) purely by forgetting to thread it
+ * through, exactly the class of bug this whole policy has been about
+ * eliminating. Every caller must explicitly supply the real data.
  */
 export function reconcilePositions(
   positions: PositionAggregate[],
   verifications: PositionVerification[],
   trades: Trade[],
   allocations: TradeAllocation[],
-  rawTransactions: RawTransaction[] = []
+  rawTransactions: RawTransaction[]
 ): PositionReconciliation[] {
   const verificationByTicker = latestByTicker(verifications);
   const computedByTicker = new Map(positions.map((p) => [p.ticker, p.totalShares]));
