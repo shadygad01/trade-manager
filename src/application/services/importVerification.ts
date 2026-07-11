@@ -68,6 +68,16 @@ export interface TickerMatchStatus {
    *          missing buy.
    */
   discrepancySide?: "buy" | "sell";
+  /**
+   * True only on `reason === "broker-excel-verified"`, when a "My Position"
+   * screenshot (or other secondary source) exists but disagrees with the
+   * net share count. Per the broker-record trust policy this never blocks,
+   * downgrades, or invalidates the Excel-sourced transaction — `matched`
+   * stays true regardless — it exists purely so the UI can flag the
+   * disagreement for the user to look at, without treating it as a real
+   * discrepancy the way a `"mismatch"` reason does for every other source.
+   */
+  secondaryMismatch?: boolean;
 }
 
 /**
@@ -99,12 +109,15 @@ export interface TickerMatchStatus {
  *
  * A ticker whose every still-pending candidate came from the broker's own
  * native "Your Orders" Excel export (`source: "official-broker-excel"`, see
- * ThndrOrdersWorkbookParser.ts) is verified the same way, for the same
- * reason: every field is printed verbatim by the broker's own system, no
- * OCR or AI extraction involved, so it needs no screenshot, invoice, or
- * manual confirmation of its own either. Same "only when no broker
- * verification exists at all" caveat as invoice — an actual mismatch
- * against a real screenshot still blocks.
+ * ThndrOrdersWorkbookParser.ts) is verified for the same reason — every
+ * field is printed verbatim by the broker's own system, no OCR or AI
+ * extraction involved — but goes one step further than invoice: it is
+ * authoritative even against a DISAGREEING "My Position" screenshot, not
+ * just a missing one (checked before the verifiedUnits branch entirely, see
+ * the code below). Per the broker-record trust policy, only the Excel
+ * file's own internal consistency can withhold verification from an
+ * Excel-sourced batch; a disagreeing screenshot is surfaced via
+ * `secondaryMismatch` for the user to review, never as a block.
  *
  * A fourth way, one level broader — the dual-source rule: a ticker whose
  * every still-pending candidate is *either* invoice-sourced *or*
@@ -173,6 +186,27 @@ export function checkTickerMatch(params: {
       verifiedAvgCost: params.verifiedAvgCost,
     };
   }
+  // The official broker Excel export is authoritative even against a
+  // DISAGREEING secondary source — checked before the verifiedUnits/screenshot
+  // branch below (unlike every other corroboration signal, which only ever
+  // substitutes for a MISSING screenshot and still blocks on a real,
+  // present mismatch). Per the broker-record trust policy, only the Excel
+  // file's own internal consistency can block a batch sourced entirely from
+  // it; a "My Position" screenshot that disagrees is surfaced as a
+  // non-blocking `secondaryMismatch` for the user to review, never as a
+  // reason to withhold verification from the Excel-sourced transaction.
+  if (params.allPendingFromOfficialBrokerExcel) {
+    const secondaryMismatch = params.verifiedUnits !== undefined && Math.abs(netShares - params.verifiedUnits) >= 1e-6;
+    return {
+      matched: true,
+      reason: "broker-excel-verified",
+      netShares,
+      ...common,
+      verifiedUnits: params.verifiedUnits,
+      verifiedAvgCost: params.verifiedAvgCost,
+      secondaryMismatch,
+    };
+  }
   if (params.verifiedUnits === undefined) {
     // Corroboration checked BEFORE the closed-position shortcut, and applies
     // equally whether netShares is zero or not — these three signals are
@@ -180,9 +214,6 @@ export function checkTickerMatch(params: {
     // "the arithmetic happens to cancel."
     if (params.allPendingFromInvoice) {
       return { matched: true, reason: "invoice-verified", netShares, ...common };
-    }
-    if (params.allPendingFromOfficialBrokerExcel) {
-      return { matched: true, reason: "broker-excel-verified", netShares, ...common };
     }
     if (params.allPendingSelfVerified) {
       return { matched: true, reason: "cross-verified", netShares, ...common };
