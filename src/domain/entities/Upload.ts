@@ -37,7 +37,7 @@ export interface ParsedTradeCandidate {
    */
   source?: "statement" | "invoice" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
   /** How this candidate's text was obtained — see RawTransaction.ExtractionMethod's own doc comment. */
-  extractionMethod?: "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry" | "stes-workbook";
+  extractionMethod?: "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry" | "stes-workbook" | "thndr-orders-workbook";
   /** Which released BrokerParser version produced this candidate — see RawTransaction.parserVersion's own doc comment. */
   parserVersion?: string;
   /**

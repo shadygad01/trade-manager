@@ -222,7 +222,7 @@ import { generateId } from "../value-objects/id";
  * confidence alone never captures. `undefined` only for facts written
  * before this field existed. See docs/EVIDENCE_ARCHITECTURE.md.
  */
-export type ExtractionMethod = "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry" | "stes-workbook";
+export type ExtractionMethod = "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry" | "stes-workbook" | "thndr-orders-workbook";
 
 export interface RawTransaction {
   id: string;

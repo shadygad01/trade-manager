@@ -10,8 +10,15 @@ import { ThndrParser } from "./parsers/ThndrParser";
 import { CsvStatementParser } from "./parsers/CsvStatementParser";
 import { normalizeExtractedText } from "./textNormalize";
 import { isStesWorkbookFile, parseStesWorkbook, STES_PARSER_VERSION } from "../stes/StesWorkbookParser";
+import { parseThndrOrdersWorkbook, THNDR_ORDERS_WORKBOOK_PARSER_VERSION } from "../thndrOrders/ThndrOrdersWorkbookParser";
 
-export type ImportDocType = "statement" | "orders-screen" | "orders-timeline" | "position-verification" | "stes-workbook";
+export type ImportDocType =
+  | "statement"
+  | "orders-screen"
+  | "orders-timeline"
+  | "position-verification"
+  | "stes-workbook"
+  | "thndr-orders-workbook";
 
 export interface ImportResult {
   status: "parsed" | "failed";
@@ -69,30 +76,65 @@ export class ImportOrchestrator {
     const buffer = await file.arrayBuffer();
     const fileHash = await sha256Hex(buffer);
 
-    // STES workbooks are binary spreadsheets — routed before ANY text
-    // extraction, and converging into the exact same ImportResult shape as
-    // every OCR/PDF/CSV document, so everything downstream (Upload archival,
-    // raw-evidence recording, the pending pool, verification/completeness,
-    // the evidence graph) treats an STES upload as just another document.
+    // Binary spreadsheets (.xlsx) are routed before ANY text extraction, and
+    // converge into the exact same ImportResult shape as every OCR/PDF/CSV
+    // document, so everything downstream (Upload archival, raw-evidence
+    // recording, the pending pool, verification/completeness, the evidence
+    // graph) treats either workbook shape as just another document. Two
+    // distinct .xlsx shapes are recognized today — the STES raw-extraction
+    // template (Metadata/Documents/Observations sheets) and Thndr's own
+    // native "Your Orders" screen export (single sheet, no template) — tried
+    // in that order since STES's own file-level check (schema name/required
+    // sheets) is the more specific of the two.
     if (isStesWorkbookFile(file)) {
       const stes = await parseStesWorkbook(buffer);
-      const hasRows = stes.candidates.length > 0 || stes.dividends.length > 0 || stes.cancelledOrders.length > 0;
+      if (stes.ok) {
+        const hasRows = stes.candidates.length > 0 || stes.dividends.length > 0 || stes.cancelledOrders.length > 0;
+        return {
+          status: hasRows ? "parsed" : "failed",
+          docType: "stes-workbook",
+          candidates: withProvenance(stes.candidates, "stes-workbook", STES_PARSER_VERSION),
+          verifications: [],
+          dividends: stes.dividends,
+          cancelledOrders: stes.cancelledOrders,
+          orderEvidences: [],
+          rawText: stes.rawText,
+          warnings: hasRows ? stes.warnings : ["No importable observations were found in the STES workbook."],
+          fileHash,
+          // The workbook's bytes are the evidence document — archived like
+          // an image/PDF (rawText above is only a derived rendering of it).
+          fileBlob: file,
+        };
+      }
+
+      const thndrOrders = await parseThndrOrdersWorkbook(buffer);
+      if (thndrOrders.ok) {
+        const hasRows = thndrOrders.candidates.length > 0 || thndrOrders.cancelledOrders.length > 0;
+        return {
+          status: hasRows ? "parsed" : "failed",
+          docType: "thndr-orders-workbook",
+          candidates: withProvenance(thndrOrders.candidates, "thndr-orders-workbook", THNDR_ORDERS_WORKBOOK_PARSER_VERSION),
+          verifications: [],
+          dividends: [],
+          cancelledOrders: thndrOrders.cancelledOrders,
+          orderEvidences: [],
+          rawText: thndrOrders.rawText,
+          warnings: hasRows ? thndrOrders.warnings : ["No importable orders were found in this workbook."],
+          fileHash,
+          fileBlob: file,
+        };
+      }
+
       return {
-        status: stes.ok && hasRows ? "parsed" : "failed",
-        docType: "stes-workbook",
-        candidates: withProvenance(stes.candidates, "stes-workbook", STES_PARSER_VERSION),
+        status: "failed",
+        candidates: [],
         verifications: [],
-        dividends: stes.dividends,
-        cancelledOrders: stes.cancelledOrders,
+        dividends: [],
+        cancelledOrders: [],
         orderEvidences: [],
-        rawText: stes.rawText,
-        warnings:
-          stes.ok && !hasRows && stes.warnings.length === 0
-            ? ["No importable observations were found in the STES workbook."]
-            : stes.warnings,
+        rawText: "",
+        warnings: stes.warnings.length > 0 ? stes.warnings : ["This .xlsx file isn't a recognized broker workbook — use the STES v1.1 template or a native Thndr \"Your Orders\" export."],
         fileHash,
-        // The workbook's bytes are the evidence document — archived like an
-        // image/PDF (rawText above is only a derived rendering of it).
         fileBlob: file,
       };
     }
