@@ -57,7 +57,7 @@ describe("ImportOrchestrator — Thndr Orders workbook routing", () => {
       price: 37,
       date: "2026-07-08",
       confidence: "high",
-      source: "orders-screen",
+      source: "official-broker-excel",
       extractionMethod: "thndr-orders-workbook",
       parserVersion: THNDR_ORDERS_WORKBOOK_PARSER_VERSION,
     });

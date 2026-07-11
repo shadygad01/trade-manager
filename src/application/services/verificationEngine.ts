@@ -73,7 +73,7 @@ interface TradeCandidateEntry {
 }
 
 function toCandidateSource(source: RawTransaction["source"]): ParsedTradeCandidate["source"] {
-  if (source === "statement" || source === "invoice" || source === "orders-screen" || source === "csv") return source;
+  if (source === "statement" || source === "invoice" || source === "official-broker-excel" || source === "orders-screen" || source === "csv") return source;
   // "manual" and the position/orders-timeline document sources never apply
   // to a Buy/Sell candidate itself — treated the same as a legacy untyped
   // read, exactly like duplicateDetection.ts already treats `undefined`.

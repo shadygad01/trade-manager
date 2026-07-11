@@ -42,6 +42,16 @@ export type RawTransactionKind =
 export type RawTransactionSource =
   | "statement"
   | "invoice"
+  /**
+   * The broker's own native "Your Orders" screen exported directly to Excel
+   * (see ThndrOrdersWorkbookParser.ts) — not an OCR read of anything, every
+   * field printed verbatim by the broker's own system. Trusted as
+   * sufficient proof of its own transactions entirely on its own, exactly
+   * like "invoice" (see checkTickerMatch's `allPendingFromOfficialBrokerExcel`
+   * gate) — no "My Position" screenshot, notification, or manual
+   * confirmation is ever requested for a transaction sourced from here.
+   */
+  | "official-broker-excel"
   | "orders-screen"
   | "orders-timeline"
   | "position-verification"

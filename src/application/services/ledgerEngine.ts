@@ -32,7 +32,7 @@ export type { LedgerEvent, LotOpenedEvent, SellRecordedEvent } from "@domain/ent
  */
 
 function toCandidateSource(source: RawTransaction["source"]): ParsedTradeCandidate["source"] {
-  if (source === "statement" || source === "invoice" || source === "orders-screen" || source === "csv") return source;
+  if (source === "statement" || source === "invoice" || source === "official-broker-excel" || source === "orders-screen" || source === "csv") return source;
   return undefined;
 }
 

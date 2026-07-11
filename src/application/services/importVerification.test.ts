@@ -101,6 +101,17 @@ describe("checkTickerMatch", () => {
     });
     expect(ordersVerified.matched).toBe(true);
     expect(ordersVerified.reason).toBe("orders-verified");
+
+    const brokerExcelVerified = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 50,
+      pendingSellShares: 50,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      allPendingFromOfficialBrokerExcel: true,
+    });
+    expect(brokerExcelVerified.matched).toBe(true);
+    expect(brokerExcelVerified.reason).toBe("broker-excel-verified");
   });
 
   it("still requires a screenshot when net shares are nonzero and none was uploaded", () => {
@@ -140,6 +151,46 @@ describe("checkTickerMatch", () => {
     });
     expect(result.matched).toBe(false);
     expect(result.reason).toBe("mismatch");
+  });
+
+  it("trusts a batch sourced entirely from the official broker Excel export as its own verification, with no screenshot/invoice/manual confirmation needed", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: undefined,
+      allPendingFromOfficialBrokerExcel: true,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.reason).toBe("broker-excel-verified");
+    expect(result.netShares).toBe(37);
+  });
+
+  it("still blocks a broker-Excel-sourced batch if a broker screenshot exists and actually mismatches — the trust policy never overrides a real, present discrepancy", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: 30,
+      allPendingFromOfficialBrokerExcel: true,
+    });
+    expect(result.matched).toBe(false);
+    expect(result.reason).toBe("mismatch");
+  });
+
+  it("prefers invoice-verified over broker-excel-verified when both are somehow true (invoice checked first)", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 10,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      allPendingFromInvoice: true,
+      allPendingFromOfficialBrokerExcel: true,
+    });
+    expect(result.reason).toBe("invoice-verified");
   });
 
   it("trusts a cross-verified batch (an OCR read corroborated by an independent invoice) with no broker screenshot at all", () => {

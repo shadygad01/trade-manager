@@ -30,7 +30,15 @@ describe("parseThndrOrdersWorkbook", () => {
     const result = await parseThndrOrdersWorkbook(buffer);
     expect(result.ok).toBe(true);
     expect(result.candidates).toHaveLength(2);
-    expect(result.candidates[0]).toMatchObject({ ticker: "EAST", side: "BUY", shares: 34, price: 37, date: "2026-07-08", confidence: "high" });
+    expect(result.candidates[0]).toMatchObject({
+      ticker: "EAST",
+      side: "BUY",
+      shares: 34,
+      price: 37,
+      date: "2026-07-08",
+      confidence: "high",
+      source: "official-broker-excel",
+    });
     expect(result.candidates[1]).toMatchObject({ ticker: "ABUK", side: "SELL", shares: 14, price: 67.4, date: "2026-06-30" });
   });
 
@@ -46,9 +54,10 @@ describe("parseThndrOrdersWorkbook", () => {
     expect(result.candidates).toHaveLength(0);
     expect(result.cancelledOrders).toHaveLength(3);
     expect(result.cancelledOrders.map((c) => c.brokerStatus)).toEqual(["CANCELLED", "REJECTED", "EXPIRED"]);
+    expect(result.cancelledOrders.every((c) => c.source === "official-broker-excel")).toBe(true);
   });
 
-  it("uses only the executed quantity for a partially filled order and flags it for confirmation", async () => {
+  it("uses only the executed quantity for a partially filled order, as a normal final candidate (no confirmation gate — the executed count is printed directly by the broker, not an uncertain OCR/AI read)", async () => {
     const buffer = buildWorkbook([
       TITLE_ROW,
       ["COMI"],
@@ -56,7 +65,8 @@ describe("parseThndrOrdersWorkbook", () => {
     ]);
     const result = await parseThndrOrdersWorkbook(buffer);
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ shares: 187, needsConfirmation: true, brokerStatus: "PARTIALLY FILLED" });
+    expect(result.candidates[0]).toMatchObject({ shares: 187, source: "official-broker-excel" });
+    expect(result.candidates[0].needsConfirmation).toBeUndefined();
   });
 
   it("skips a cash-amount ('invest by EGP amount') order since it prints no share count", async () => {
@@ -100,7 +110,8 @@ describe("parseThndrOrdersWorkbook", () => {
     ]);
     const result = await parseThndrOrdersWorkbook(buffer);
     expect(result.candidates).toHaveLength(1);
-    expect(result.candidates[0]).toMatchObject({ shares: 7, needsConfirmation: true });
+    expect(result.candidates[0]).toMatchObject({ shares: 7 });
+    expect(result.candidates[0].needsConfirmation).toBeUndefined();
   });
 
   it("never creates a candidate for a pending (not-yet-executed) order", async () => {

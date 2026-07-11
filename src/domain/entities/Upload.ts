@@ -35,7 +35,7 @@ export interface ParsedTradeCandidate {
    * field existed; those can still pair with an invoice (the original
    * cross-verification rule) but never with each other.
    */
-  source?: "statement" | "invoice" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
+  source?: "statement" | "invoice" | "official-broker-excel" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
   /** How this candidate's text was obtained — see RawTransaction.ExtractionMethod's own doc comment. */
   extractionMethod?: "native-pdf-text" | "ocr-tesseract" | "csv-text" | "manual-entry" | "stes-workbook" | "thndr-orders-workbook";
   /** Which released BrokerParser version produced this candidate — see RawTransaction.parserVersion's own doc comment. */
@@ -89,7 +89,7 @@ export interface ParsedCancelledOrder {
   time?: string;
   /** The broker's own status text, preserved verbatim — e.g. "Cancelled". */
   brokerStatus: string;
-  source?: "statement" | "invoice" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
+  source?: "statement" | "invoice" | "official-broker-excel" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
 }
 
 /**
@@ -143,7 +143,7 @@ export interface ParsedDividendCandidate {
   date: string;
   amount: number;
   /** Which document type the observation came from (STES imports only) — recorded onto the DividendPayment fact; undefined keeps the pre-STES "position-verification" recording default. */
-  source?: "statement" | "invoice" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
+  source?: "statement" | "invoice" | "official-broker-excel" | "orders-screen" | "csv" | "notification" | "email" | "screenshot" | "other-document";
 }
 
 /**

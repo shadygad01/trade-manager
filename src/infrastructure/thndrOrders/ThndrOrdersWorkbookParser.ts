@@ -15,6 +15,16 @@ import { parsePrice } from "../ocr/parsers/ThndrParser";
  * ticker follows as a 6-column row (date/time, order type, time-in-force,
  * price, filled/total quantity, status) until the next single-cell row
  * changes ticker.
+ *
+ * Every candidate is tagged `source: "official-broker-excel"` — the
+ * broker's own native export, trusted as sufficient proof of its own
+ * transactions entirely on its own (see checkTickerMatch's
+ * `allPendingFromOfficialBrokerExcel` gate and RawTransactionSource's own
+ * doc comment). A "Partially Filled" row's executed-share count is printed
+ * directly by Thndr's own order-management system, not an OCR guess or an
+ * uncertain AI extraction — unlike STES's `needsConfirmation` signal (a
+ * genuinely uncertain reading), there is nothing to confirm here, so a
+ * partial fill becomes a normal, final candidate exactly like a full fill.
  */
 
 export const THNDR_ORDERS_WORKBOOK_PARSER_ID = "thndr-orders-workbook";
@@ -151,7 +161,7 @@ export async function parseThndrOrdersWorkbook(buffer: ArrayBuffer): Promise<Thn
   let skippedNoTicker = 0;
   let skippedValueOrders = 0;
   let skippedMalformed = 0;
-  let skippedContradictoryFulfilled = 0;
+  let skippedZeroExecuted = 0;
 
   for (const row of rows) {
     const cells = row.map((c) => (c === null || c === undefined ? "" : String(c).trim()));
@@ -194,7 +204,7 @@ export async function parseThndrOrdersWorkbook(buffer: ArrayBuffer): Promise<Thn
         date: dateTime.date,
         time: dateTime.time,
         brokerStatus: statusRaw,
-        source: "orders-screen",
+        source: "official-broker-excel",
       });
       continue;
     }
@@ -225,7 +235,11 @@ export async function parseThndrOrdersWorkbook(buffer: ArrayBuffer): Promise<Thn
     }
 
     if (fraction.executed <= 0) {
-      if (status === "FULFILLED") skippedContradictoryFulfilled += 1;
+      // A FULFILLED/PARTIALLY FILLED status inherently means at least one
+      // share executed — 0 here means the row's own fields disagree with
+      // each other, so it's reported rather than silently imported as a
+      // phantom zero-share trade.
+      skippedZeroExecuted += 1;
       continue;
     }
 
@@ -237,9 +251,7 @@ export async function parseThndrOrdersWorkbook(buffer: ArrayBuffer): Promise<Thn
       date: dateTime.date,
       time: dateTime.time,
       confidence: "high",
-      source: "orders-screen",
-      needsConfirmation: status === "PARTIALLY FILLED" ? true : undefined,
-      brokerStatus: status === "PARTIALLY FILLED" ? statusRaw : undefined,
+      source: "official-broker-excel",
     });
   }
 
@@ -254,8 +266,8 @@ export async function parseThndrOrdersWorkbook(buffer: ArrayBuffer): Promise<Thn
   if (skippedMalformed > 0) {
     warnings.push(`${skippedMalformed} order row(s) skipped — couldn't be read (malformed date, type, or quantity).`);
   }
-  if (skippedContradictoryFulfilled > 0) {
-    warnings.push(`${skippedContradictoryFulfilled} order row(s) marked FULFILLED but showed 0 executed shares — skipped as contradictory.`);
+  if (skippedZeroExecuted > 0) {
+    warnings.push(`${skippedZeroExecuted} order row(s) marked FULFILLED/PARTIALLY FILLED but showed 0 executed shares — skipped as contradictory.`);
   }
 
   return { ok: true, candidates, cancelledOrders, warnings, rawText };

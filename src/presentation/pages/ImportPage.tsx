@@ -1394,16 +1394,24 @@ export function ImportPage() {
       const remainingBuysAndSells = [...remainingBuys, ...remainingSells];
       const allPendingFromInvoice =
         remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
+      const allPendingFromOfficialBrokerExcel =
+        remainingBuysAndSells.length > 0 &&
+        remainingBuysAndSells.every((e) => e.candidate.source === "official-broker-excel");
       const allPendingSelfVerified =
         remainingBuysAndSells.length > 0 &&
         remainingBuysAndSells.every(
-          (e) => e.candidate.source === "invoice" || crossVerifiedKeys.has(e.key) || aggregateConfirmedKeys.has(e.key),
+          (e) =>
+            e.candidate.source === "invoice" ||
+            e.candidate.source === "official-broker-excel" ||
+            crossVerifiedKeys.has(e.key) ||
+            aggregateConfirmedKeys.has(e.key),
         );
       const allPendingOrderConfirmed =
         remainingBuysAndSells.length > 0 &&
         remainingBuysAndSells.every(
           (e) =>
             e.candidate.source === "invoice" ||
+            e.candidate.source === "official-broker-excel" ||
             crossVerifiedKeys.has(e.key) ||
             aggregateConfirmedKeys.has(e.key) ||
             orderConfirmedKeys.has(e.key),
@@ -1430,6 +1438,7 @@ export function ImportPage() {
           verifiedUnits: latestVerification?.units,
           verifiedAvgCost: latestVerification?.avgCost,
           allPendingFromInvoice,
+          allPendingFromOfficialBrokerExcel,
           allPendingSelfVerified,
           allPendingOrderConfirmed,
         }),
@@ -2922,6 +2931,13 @@ function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
         <ShieldCheck size={11} /> {t("importPage.matchInvoiceVerified")}
+      </span>
+    );
+  }
+  if (status.reason === "broker-excel-verified") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
+        <ShieldCheck size={11} /> {t("importPage.matchBrokerExcelVerified")}
       </span>
     );
   }

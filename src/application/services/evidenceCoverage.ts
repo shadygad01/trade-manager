@@ -54,12 +54,15 @@ function tickerAndDateOf(txn: RawTransaction): { ticker?: string; date?: string 
 }
 
 /**
- * One CoverageClaim per Upload referenced by `transactions` (grouped by
+ * CoverageClaim(s) per Upload referenced by `transactions` (grouped by
  * `sourceUploadId`, retracted facts excluded — a fully-retracted upload
- * proves nothing). A single upload can only ever produce ONE claim: its
- * document type is fixed at extraction time (see RawTransactionSource),
- * so an Invoice upload is always exact-execution, a Statement upload is
- * always date-range, etc.
+ * proves nothing). A single upload almost always produces exactly ONE
+ * claim: its document type is fixed at extraction time (see
+ * RawTransactionSource), so an Invoice upload is always exact-execution, a
+ * Statement upload is always date-range, etc. The one exception is
+ * "official-broker-excel" — a single native export spans every ticker the
+ * account ever traded, so it produces one ticker-history claim PER TICKER
+ * actually present, not one claim for the whole upload.
  */
 export function buildCoverageClaims(transactions: RawTransaction[]): CoverageClaim[] {
   const live = transactions.filter((t) => !isRetracted(transactions, t.id) && t.sourceUploadId !== undefined);
@@ -89,6 +92,24 @@ export function buildCoverageClaims(transactions: RawTransaction[]): CoverageCla
       const ticker = normalizeTicker(rows[0].ticker ?? dated[0]?.ticker ?? "");
       const dates = dated.map((d) => d.date).sort();
       claims.push({ kind: "ticker-history", sourceUploadId: uploadId, documentType: "orders", ticker, from: dates[0], to: dates[dates.length - 1] });
+      continue;
+    }
+    if (source === "official-broker-excel") {
+      // Unlike a per-ticker "Orders" screenshot, one native Excel export
+      // spans every ticker the account ever traded — one ticker-history
+      // claim per ticker actually present, not a single claim for the whole
+      // upload.
+      const byTicker = new Map<string, string[]>();
+      for (const d of dated) {
+        const ticker = normalizeTicker(d.ticker);
+        const list = byTicker.get(ticker) ?? [];
+        list.push(d.date);
+        byTicker.set(ticker, list);
+      }
+      for (const [ticker, dates] of byTicker) {
+        dates.sort();
+        claims.push({ kind: "ticker-history", sourceUploadId: uploadId, documentType: "orders", ticker, from: dates[0], to: dates[dates.length - 1] });
+      }
       continue;
     }
     if (source === "orders-timeline") {
