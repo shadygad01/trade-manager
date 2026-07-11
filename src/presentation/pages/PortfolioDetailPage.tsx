@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useParams } from "wouter";
+import { useParams, Link } from "wouter";
 import { Banknote, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { deleteTrade } from "@application/services/TradeService";
@@ -330,7 +330,11 @@ export function PortfolioDetailPage() {
                   const r = reconciliationByTicker.get(p.ticker);
                   return (
                   <tr key={p.ticker}>
-                    <td className="px-4 py-2.5 font-medium text-slate-100">{p.ticker}</td>
+                    <td className="px-4 py-2.5 font-medium text-slate-100">
+                      <Link href={`/portfolios/${id}/tickers/${p.ticker}`} className="hover:text-cyan-300 hover:underline">
+                        {p.ticker}
+                      </Link>
+                    </td>
                     <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatShares(p.totalShares)}</td>
                     <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatMoney(p.avgCost)}</td>
                     <td className="px-4 py-2.5 text-end tabular-nums text-slate-300">{formatMoney(p.costBasis)}</td>

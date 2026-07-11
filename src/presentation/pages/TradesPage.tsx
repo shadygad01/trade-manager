@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { useParams } from "wouter";
+import { useParams, useLocation } from "wouter";
 import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink, Pencil, Check, X, Trash2 } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { recordBuy, moveTrade, deleteTrade, correctTradeExecutionDate } from "@application/services/TradeService";
@@ -14,7 +14,6 @@ import { PageHeader } from "@presentation/components/PageHeader";
 import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
-import { SellAllocationForm } from "@presentation/components/SellAllocationForm";
 import { BuyZoneChart } from "@presentation/components/BuyZoneChart";
 import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
 import { useT } from "@presentation/i18n/translations";
@@ -658,6 +657,13 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
   );
 }
 
+/**
+ * Replaces the old inline Sell Allocation popup (which forced picking lots
+ * at the moment of recording the sell — see git history's SellAllocationForm)
+ * with a hand-off to the Lot Manager: pick a ticker here, then record the
+ * sell execution and decide its allocation (manually or via Auto Allocate
+ * FIFO) on that ticker's own Lot Manager page. See TickerDetailPage.tsx.
+ */
 function RecordSellModal({
   portfolioId,
   openTickers,
@@ -670,6 +676,7 @@ function RecordSellModal({
   onClose: () => void;
 }) {
   const t = useT();
+  const [, navigate] = useLocation();
   const [ticker, setTicker] = useState<string | undefined>(undefined);
 
   const activeTicker = ticker ?? openTickers[0];
@@ -682,9 +689,12 @@ function RecordSellModal({
         setTicker(undefined);
         onClose();
       }}
-      widthClassName="max-w-2xl"
     >
       <div className="space-y-4">
+        <p className="text-xs text-slate-400">
+          Selling now happens in the Lot Manager, where you record the sell and decide which Buy lot(s) it closes — manually or
+          with Auto Allocate (FIFO).
+        </p>
         <label className="block text-xs text-slate-400 space-y-1">
           {t("trades.tickerLabel")}
           <select
@@ -699,17 +709,23 @@ function RecordSellModal({
             ))}
           </select>
         </label>
-        {activeTicker ? (
-          <SellAllocationForm
-            portfolioId={portfolioId}
-            ticker={activeTicker}
-            onDone={() => {
+        <div className="flex justify-end gap-2 pt-2">
+          <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800">
+            {t("common.cancel")}
+          </button>
+          <button
+            onClick={() => {
+              if (!activeTicker) return;
               setTicker(undefined);
               onClose();
+              navigate(`/portfolios/${portfolioId}/tickers/${activeTicker}`);
             }}
-            onCancel={onClose}
-          />
-        ) : null}
+            disabled={!activeTicker}
+            className="rounded-md bg-rose-500 px-4 py-1.5 text-sm font-medium text-slate-950 hover:bg-rose-400 disabled:opacity-50"
+          >
+            Open Lot Manager
+          </button>
+        </div>
       </div>
     </Modal>
   );
