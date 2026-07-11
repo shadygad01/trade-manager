@@ -225,13 +225,27 @@ export function ImportPage() {
    * exact-duplicate trade because existingTrades briefly reads as [] before
    * its first real load), and by the time the real data arrives a row
    * committed off the stale read is no longer eligible for reconsideration.
+   *
+   * existingRawTransactionsRaw belongs in this list for exactly the same
+   * reason: tickerMatchStatuses' historical-fallback branch
+   * (isTickerFullyOfficialBrokerExcelSourced) reads existingRawTransactions,
+   * and each useLiveQuery resolves independently — a ticker whose complete
+   * history is official-broker-excel-sourced but has nothing pending this
+   * session would transiently read as "no-verification"/"closed-position"
+   * (needs a screenshot) for however long this one query takes to resolve
+   * after the others already have, purely because its default-empty read
+   * ([]) can never satisfy isTickerFullyOfficialBrokerExcelSourced. Omitting
+   * it here was a real, reproducible instance of the broker-record trust
+   * policy being bypassed — not by wrong decision logic, but by feeding the
+   * (correct) decision logic transiently-incomplete data. See docs/ROADMAP.md.
    */
   const initialDataLoaded =
     portfoliosRaw !== undefined &&
     existingTradesRaw !== undefined &&
     existingAllocationsRaw !== undefined &&
     existingVerificationsRaw !== undefined &&
-    existingTimelineRaw !== undefined;
+    existingTimelineRaw !== undefined &&
+    existingRawTransactionsRaw !== undefined;
 
   /**
    * `ownTradeId` (Buys) / `ownAllocationIds` (Sells) exclude a candidate's
@@ -1400,6 +1414,22 @@ export function ImportPage() {
       const pendingBuyShares = remainingBuys.reduce((sum, e) => sum + e.candidate.shares, 0);
       const pendingSellShares = remainingSells.reduce((sum, e) => sum + e.candidate.shares, 0);
       const remainingBuysAndSells = [...remainingBuys, ...remainingSells];
+      // With nothing left pending, this ticker's verdict depends entirely
+      // on isTickerFullyOfficialBrokerExcelSourced(existingRawTransactions,
+      // ...) below — and existingRawTransactionsRaw is its own independent
+      // useLiveQuery, which can still be `undefined` (not yet loaded, not
+      // "genuinely empty") even after every OTHER read this component
+      // depends on has already resolved. Deciding this ticker's verdict off
+      // the default-empty `[]` in that window would read a fully
+      // official-broker-excel-sourced, already-fully-committed ticker as
+      // "closed-position"/"no-verification" — a real, reproducible instance
+      // of the trust policy being bypassed by a data race, not by wrong
+      // decision logic (see docs/ROADMAP.md). Leaving this ticker OUT of the
+      // map entirely (MatchBadge renders a neutral "checking…" state for an
+      // absent entry, never "needs a screenshot") is strictly narrower than
+      // gating the whole page: a ticker with real pending rows this batch
+      // never depends on this query at all and is unaffected.
+      if (remainingBuysAndSells.length === 0 && existingRawTransactionsRaw === undefined) continue;
       const allPendingFromInvoice =
         remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
       // While rows are still pending, only trust THIS batch's own sourcing —
@@ -1474,6 +1504,7 @@ export function ImportPage() {
     existingTrades,
     existingVerifications,
     existingRawTransactions,
+    existingRawTransactionsRaw,
     crossVerifiedKeys,
     aggregateConfirmedKeys,
     orderConfirmedKeys,
@@ -2903,13 +2934,29 @@ export function TickerGroupCard({
 /** The verification-gate badge on a ticker card's header — the visual anchor for the whole two-phase workflow. */
 function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
   const t = useT();
-  if (!status || status.reason === "no-verification") {
+  if (!status) {
+    // An absent entry means tickerMatchStatuses deliberately withheld a
+    // verdict for this ticker — today, only because it has nothing pending
+    // this session and existingRawTransactions (needed to check whether its
+    // committed history is fully official-broker-excel-sourced) hasn't
+    // finished loading yet. Rendering "Needs broker screenshot" here (the
+    // old behavior) would flash exactly that wrong, trust-policy-bypassing
+    // verdict for a ticker whose real answer is "already verified" the
+    // instant the data resolves — a neutral, no-verdict-yet state is the
+    // only honest thing to show while it's genuinely unknown.
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-slate-700/40 px-2 py-0.5 text-[11px] font-medium text-slate-400">
+        <Loader2 size={11} className="animate-spin" /> {t("importPage.matchChecking")}
+      </span>
+    );
+  }
+  if (status.reason === "no-verification") {
     // netShares < 0 means this batch's Sell(s) already exceed what's on the
     // ledger (existing remaining shares + this batch's pending buys) — no
     // broker "My Position" screenshot can ever resolve that, since the
     // position is already sold out. The real fix is finding the missing Buy
     // history, not waiting on a screenshot that will never exist.
-    if (status && status.netShares < -1e-6) {
+    if (status.netShares < -1e-6) {
       return (
         <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-400">
           <ShieldAlert size={11} /> {t("importPage.matchMissingBuyHistory")}

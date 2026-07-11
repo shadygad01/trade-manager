@@ -696,6 +696,7 @@ export const en: Dict = {
     mismatchGapTooFew: "too few",
     mismatchGapHintLarge:
       "The gap is exactly {{gap}} shares {{direction}}. This batch has too many rows for the automatic subset check, so the cause could be a removable duplicate row, a misread share count inside one row, or a whole {{gap}}-share transaction missing from the documents uploaded so far. Compare each row against your broker's Orders history to find it.",
+    matchChecking: "Checking…",
     matchMissingBuyHistory: "Missing buy history",
     matchNeedsScreenshot: "Needs broker screenshot",
     matchMismatch: "Mismatch",
@@ -1438,6 +1439,7 @@ export const ar: Dict = {
     mismatchGapTooFew: "نقصًا",
     mismatchGapHintLarge:
       "الفجوة بالضبط {{gap}} سهم {{direction}}. هذه الدفعة تحتوي على صفوف أكثر من أن يغطيها الفحص التلقائي للتجميعات، لذا قد يكون السبب صفًا مكررًا قابلًا للإزالة، أو عدد أسهم مقروء خطأً داخل أحد الصفوف، أو معاملة كاملة بحجم {{gap}} سهم ناقصة من المستندات المرفوعة حتى الآن. قارن كل صف بسجل الأوامر عند وسيطك للعثور عليه.",
+    matchChecking: "جارٍ التحقق…",
     matchMissingBuyHistory: "سجل شراء ناقص",
     matchNeedsScreenshot: "يحتاج لقطة شاشة من الوسيط",
     matchMismatch: "عدم تطابق",
