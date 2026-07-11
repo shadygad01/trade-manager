@@ -232,6 +232,16 @@ describe("verificationEngine — verifyAllDetailed/verifyTicker (additive contra
     expect(verifyTicker("HRHO", params)).toBeUndefined();
   });
 
+  it("a ticker whose entries all came from the official broker Excel export is broker-excel-verified, needing no My Position screenshot", () => {
+    const params: VerifyAllParams = {
+      transactions: [buy({ id: "b1", source: "official-broker-excel", shares: 100 })],
+      positions: [emptyPosition()],
+    };
+    const status = verifyTicker("COMI", params)!;
+    expect(status.matched).toBe(true);
+    expect(status.reason).toBe("broker-excel-verified");
+  });
+
   it("TickerStatus for a closed position matches checkTickerMatch() called directly with the same inputs — reason, netShares, matched", () => {
     const params: VerifyAllParams = { transactions: [buy({ shares: 100 }), sell({ shares: 100 })], positions: [emptyPosition()] };
     const status = verifyTicker("COMI", params)!;

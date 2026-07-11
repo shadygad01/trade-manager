@@ -1,9 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations } from "./reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations, isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
+import { createRawTransaction, type RawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import type { PositionAggregate } from "./TradeService";
+
+function buyFact(overrides: Partial<BuyExecutionPayload> & { id?: string; source?: RawTransaction["source"]; supersedes?: string } = {}): RawTransaction {
+  const { id, source, supersedes, ...payloadOverrides } = overrides;
+  const payload: BuyExecutionPayload = { ticker: "COMI", shares: 10, price: 41.5, executionDate: "2026-01-14", ...payloadOverrides };
+  return { ...createRawTransaction({ id, kind: "BuyExecution", source: source ?? "manual", ticker: payload.ticker, payload, supersedes }), seq: 1 };
+}
 
 function position(ticker: string, totalShares: number): PositionAggregate {
   return { ticker, totalShares, costBasis: 0, avgCost: 0, openTrades: [] };
@@ -90,6 +97,48 @@ describe("reconcilePositions", () => {
   it("skips tickers with no verification at all", () => {
     const results = reconcilePositions([position("HRHO", 10)], [], [], []);
     expect(results).toHaveLength(0);
+  });
+
+  it("never produces a row for a ticker fully sourced from the official broker Excel export, even when the computed count disagrees with a screenshot on file", () => {
+    const facts = [
+      buyFact({ id: "b1", source: "official-broker-excel", shares: 10 }),
+      buyFact({ id: "b2", source: "official-broker-excel", shares: 90 }),
+    ];
+    // computed (100) intentionally disagrees with the verified screenshot
+    // (30) — per the broker-record trust policy this must never surface as
+    // a mismatch/shortfall/stale row at all, since the whole "My Position"
+    // comparison no longer applies to this ticker.
+    const results = reconcilePositions([position("COMI", 100)], [verification({ units: 30 })], [], [], facts);
+    expect(results).toHaveLength(0);
+  });
+
+  it("still reconciles normally when a ticker's history is only partly official-broker-excel-sourced", () => {
+    const facts = [buyFact({ id: "b1", source: "official-broker-excel" }), buyFact({ id: "b2", source: "manual" })];
+    const results = reconcilePositions([position("COMI", 150)], [verification()], [], [], facts);
+    expect(results).toHaveLength(1);
+    expect(results[0].quantityMismatch).toBe(true);
+  });
+});
+
+describe("isTickerFullyOfficialBrokerExcelSourced", () => {
+  it("is true when every live Buy/Sell fact for the ticker came from the official broker Excel export", () => {
+    const facts = [buyFact({ id: "b1", source: "official-broker-excel" }), buyFact({ id: "b2", source: "official-broker-excel" })];
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "COMI")).toBe(true);
+  });
+
+  it("is false when even one fact for the ticker came from a different source", () => {
+    const facts = [buyFact({ id: "b1", source: "official-broker-excel" }), buyFact({ id: "b2", source: "manual" })];
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "COMI")).toBe(false);
+  });
+
+  it("is false for a ticker with zero facts at all — nothing to be 'fully' anything of", () => {
+    expect(isTickerFullyOfficialBrokerExcelSourced([], "COMI")).toBe(false);
+  });
+
+  it("ignores a retracted official-broker-excel fact, falling back to false once nothing live remains", () => {
+    const fact = buyFact({ id: "b1", source: "official-broker-excel" });
+    const retraction = { ...createRawTransaction({ kind: "Retraction", source: "manual", payload: { targetId: "b1" } }), seq: 2 };
+    expect(isTickerFullyOfficialBrokerExcelSourced([fact, retraction], "COMI")).toBe(false);
   });
 });
 
