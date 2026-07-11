@@ -63,6 +63,8 @@ export interface CanonicalTrade {
   transactionNumber?: string;
   /** Every Upload whose candidate corroborates this same real execution (after dedup/aggregation) — not just the one survivor row's own file. */
   sourceUploadIds: string[];
+  /** This specific entry's own stable identity (the `key`/`uploadId` it entered canonicalization with) — unlike `key`, this is NEVER shared by two distinct surviving entries, even when their observable fields coincide. See `disambiguateCollidingKeys`. */
+  entryId: string;
 }
 
 /** Exported so a caller with a canonicalization-worthy entry pool that isn't shaped like Upload[] (e.g. the Ledger Engine, over RawTransactions) can derive the same deterministic identity for "one real execution" without re-deriving the formula. */
@@ -141,10 +143,44 @@ export function canonicalizeTradeEntries(
       executionTime: e.candidate.time,
       transactionNumber: e.candidate.transactionNumber,
       sourceUploadIds: [...sourceUploadIds],
+      entryId: e.key,
     };
     (canonical.side === "BUY" ? buys : sells).push(canonical);
   }
+  disambiguateCollidingKeys(buys);
+  disambiguateCollidingKeys(sells);
   return { buys, sells };
+}
+
+/**
+ * Two genuinely distinct real executions (different trades, different
+ * RawTransactions) can legitimately share the same observable fields —
+ * same ticker/side/date/shares/price, e.g. two separate same-price limit
+ * orders filled the same day. Before this pass they'd carry the identical
+ * `key`, and every downstream consumer that treats `key` as "one real
+ * execution" (the Ledger Engine's `eventId`, the Allocation Engine's
+ * lot/sell identity) would silently conflate them: one buy lot's shares
+ * absorbing another's, one sell's allocation decision replaying against
+ * the wrong sell. Disambiguates every collision by suffixing every member
+ * but the lexicographically-first (by `entryId`, so the pick is
+ * deterministic and reproducible on every rebuild — never by array/seq
+ * order, which callers aren't guaranteed to supply consistently) with its
+ * own `entryId` — unique, so no second collision is possible.
+ */
+function disambiguateCollidingKeys(trades: CanonicalTrade[]): void {
+  const groups = new Map<string, CanonicalTrade[]>();
+  for (const t of trades) {
+    const list = groups.get(t.key) ?? [];
+    list.push(t);
+    groups.set(t.key, list);
+  }
+  for (const group of groups.values()) {
+    if (group.length <= 1) continue;
+    const sorted = [...group].sort((a, b) => a.entryId.localeCompare(b.entryId));
+    for (let i = 1; i < sorted.length; i++) {
+      sorted[i].key = `${sorted[i].key}#${sorted[i].entryId}`;
+    }
+  }
 }
 
 /**

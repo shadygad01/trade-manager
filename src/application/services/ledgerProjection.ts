@@ -9,6 +9,7 @@ import type {
 } from "@domain/repositories";
 import {
   createRawTransaction,
+  type RawTransaction,
   type BuyExecutionPayload,
   type SellExecutionPayload,
   type SellAllocationDecisionPayload,
@@ -18,6 +19,7 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { generateId } from "@domain/value-objects/id";
 import { canonicalKey } from "./ledgerRebuild";
+import { isRetracted } from "./rawTransactionFolds";
 import type { LedgerEvent, LotOpenedEvent } from "./ledgerEngine";
 import type { Allocation } from "./allocationEngine";
 
@@ -60,6 +62,23 @@ function tradeCanonicalKey(t: Trade): string {
   return canonicalKey({ side: "BUY", ticker: normalizeTicker(t.ticker), date: t.executionDate, shares: t.shares, price: t.entryPrice });
 }
 
+/**
+ * Resolves the id a SellAllocationDecision should reference for this buy
+ * lot: the real, always-unique RawTransaction id of the live BuyExecution
+ * fact this trade already owns (`id === trade.id` — the convention every
+ * fact-writing path follows, see ensureBuyFact/ensureLegacyFactsExist), so
+ * the Allocation Engine can never confuse it with a different trade that
+ * happens to share the same ticker/date/shares/price. Falls back to the
+ * plain canonical key only when no id-linked fact exists yet (e.g. data
+ * written before this fix, or a caller that hasn't run ensureLegacyFactsExist
+ * for this ticker yet) — correct as long as no OTHER live trade shares that
+ * exact value, exactly this module's pre-existing behavior.
+ */
+export function resolveLotRef(all: RawTransaction[], trade: Trade): string {
+  const ownFact = all.find((t) => t.id === trade.id && t.kind === "BuyExecution" && !isRetracted(all, t.id));
+  return ownFact ? ownFact.id : tradeCanonicalKey(trade);
+}
+
 /** Same grouping backfillRawTransactions uses — sellGroupId with the legacy composite fallback. */
 function groupBySellOrder(allocations: TradeAllocation[]): Map<string, TradeAllocation[]> {
   const groups = new Map<string, TradeAllocation[]>();
@@ -79,13 +98,24 @@ function groupBySellOrder(allocations: TradeAllocation[]): Map<string, TradeAllo
  * Verification Engine, same as the original one-time backfill). Without
  * this, a projection would delete legitimate legacy rows created by flows
  * that predate their fact writers (manual buys/sells recorded between the
- * original backfill and Phase 9.8). Idempotent by construction: an existing
- * live fact with the same canonical key means nothing is appended. A buy
- * fact appended here reuses the legacy trade's own id, keeping the
- * fact-to-trade correlation exact. Appends go straight to
- * rawTransactions.append — never appendAndMaybeCommit — because this runs
- * INSIDE commitTicker (recursion would deadlock nothing but would recompute
- * everything redundantly).
+ * original backfill and Phase 9.8). A buy fact appended here reuses the
+ * legacy trade's own id, keeping the fact-to-trade correlation exact.
+ * Appends go straight to rawTransactions.append — never appendAndMaybeCommit
+ * — because this runs INSIDE commitTicker (recursion would deadlock nothing
+ * but would recompute everything redundantly).
+ *
+ * Coverage is counted per canonical-key GROUP, not checked as a plain
+ * boolean: two legacy trades (or sell orders) can legitimately share an
+ * identical canonical key (same ticker/date/shares/price), and a boolean
+ * "has this key been seen" check would consider the second one already
+ * covered by the first's fact, permanently leaving it with none of its own
+ * — exactly the gap that let the second one silently vanish once the next
+ * projection ran (it's absent from `keptTradeIds`/`keptAllocationIds`, so
+ * treated as stale and deleted). Each trade/sell-order instance is matched
+ * to its own live fact 1:1 (already-id-linked instances first, then any
+ * remaining unlinked live facts of that value, oldest processing order
+ * first); only once every existing fact in the group is claimed does a
+ * further instance get a brand new fact of its own.
  */
 export async function ensureLegacyFactsExist(repos: LegacyLedgerRepos, portfolioId: string, ticker: string): Promise<number> {
   const normalized = normalizeTicker(ticker);
@@ -97,35 +127,50 @@ export async function ensureLegacyFactsExist(repos: LegacyLedgerRepos, portfolio
   // resurrect exactly what they deleted, in a loop (retract → gap-fill
   // re-facts → projection re-creates the row → retract again...). A key
   // that was never seen at all is the only genuine gap this fills.
-  const everBuyKeys = new Set(
-    all
-      .filter((t) => t.kind === "BuyExecution" && t.ticker !== undefined && normalizeTicker(t.ticker) === normalized)
-      .map((t) => {
-        const p = t.payload as BuyExecutionPayload;
-        return canonicalKey({ side: "BUY", ticker: normalized, date: p.executionDate, shares: p.shares, price: p.price });
-      })
-  );
-  const everSellKeys = new Set(
-    all
-      .filter((t) => t.kind === "SellExecution" && t.ticker !== undefined && normalizeTicker(t.ticker) === normalized)
-      .map((t) => {
-        const p = t.payload as SellExecutionPayload;
-        return canonicalKey({ side: "SELL", ticker: normalized, date: p.executionDate, shares: p.shares, price: p.price });
-      })
-  );
+  const liveBuyFactsByKey = new Map<string, RawTransaction[]>();
+  for (const t of all) {
+    if (t.kind !== "BuyExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== normalized) continue;
+    if (isRetracted(all, t.id)) continue;
+    const p = t.payload as BuyExecutionPayload;
+    const key = canonicalKey({ side: "BUY", ticker: normalized, date: p.executionDate, shares: p.shares, price: p.price });
+    const list = liveBuyFactsByKey.get(key) ?? [];
+    list.push(t);
+    liveBuyFactsByKey.set(key, list);
+  }
+  const liveSellFactsByKey = new Map<string, RawTransaction[]>();
+  for (const t of all) {
+    if (t.kind !== "SellExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== normalized) continue;
+    if (isRetracted(all, t.id)) continue;
+    const p = t.payload as SellExecutionPayload;
+    const key = canonicalKey({ side: "SELL", ticker: normalized, date: p.executionDate, shares: p.shares, price: p.price });
+    const list = liveSellFactsByKey.get(key) ?? [];
+    list.push(t);
+    liveSellFactsByKey.set(key, list);
+  }
   const everDecisionSellIds = new Set(
-    all.filter((t) => t.kind === "SellAllocationDecision").map((t) => (t.payload as SellAllocationDecisionPayload).sellExecutionId)
+    all
+      .filter((t) => t.kind === "SellAllocationDecision" && !isRetracted(all, t.id))
+      .map((t) => (t.payload as SellAllocationDecisionPayload).sellExecutionId)
   );
-  const existingIds = new Set(all.map((t) => t.id));
 
-  const legacyTrades = (await repos.trades.getByPortfolio(portfolioId)).filter((t) => normalizeTicker(t.ticker) === normalized);
+  const legacyTrades = (await repos.trades.getByPortfolio(portfolioId))
+    .filter((t) => normalizeTicker(t.ticker) === normalized)
+    .sort((a, b) => a.id.localeCompare(b.id));
   const legacyAllocations = (await repos.allocations.getByPortfolio(portfolioId)).filter((a) => normalizeTicker(a.ticker) === normalized);
   const tradeById = new Map(legacyTrades.map((t) => [t.id, t]));
 
   let appended = 0;
 
+  const consumedBuyCount = new Map<string, number>();
   for (const trade of legacyTrades) {
-    if (everBuyKeys.has(tradeCanonicalKey(trade))) continue;
+    const key = tradeCanonicalKey(trade);
+    const candidates = liveBuyFactsByKey.get(key) ?? [];
+    if (candidates.some((f) => f.id === trade.id)) continue; // already id-linked — covered.
+
+    const consumed = consumedBuyCount.get(key) ?? 0;
+    consumedBuyCount.set(key, consumed + 1);
+    if (consumed < candidates.length) continue; // an existing (unlinked, e.g. Import-written) fact covers this instance.
+
     const payload: BuyExecutionPayload = {
       ticker: normalized,
       shares: trade.shares,
@@ -140,60 +185,75 @@ export async function ensureLegacyFactsExist(repos: LegacyLedgerRepos, portfolio
       strategyTags: trade.strategyTags.length > 0 ? trade.strategyTags : undefined,
       sector: trade.sector,
     };
-    await repos.rawTransactions.append(
-      createRawTransaction({
-        id: existingIds.has(trade.id) ? undefined : trade.id,
-        kind: "BuyExecution",
-        source: "backfill",
-        portfolioId,
-        ticker: normalized,
-        payload,
-      })
-    );
-    everBuyKeys.add(tradeCanonicalKey(trade));
+    const fact = createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "backfill", portfolioId, ticker: normalized, payload });
+    await repos.rawTransactions.append(fact);
+    // Recorded in `all` (not just the by-key index) so this same call's
+    // later sell-decision pass can resolve `resolveLotRef` against it too,
+    // when a sell being backfilled in the SAME pass closes this exact lot.
+    all.push({ ...fact, seq: 0 });
     appended += 1;
   }
 
+  const consumedSellCount = new Map<string, number>();
   for (const [, group] of groupBySellOrder(legacyAllocations)) {
     const first = group[0];
     const totalShares = group.reduce((sum, a) => sum + a.sharesClosed, 0);
-    const sellKey = canonicalKey({ side: "SELL", ticker: normalized, date: first.executionDate, shares: totalShares, price: first.exitPrice });
+    const sellValueKey = canonicalKey({ side: "SELL", ticker: normalized, date: first.executionDate, shares: totalShares, price: first.exitPrice });
+    const candidateFactId = first.sellGroupId || undefined;
+    const sellCandidates = liveSellFactsByKey.get(sellValueKey) ?? [];
 
-    if (!everSellKeys.has(sellKey)) {
-      const sellPayload: SellExecutionPayload = {
-        ticker: normalized,
-        shares: totalShares,
-        price: first.exitPrice,
-        fees: group.reduce((sum, a) => sum + a.fees, 0),
-        taxes: group.reduce((sum, a) => sum + a.taxes, 0),
-        executionDate: first.executionDate,
-        executionTime: first.executionTime,
-        transactionNumber: first.transactionNumber,
-        notes: first.notes,
-        exitReason: first.exitReason,
-      };
-      await repos.rawTransactions.append(
-        createRawTransaction({ kind: "SellExecution", source: "backfill", portfolioId, ticker: normalized, payload: sellPayload })
-      );
-      everSellKeys.add(sellKey);
-      appended += 1;
+    let sellExecutionId: string;
+    const alreadyLinked = candidateFactId !== undefined && sellCandidates.some((f) => f.id === candidateFactId);
+    if (alreadyLinked) {
+      sellExecutionId = candidateFactId!;
+    } else {
+      const consumed = consumedSellCount.get(sellValueKey) ?? 0;
+      consumedSellCount.set(sellValueKey, consumed + 1);
+      if (consumed < sellCandidates.length) {
+        // An existing (unlinked, e.g. Import-written) fact covers this sell order instance.
+        sellExecutionId = sellCandidates[consumed].id;
+      } else {
+        const sellPayload: SellExecutionPayload = {
+          ticker: normalized,
+          shares: totalShares,
+          price: first.exitPrice,
+          fees: group.reduce((sum, a) => sum + a.fees, 0),
+          taxes: group.reduce((sum, a) => sum + a.taxes, 0),
+          executionDate: first.executionDate,
+          executionTime: first.executionTime,
+          transactionNumber: first.transactionNumber,
+          notes: first.notes,
+          exitReason: first.exitReason,
+        };
+        const fact = createRawTransaction({
+          id: candidateFactId,
+          kind: "SellExecution",
+          source: "backfill",
+          portfolioId,
+          ticker: normalized,
+          payload: sellPayload,
+        });
+        await repos.rawTransactions.append(fact);
+        sellExecutionId = fact.id;
+        appended += 1;
+      }
     }
 
     // The decision is the half Import's own SellExecution write never covers
     // — this is what preserves a manual lot-selection (ADR-002) as an
     // immutable fact so it survives every future rebuild.
-    if (!everDecisionSellIds.has(sellKey)) {
+    if (!everDecisionSellIds.has(sellExecutionId) && !everDecisionSellIds.has(sellValueKey)) {
       const decisionAllocations = group.flatMap((a) => {
         const trade = tradeById.get(a.tradeId);
         if (!trade) return [];
-        return [{ lotRef: tradeCanonicalKey(trade), shares: a.sharesClosed }];
+        return [{ lotRef: resolveLotRef(all, trade), shares: a.sharesClosed }];
       });
       if (decisionAllocations.length > 0) {
-        const decisionPayload: SellAllocationDecisionPayload = { sellExecutionId: sellKey, allocations: decisionAllocations };
+        const decisionPayload: SellAllocationDecisionPayload = { sellExecutionId, allocations: decisionAllocations };
         await repos.rawTransactions.append(
           createRawTransaction({ kind: "SellAllocationDecision", source: "backfill", portfolioId, ticker: normalized, payload: decisionPayload })
         );
-        everDecisionSellIds.add(sellKey);
+        everDecisionSellIds.add(sellExecutionId);
         appended += 1;
       }
     }
@@ -232,14 +292,68 @@ export async function projectLegacyTicker(
     closedByLot.set(a.lotEventId, (closedByLot.get(a.lotEventId) ?? 0) + a.shares);
   }
 
-  const existingByCanonicalKey = new Map(existingTrades.map((t) => [tradeCanonicalKey(t), t]));
+  // Grouped by VALUE (not a plain 1:1 map): two existing trades can share an
+  // identical canonicalKey when they share ticker/date/shares/price (the
+  // exact scenario this fix exists for), so a lot's plain or disambiguated
+  // eventId must be resolved WITHIN this value-sharing group, never by a
+  // single overwritten map slot — see resolveExistingTradeForLot below.
+  const existingByValueKey = new Map<string, Trade[]>();
+  for (const t of existingTrades) {
+    const list = existingByValueKey.get(tradeCanonicalKey(t)) ?? [];
+    list.push(t);
+    existingByValueKey.set(tradeCanonicalKey(t), list);
+  }
+  const claimedTradeIds = new Set<string>();
+
+  /**
+   * Resolves which (if any) existing Trade row this lot event already
+   * corresponds to. An EXACT id match (a trade a prior projection already
+   * linked to this exact lot identity — correct even when two trades share
+   * a value, since each disambiguated eventId is unique) always wins over a
+   * same-value FALLBACK match (any not-yet-claimed trade sharing this lot's
+   * plain value — needed for a trade this projection has never linked
+   * before, e.g. a freshly manually-recorded trade whose own id is an
+   * arbitrary UUID unrelated to any canonicalKey shape). Both maps are
+   * pre-built (`matchLotsToTrades` below) in a dedicated EXACT-first pass
+   * across ALL lots before any fallback claim happens — resolving one lot
+   * at a time, in `lots`' own chronological order, would let an early lot
+   * "steal" via fallback the very trade a LATER lot in the same group was
+   * always meant to exact-match, corrupting whichever trade loses the race
+   * (see the regression test proving two same-value Buy lots survive
+   * multiple sequential commits regardless of chronological order).
+   */
+  const exactMatchByLotEventId = new Map<string, Trade>();
+  for (const lot of lots) {
+    const plainValueKey = canonicalKey({ side: "BUY", ticker: normalized, date: lot.executionDate, shares: lot.shares, price: lot.price });
+    const candidates = existingByValueKey.get(plainValueKey) ?? [];
+    const exact = candidates.find((t) => t.id === lot.eventId);
+    if (exact) exactMatchByLotEventId.set(lot.eventId, exact);
+  }
+
+  function resolveExistingTradeForLot(lot: LotOpenedEvent): Trade | undefined {
+    const exact = exactMatchByLotEventId.get(lot.eventId);
+    if (exact && !claimedTradeIds.has(exact.id)) return exact;
+    if (exact) return undefined; // its exact match is already claimed by itself elsewhere — impossible by construction, but never silently fall through to steal another trade
+    const plainValueKey = canonicalKey({ side: "BUY", ticker: normalized, date: lot.executionDate, shares: lot.shares, price: lot.price });
+    const candidates = existingByValueKey.get(plainValueKey) ?? [];
+    // A candidate destined for a DIFFERENT lot's exact match is off-limits to
+    // this lot's fallback, even before that other lot has been processed —
+    // otherwise the same steal this two-pass split exists to prevent could
+    // still happen via the fallback branch itself.
+    const reservedForOtherLot = new Set(
+      [...exactMatchByLotEventId.entries()].filter(([eventId]) => eventId !== lot.eventId).map(([, t]) => t.id)
+    );
+    return candidates.find((t) => !claimedTradeIds.has(t.id) && !reservedForOtherLot.has(t.id));
+  }
+
   const tradeIdByLotEventId = new Map<string, string>();
   const keptTradeIds = new Set<string>();
 
   for (const lot of lots) {
     const remainingShares = lot.shares - (closedByLot.get(lot.eventId) ?? 0);
-    const match = existingByCanonicalKey.get(lot.eventId);
+    const match = resolveExistingTradeForLot(lot);
     if (match) {
+      claimedTradeIds.add(match.id);
       tradeIdByLotEventId.set(lot.eventId, match.id);
       keptTradeIds.add(match.id);
       const updated: Trade = {

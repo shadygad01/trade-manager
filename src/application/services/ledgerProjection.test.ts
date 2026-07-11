@@ -4,7 +4,6 @@ import { createFakeRepositories, createFakeRawTransactionRepository, createFakeC
 import { recordBuy, recordSell, deleteTrade } from "./TradeService";
 import { commitTicker, appendAndMaybeCommit, assignPortfolio, retractRawTransaction, type CommitEngineRepos } from "./commitEngine";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
-import { canonicalKey } from "./ledgerRebuild";
 
 /**
  * Phase 9.8 — legacy-ledger projection. These tests exercise the full loop
@@ -214,7 +213,7 @@ describe("ledgerProjection — the legacy ledger auto-corrects when better histo
     expect(first.allocations).toBe(1);
   });
 
-  it("recordSell writes the SellExecution + SellAllocationDecision facts with canonical-key references the Allocation Engine actually replays", async () => {
+  it("recordSell writes the SellExecution + SellAllocationDecision facts with real-id references the Allocation Engine actually replays", async () => {
     const repos = fullRepos();
     const { trade } = await recordBuy(repos, {
       portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 45.5, executionDate: "2026-01-05", executionTime: "10:00",
@@ -233,10 +232,11 @@ describe("ledgerProjection — the legacy ledger auto-corrects when better histo
     expect(sellFact).toBeDefined();
     expect(decision).toBeDefined();
     const decisionPayload = decision!.payload as { sellExecutionId: string; allocations: { lotRef: string; shares: number }[] };
-    expect(decisionPayload.sellExecutionId).toBe(canonicalKey({ side: "SELL", ticker: "COMI", date: "2026-02-01", shares: 100, price: 50 }));
-    expect(decisionPayload.allocations).toEqual([
-      { lotRef: canonicalKey({ side: "BUY", ticker: "COMI", date: "2026-01-05", shares: 100, price: 45.5 }), shares: 100 },
-    ]);
+    // References the SellExecution/BuyExecution facts' own real, always-unique
+    // ids — never a recomputed value hash two distinct trades could share
+    // (see TradeService.ensureSellFacts/ledgerProjection.resolveLotRef).
+    expect(decisionPayload.sellExecutionId).toBe(sellFact!.id);
+    expect(decisionPayload.allocations).toEqual([{ lotRef: trade.id, shares: 100 }]);
 
     // Closed position (buy == sell) with no independent corroboration is no
     // longer auto-verified (see importVerification.ts's closed-position

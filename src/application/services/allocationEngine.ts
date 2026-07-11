@@ -19,11 +19,31 @@ function allocationId(sellEventId: string, lotEventId: string): string {
   return `${sellEventId}|${lotEventId}`;
 }
 
+/**
+ * Indexes events for lookup by every id a decision might legitimately use to
+ * reference them: the event's own `eventId` (a decision written against the
+ * value-keyed identity, including old data predating per-transaction
+ * identity), and every id in `sourceTransactionIds` (a decision written
+ * against the real, always-unique RawTransaction id — see
+ * TradeService.ensureSellFacts/ledgerProjection.resolveLotRef). Both schemes
+ * must resolve so a decision recorded under either convention keeps
+ * replaying correctly forever, even across a rebuild that changes which
+ * scheme new writes use.
+ */
+function indexEventsByReference<E extends LedgerEvent>(events: E[]): Map<string, E> {
+  const byRef = new Map<string, E>();
+  for (const e of events) {
+    byRef.set(e.eventId, e);
+    for (const sourceId of e.sourceTransactionIds) {
+      if (!byRef.has(sourceId)) byRef.set(sourceId, e);
+    }
+  }
+  return byRef;
+}
+
 export function generateAllocations(ledgerEvents: LedgerEvent[], verifiedDecisionTransactions: RawTransaction[]): Allocation[] {
-  const lots = new Map(ledgerEvents.filter((e) => e.type === "LotOpened").map((e) => [e.eventId, e]));
-  const sells = new Map<string, SellRecordedEvent>(
-    ledgerEvents.filter((e): e is SellRecordedEvent => e.type === "SellRecorded").map((e) => [e.eventId, e])
-  );
+  const lots = indexEventsByReference(ledgerEvents.filter((e) => e.type === "LotOpened"));
+  const sells = indexEventsByReference(ledgerEvents.filter((e): e is SellRecordedEvent => e.type === "SellRecorded"));
 
   const decisions = verifiedDecisionTransactions
     .filter((t) => t.kind === "SellAllocationDecision")
@@ -51,7 +71,11 @@ export function generateAllocations(ledgerEvents: LedgerEvent[], verifiedDecisio
     const sell = sells.get(decision.payload.sellExecutionId)!;
     for (const { lotRef, shares } of decision.payload.allocations) {
       const lot = lots.get(lotRef);
-      const remaining = remainingByLot.get(lotRef);
+      // Always key off the lot's own canonical eventId, never the decision's
+      // raw `lotRef` string — two different decisions may reference the same
+      // lot via two different aliases (its eventId vs. one of its
+      // sourceTransactionIds), and both must draw down the SAME balance.
+      const remaining = lot ? remainingByLot.get(lot.eventId) : undefined;
       // The decision's referenced lot may no longer exist, or no longer
       // have enough balance, if a Correction changed the underlying
       // execution's identity since the decision was recorded (see the
@@ -62,12 +86,12 @@ export function generateAllocations(ledgerEvents: LedgerEvent[], verifiedDecisio
       // "Needs Review" case.
       if (!lot || remaining === undefined || shares > remaining) continue;
 
-      remainingByLot.set(lotRef, remaining - shares);
+      remainingByLot.set(lot.eventId, remaining - shares);
       const proration = shares / sell.shares;
       allocations.push({
-        id: allocationId(sell.eventId, lotRef),
+        id: allocationId(sell.eventId, lot.eventId),
         sellEventId: sell.eventId,
-        lotEventId: lotRef,
+        lotEventId: lot.eventId,
         shares,
         price: sell.price,
         fees: (sell.fees ?? 0) * proration,

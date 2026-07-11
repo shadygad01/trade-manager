@@ -2,7 +2,6 @@ import type { AppRepositories } from "./types";
 import type { CommitEngineRepos } from "./commitEngine";
 import { computePositions } from "./TradeService";
 import { computeHoldings } from "./holdingsEngine";
-import { canonicalKey } from "./ledgerRebuild";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 
 /**
@@ -83,10 +82,23 @@ export async function validatePortfolio(
       });
     }
 
-    const newLotKeys = new Set(newEvents.filter((e) => e.type === "LotOpened").map((e) => e.eventId));
+    // Every id a new-system LotOpened event could legitimately be matched
+    // by: its own eventId (a value hash for OCR-sourced/collided lots, or —
+    // for manual/backfill lots — the same real RawTransaction id
+    // TradeService/ledgerProjection already correlate 1:1 with the Trade's
+    // own id) plus every corroborating RawTransaction id in
+    // sourceTransactionIds. Matching by real id first is what lets two old
+    // Trades sharing an identical value (date/shares/price) each still
+    // resolve to their OWN distinct new-system lot instead of a shared,
+    // ambiguous value hash — see crossTransactionIsolation.test.ts.
+    const newLotKeys = new Set<string>();
+    for (const e of newEvents) {
+      if (e.type !== "LotOpened") continue;
+      newLotKeys.add(e.eventId);
+      for (const sourceId of e.sourceTransactionIds) newLotKeys.add(sourceId);
+    }
     for (const trade of oldTrades.filter((t) => normalizeTicker(t.ticker) === ticker)) {
-      const key = canonicalKey({ side: "BUY", ticker, date: trade.executionDate, shares: trade.shares, price: trade.entryPrice });
-      if (!newLotKeys.has(key)) {
+      if (!newLotKeys.has(trade.id)) {
         differences.push({
           category: "missing-in-new",
           detail: `Trade ${trade.id} (${trade.shares}sh @ ${trade.entryPrice} on ${trade.executionDate}) has no matching LotOpened event in the new system — has this ticker been backfilled and assigned to a portfolio yet?`,

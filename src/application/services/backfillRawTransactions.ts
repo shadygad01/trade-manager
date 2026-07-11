@@ -9,7 +9,6 @@ import {
   type DividendPaymentPayload,
   type CashAdjustmentPayload,
 } from "@domain/entities/RawTransaction";
-import { canonicalKey } from "./ledgerRebuild";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 
@@ -90,7 +89,10 @@ export async function backfillRawTransactions(repos: BackfillRepos): Promise<Bac
       companyName: trade.companyName,
       transactionNumber: trade.transactionNumber,
     };
-    await appendAndMaybeCommit(repos, createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: trade.portfolioId, ticker, payload }));
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "backfill", portfolioId: trade.portfolioId, ticker, payload })
+    );
   }
 
   const sellGroups = groupAllocationsBySellOrder(allocations);
@@ -115,26 +117,28 @@ export async function backfillRawTransactions(repos: BackfillRepos): Promise<Bac
       executionTime: first.executionTime,
       transactionNumber: first.transactionNumber,
     };
-    // Computed the same way generateLedgerEvents will later derive this
-    // sell order's own eventId — deterministic, so the backfilled
-    // SellAllocationDecision below references exactly what the Ledger
-    // Engine will produce from this same SellExecution once committed.
-    const sellEventId = canonicalKey({ side: "SELL", ticker, date: first.executionDate, shares: totalShares, price: first.exitPrice });
-    await appendAndMaybeCommit(repos, createRawTransaction({ kind: "SellExecution", source: "backfill", portfolioId: first.portfolioId, ticker, payload: sellPayload }));
+    // Reuses the legacy sellGroupId as the fact's own id (when the group has
+    // one — every post-sellGroupId row does) so the SellAllocationDecision
+    // below can reference this SellExecution by its real, always-unique id
+    // instead of a recomputed value hash two distinct sells could share
+    // (see TradeService.ensureSellFacts/ledgerProjection.resolveLotRef —
+    // same real-id contract, applied here for the one-time migration).
+    const sellFact = createRawTransaction({
+      id: first.sellGroupId || undefined,
+      kind: "SellExecution",
+      source: "backfill",
+      portfolioId: first.portfolioId,
+      ticker,
+      payload: sellPayload,
+    });
+    await appendAndMaybeCommit(repos, sellFact);
 
     const decisionAllocations = group.map((a) => {
       const trade = tradeById.get(a.tradeId);
       if (!trade) throw new Error(`backfill: allocation ${a.id} references a trade that no longer exists (${a.tradeId})`);
-      const lotRef = canonicalKey({
-        side: "BUY",
-        ticker: normalizeTicker(trade.ticker),
-        date: trade.executionDate,
-        shares: trade.shares,
-        price: trade.entryPrice,
-      });
-      return { lotRef, shares: a.sharesClosed };
+      return { lotRef: trade.id, shares: a.sharesClosed };
     });
-    const decisionPayload: SellAllocationDecisionPayload = { sellExecutionId: sellEventId, allocations: decisionAllocations };
+    const decisionPayload: SellAllocationDecisionPayload = { sellExecutionId: sellFact.id, allocations: decisionAllocations };
     await appendAndMaybeCommit(
       repos,
       createRawTransaction({ kind: "SellAllocationDecision", source: "backfill", portfolioId: first.portfolioId, ticker, payload: decisionPayload })

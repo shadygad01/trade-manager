@@ -11,6 +11,9 @@ const PortfolioDetailPage = lazy(() =>
   import("@presentation/pages/PortfolioDetailPage").then((m) => ({ default: m.PortfolioDetailPage })),
 );
 const TradesPage = lazy(() => import("@presentation/pages/TradesPage").then((m) => ({ default: m.TradesPage })));
+const TickerDetailPage = lazy(() =>
+  import("@presentation/pages/TickerDetailPage").then((m) => ({ default: m.TickerDetailPage })),
+);
 const TimelinePage = lazy(() => import("@presentation/pages/TimelinePage").then((m) => ({ default: m.TimelinePage })));
 const JournalPage = lazy(() => import("@presentation/pages/JournalPage").then((m) => ({ default: m.JournalPage })));
 const AnalyticsPage = lazy(() => import("@presentation/pages/AnalyticsPage").then((m) => ({ default: m.AnalyticsPage })));
@@ -68,6 +71,7 @@ function AppShell() {
               <Route path="/portfolios" component={PortfoliosPage} />
               <Route path="/portfolios/:id" component={PortfolioDetailPage} />
               <Route path="/portfolios/:id/trades" component={TradesPage} />
+              <Route path="/portfolios/:id/tickers/:ticker" component={TickerDetailPage} />
               <Route path="/portfolios/:id/timeline" component={TimelinePage} />
               <Route path="/portfolios/:id/journal" component={JournalPage} />
               <Route path="/portfolios/:id/analytics" component={AnalyticsPage} />

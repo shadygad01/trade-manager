@@ -83,7 +83,8 @@ function resolveCurrentTicker(all: RawTransaction[], transaction: RawTransaction
   return (latest.payload as CorrectionPayload).patch.ticker;
 }
 
-async function relevantTradeTransactions(repos: CommitEngineRepos, portfolioId: string, ticker: string) {
+/** Exported for lotManager.ts, which needs the identical "what facts currently belong to this ticker" resolution (portfolio/ticker folds, retraction exclusion) but reads ALL of them regardless of import-verification verdict — a Lot Manager action is the user's own direct, deliberate statement, not an OCR read awaiting corroboration. */
+export async function relevantTradeTransactions(repos: CommitEngineRepos, portfolioId: string, ticker: string) {
   const normalizedTicker = normalizeTicker(ticker);
   // Can't use getByPortfolio here: a transaction's OWN portfolioId field may
   // still be undefined even though it's now effectively assigned via a

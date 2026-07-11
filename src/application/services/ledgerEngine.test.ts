@@ -45,10 +45,24 @@ describe("ledgerEngine.generateLedgerEvents", () => {
     expect(events.map((e) => e.sourceTransactionIds[0])).toEqual(["early", "late"]);
   });
 
-  it("deterministic eventId: the same execution always canonicalizes to the same id regardless of call order", () => {
+  it("deterministic rebuild: regenerating from the same RawTransaction set always reproduces the identical event", () => {
+    const a = generateLedgerEvents([buy({ id: "x1" })]);
+    const b = generateLedgerEvents([buy({ id: "x1" })]); // same underlying fact, regenerated fresh
+    expect(a).toEqual(b);
+  });
+
+  it("two manual/backfill facts with identical economic values (a routine coincidence — two same-price same-day orders) get DIFFERENT eventIds, never conflated into one lot", () => {
+    // This is the fix for the reported production bug: eventId used to be a
+    // recomputed value hash (ticker/side/date/shares/price) with no per-
+    // transaction identity, so two distinct real trades sharing that value
+    // collided onto the same id and were silently merged/overwritten by
+    // whichever's projection ran last. See crossTransactionIsolation.test.ts
+    // for the end-to-end regression coverage.
     const a = generateLedgerEvents([buy({ id: "x1" })]);
     const b = generateLedgerEvents([buy({ id: "x2" })]); // different raw transaction id, identical economic facts
-    expect(a[0].eventId).toBe(b[0].eventId);
+    expect(a[0].eventId).not.toBe(b[0].eventId);
+    expect(a[0].eventId).toBe("x1");
+    expect(b[0].eventId).toBe("x2");
   });
 
   it("a raw transaction with no matching sibling stays its own event, unaffected by an unrelated ticker", () => {
