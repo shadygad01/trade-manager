@@ -10,6 +10,7 @@ import { getTrackingStartDate, isBeforeTrackingStart } from "@domain/value-objec
 import type { AppRepositories } from "./types";
 import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolio, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 import { canonicalKey } from "./ledgerRebuild";
+import { resolveLotRef } from "./ledgerProjection";
 import { isRetracted } from "./rawTransactionFolds";
 import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
 
@@ -61,14 +62,26 @@ export interface RecordBuyResult {
  * whose fact was already written at extraction time (importRecording.ts)
  * appends nothing — it only gets its portfolio assignment confirmed. Same
  * non-fatal isolation as every dual-write in this migration.
+ *
+ * The lookup only ever adopts a fact no OTHER existing Trade already owns
+ * (`otherTradeIds`) — two genuinely distinct trades (e.g. two same-price
+ * same-day buys) can share an identical canonical key, and blindly adopting
+ * whichever fact matches by value would silently leave the second trade
+ * with no fact of its own, orphaning it from the next commit's projection
+ * (see the regression tests this guards: "a second buy sharing another's
+ * exact value never adopts its fact").
  */
 async function ensureBuyFact(repos: CommitEngineRepos & Partial<AppRepositories>, trade: Trade, input: RecordBuyInput): Promise<void> {
   const ticker = normalizeTicker(trade.ticker);
   const key = canonicalKey({ side: "BUY", ticker, date: trade.executionDate, shares: trade.shares, price: trade.entryPrice });
   const all = await repos.rawTransactions.getAll();
+  const otherTradeIds = new Set(
+    (await repos.trades!.getByPortfolio(trade.portfolioId)).filter((t) => t.id !== trade.id).map((t) => t.id)
+  );
   const liveMatch = all.find((t) => {
     if (t.kind !== "BuyExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== ticker) return false;
     if (isRetracted(all, t.id)) return false;
+    if (otherTradeIds.has(t.id)) return false;
     const p = t.payload as BuyExecutionPayload;
     return canonicalKey({ side: "BUY", ticker, date: p.executionDate, shares: p.shares, price: p.price }) === key;
   });
@@ -515,15 +528,31 @@ export async function recordSell(repos: AppRepositories & Partial<CommitEngineRe
 }
 
 /**
- * Phase 9.8 fact writer, Sell side: (1) the SellExecution fact — skipped
- * when an Import-written one with the same canonical key already exists —
- * and (2) the SellAllocationDecision fact, the immutable record of WHICH
- * lots the user chose to close (ADR-002). The decision is the half no
- * Import path ever writes, so it's checked and written independently of the
- * execution fact; `sellExecutionId`/`lotRef` use canonical keys, exactly the
- * eventIds generateLedgerEvents derives for these same facts (the identical
- * convention backfillRawTransactions established), so the Allocation Engine
- * replays this decision correctly on every future rebuild.
+ * Phase 9.8 fact writer, Sell side: (1) the SellExecution fact and (2) the
+ * SellAllocationDecision fact, the immutable record of WHICH lots the user
+ * chose to close (ADR-002).
+ *
+ * The SellExecution fact is always written, unconditionally — `recordSell`
+ * (this function's only caller, via SellAllocationForm) always mints a
+ * fresh `sellGroupId` for a genuinely new sell order, so there is never a
+ * legitimate "this sell's fact already exists" case to dedupe against here.
+ * An earlier version tried to skip writing when a live fact already matched
+ * by VALUE (ticker/date/shares/price) — meant to avoid double-writing an
+ * Import-sourced fact, but with no real caller ever relying on it, it only
+ * ever fired on a coincidence: two genuinely different sells sharing the
+ * same value (same-price same-day orders are routine) silently lost the
+ * second sell's own fact, orphaning its allocations from the next commit's
+ * projection and corrupting an UNRELATED sell's/lot's numbers. See this
+ * module's regression tests ("a second sell sharing another's exact value
+ * never merges with it").
+ *
+ * `sellExecutionId`/`lotRef` reference the real RawTransaction ids
+ * (`sellGroupId` for the sell itself, `resolveLotRef` for each closed lot)
+ * instead of a recomputed canonical key — real ids are always unique, so
+ * two coincidentally-identical sells/lots can never be conflated by the
+ * Allocation Engine, which resolves a reference by real id first (see
+ * allocationEngine.indexEventsByReference) and only falls back to the
+ * value-keyed identity for decisions written before this fix.
  */
 async function ensureSellFacts(
   repos: CommitEngineRepos & Partial<AppRepositories>,
@@ -535,64 +564,43 @@ async function ensureSellFacts(
 ): Promise<void> {
   const totalShares = createdAllocations.reduce((sum, a) => sum + a.sharesClosed, 0);
   const price = createdAllocations[0].exitPrice;
-  const sellKey = canonicalKey({ side: "SELL", ticker, date: input.executionDate, shares: totalShares, price });
-  const all = await repos.rawTransactions.getAll();
-  const isLive = (id: string) => !isRetracted(all, id);
 
-  const liveSellMatch = all.find((t) => {
-    if (t.kind !== "SellExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== ticker) return false;
-    if (!isLive(t.id)) return false;
-    const p = t.payload as SellExecutionPayload;
-    return canonicalKey({ side: "SELL", ticker, date: p.executionDate, shares: p.shares, price: p.price }) === sellKey;
-  });
-  if (!liveSellMatch) {
-    const payload: SellExecutionPayload = {
-      ticker,
-      shares: totalShares,
-      price,
-      fees: createdAllocations.reduce((sum, a) => sum + a.fees, 0),
-      taxes: createdAllocations.reduce((sum, a) => sum + a.taxes, 0),
-      executionDate: input.executionDate,
-      executionTime: input.executionTime,
-      transactionNumber: input.transactionNumber,
-      notes: createdAllocations[0].notes,
-      exitReason: createdAllocations[0].exitReason,
-    };
-    await appendAndMaybeCommit(
-      repos,
-      createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: "manual", portfolioId: input.portfolioId, ticker, payload })
-    );
-  }
-
-  const liveDecisionExists = all.some(
-    (t) => t.kind === "SellAllocationDecision" && isLive(t.id) && (t.payload as SellAllocationDecisionPayload).sellExecutionId === sellKey
+  const payload: SellExecutionPayload = {
+    ticker,
+    shares: totalShares,
+    price,
+    fees: createdAllocations.reduce((sum, a) => sum + a.fees, 0),
+    taxes: createdAllocations.reduce((sum, a) => sum + a.taxes, 0),
+    executionDate: input.executionDate,
+    executionTime: input.executionTime,
+    transactionNumber: input.transactionNumber,
+    notes: createdAllocations[0].notes,
+    exitReason: createdAllocations[0].exitReason,
+  };
+  await appendAndMaybeCommit(
+    repos,
+    createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: "manual", portfolioId: input.portfolioId, ticker, payload })
   );
-  if (!liveDecisionExists) {
-    const payload: SellAllocationDecisionPayload = {
-      sellExecutionId: sellKey,
-      allocations: createdAllocations.map((a, i) => ({
-        lotRef: canonicalKey({
-          side: "BUY",
-          ticker: normalizeTicker(closedTrades[i].ticker),
-          date: closedTrades[i].executionDate,
-          shares: closedTrades[i].shares,
-          price: closedTrades[i].entryPrice,
-        }),
-        shares: a.sharesClosed,
-      })),
-    };
-    await appendAndMaybeCommit(
-      repos,
-      createRawTransaction({
-        id: `${sellGroupId}|decision`,
-        kind: "SellAllocationDecision",
-        source: "manual",
-        portfolioId: input.portfolioId,
-        ticker,
-        payload,
-      })
-    );
-  }
+
+  const all = await repos.rawTransactions.getAll();
+  const decisionPayload: SellAllocationDecisionPayload = {
+    sellExecutionId: sellGroupId,
+    allocations: createdAllocations.map((a, i) => ({
+      lotRef: resolveLotRef(all, closedTrades[i]),
+      shares: a.sharesClosed,
+    })),
+  };
+  await appendAndMaybeCommit(
+    repos,
+    createRawTransaction({
+      id: `${sellGroupId}|decision`,
+      kind: "SellAllocationDecision",
+      source: "manual",
+      portfolioId: input.portfolioId,
+      ticker,
+      payload: decisionPayload,
+    })
+  );
 
   await assignPortfolio(repos, ticker, input.portfolioId);
 }
