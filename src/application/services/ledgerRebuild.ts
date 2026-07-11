@@ -16,6 +16,7 @@ import {
 } from "./duplicateDetection";
 import { latestByTicker } from "./reconciliation";
 import { buildInventoryFacts, evaluateInventoryConstraint, type InventoryContradiction } from "./constraintValidation";
+import { checkTickerMatch } from "./importVerification";
 import { recordBuy, deleteTrade } from "./TradeService";
 import type { AppRepositories } from "./types";
 
@@ -37,8 +38,20 @@ import type { AppRepositories } from "./types";
  * completeCandidateFieldsFromSiblings + suggestDuplicatePendingCandidateKeysToDelete
  * (collapsing repeated reads of the same real execution across documents),
  * findDuplicateBuyMatch/findDuplicateSellMatch (matching a canonical fact
- * against the existing ledger), and constraintValidation's Facts/Contradiction
- * split (holdings reconciliation).
+ * against the existing ledger), and — critically — checkTickerMatch itself
+ * (importVerification.ts) for the Holdings/verification decision
+ * (diffHoldings), the SAME function Import calls. There is exactly one trust
+ * policy in this codebase: a ticker whose complete canonical history is
+ * official-broker-excel-sourced (or invoice-sourced) is never required to
+ * reconcile against a "My Position" screenshot, and Rebuild must reach that
+ * same verdict for the same reason Import does — never its own,
+ * independently-derived approximation of it. `CanonicalTrade.source`
+ * (preserved from each surviving candidate) is what makes this possible:
+ * without it, Rebuild had no provenance to feed the trust policy at all and
+ * silently fell back to a naive calculated-vs-Holdings comparison with no
+ * concept of source, reintroducing exactly the "needs corroboration" verdict
+ * the trust policy exists to eliminate (see docs/ROADMAP.md's "Rebuild Ledger
+ * pipeline" entry for the bug this fixed).
  *
  * Allocation-level rebuilding (WHICH buy lot a sell closed) is out of scope
  * by design: a source document records that N shares of TICKER were sold on
@@ -65,6 +78,18 @@ export interface CanonicalTrade {
   sourceUploadIds: string[];
   /** This specific entry's own stable identity (the `key`/`uploadId` it entered canonicalization with) — unlike `key`, this is NEVER shared by two distinct surviving entries, even when their observable fields coincide. See `disambiguateCollidingKeys`. */
   entryId: string;
+  /**
+   * Which document type this specific real execution was read from — the
+   * surviving entry's own `ParsedTradeCandidate.source`, untouched by
+   * `completeCandidateFieldsFromSiblings` (which only ever borrows
+   * fees/taxes/time/transactionNumber from a sibling, never source itself).
+   * This is what lets `diffHoldings` feed the SAME trust-policy decision
+   * (`checkTickerMatch`, `importVerification.ts`) that Import already makes
+   * for the identical ticker/source combination — see this module's own doc
+   * comment on why Rebuild must never re-derive a second, independent
+   * verification/trust judgment.
+   */
+  source: ParsedTradeCandidate["source"];
 }
 
 /** Exported so a caller with a canonicalization-worthy entry pool that isn't shaped like Upload[] (e.g. the Ledger Engine, over RawTransactions) can derive the same deterministic identity for "one real execution" without re-deriving the formula. */
@@ -144,6 +169,7 @@ export function canonicalizeTradeEntries(
       transactionNumber: e.candidate.transactionNumber,
       sourceUploadIds: [...sourceUploadIds],
       entryId: e.key,
+      source: e.candidate.source,
     };
     (canonical.side === "BUY" ? buys : sells).push(canonical);
   }
@@ -338,11 +364,35 @@ function diffSells(
   return { toAdd, modified, extraneous };
 }
 
+/**
+ * Holdings/verification decision: calls checkTickerMatch — the exact same
+ * function Import calls for this same decision — rather than comparing
+ * calculated-vs-Holdings directly. This is what makes Rebuild produce the
+ * same verdict Import would for an identical ticker: a ticker whose complete
+ * canonical Buy/Sell history is entirely official-broker-excel (or entirely
+ * invoice) sourced is exempted from Holdings reconciliation exactly the way
+ * Import already exempts it, via the same `reason` field threaded into
+ * buildInventoryFacts/evaluateInventoryConstraint (constraintValidation.ts).
+ * No second trust policy is implemented here — every one of these tickers'
+ * verification outcomes is a single function call shared with Import.
+ */
 function diffHoldings(canonicalBuys: CanonicalTrade[], canonicalSells: CanonicalTrade[], verifications: PositionVerification[]): HoldingsMismatch[] {
   const buySharesByTicker = new Map<string, number>();
   const sellSharesByTicker = new Map<string, number>();
-  for (const b of canonicalBuys) buySharesByTicker.set(b.ticker, (buySharesByTicker.get(b.ticker) ?? 0) + b.shares);
-  for (const s of canonicalSells) sellSharesByTicker.set(s.ticker, (sellSharesByTicker.get(s.ticker) ?? 0) + s.shares);
+  const rowsByTicker = new Map<string, CanonicalTrade[]>();
+  const addRow = (row: CanonicalTrade) => {
+    const list = rowsByTicker.get(row.ticker);
+    if (list) list.push(row);
+    else rowsByTicker.set(row.ticker, [row]);
+  };
+  for (const b of canonicalBuys) {
+    buySharesByTicker.set(b.ticker, (buySharesByTicker.get(b.ticker) ?? 0) + b.shares);
+    addRow(b);
+  }
+  for (const s of canonicalSells) {
+    sellSharesByTicker.set(s.ticker, (sellSharesByTicker.get(s.ticker) ?? 0) + s.shares);
+    addRow(s);
+  }
   const latestVerification = latestByTicker(verifications);
 
   const tickers = new Set([...buySharesByTicker.keys(), ...sellSharesByTicker.keys(), ...latestVerification.keys()]);
@@ -351,15 +401,22 @@ function diffHoldings(canonicalBuys: CanonicalTrade[], canonicalSells: Canonical
     const buyShares = buySharesByTicker.get(ticker) ?? 0;
     const sellShares = sellSharesByTicker.get(ticker) ?? 0;
     const verification = latestVerification.get(ticker);
-    const facts = buildInventoryFacts(ticker, {
-      existingRemainingShares: 0,
+    const rows = rowsByTicker.get(ticker) ?? [];
+    const allPendingFromOfficialBrokerExcel = rows.length > 0 && rows.every((r) => r.source === "official-broker-excel");
+    const allPendingFromInvoice = rows.length > 0 && rows.every((r) => r.source === "invoice");
+
+    const status = checkTickerMatch({
+      hasShares: buyShares + sellShares > 0,
       pendingBuyShares: buyShares,
       pendingSellShares: sellShares,
-      netShares: buyShares - sellShares,
+      existingRemainingShares: 0,
       verifiedUnits: verification?.units,
+      allPendingFromOfficialBrokerExcel,
+      allPendingFromInvoice,
     });
+    const facts = buildInventoryFacts(ticker, status);
     const contradictions = evaluateInventoryConstraint(facts);
-    if (contradictions.length === 0) continue; // satisfied — closed position, exact holdings match, or no verification to compare against
+    if (contradictions.length === 0) continue; // satisfied — closed position, exact holdings match, broker-excel/invoice-verified, or no verification to compare against
     results.push({
       ticker,
       calculatedRemaining: facts.calculatedRemaining,

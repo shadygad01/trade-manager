@@ -165,6 +165,56 @@ describe("dryRunLedgerRebuild", () => {
     expect(report2.holdingsMismatches).toEqual([]);
   });
 
+  // The exact bug this migration fixed: Rebuild used to compare calculated
+  // remaining against Holdings with no concept of source at all, so an
+  // official-broker-excel-sourced ticker with a disagreeing screenshot still
+  // showed a "Holdings Mismatch" here even though Import's checkTickerMatch
+  // would call the identical ticker "broker-excel-verified" and never ask
+  // for a screenshot. Both engines now share one call to checkTickerMatch.
+  it("never flags a holdings mismatch for a ticker whose complete canonical history is official-broker-excel-sourced, even against a disagreeing screenshot", async () => {
+    const verification: PositionVerification = { id: "v1", portfolioId: "p1", ticker: "PHAR", units: 999, capturedAt: "2026-01-06", source: "screenshot" };
+    const repos = createFakeRepositories({
+      portfolios: [portfolio()],
+      verifications: [verification],
+      uploads: [upload("u1", [buy({ ticker: "PHAR", shares: 100, source: "official-broker-excel" })])],
+    });
+    const report = await dryRunLedgerRebuild(repos);
+    expect(report.holdingsMismatches).toEqual([]);
+  });
+
+  it("still flags a genuine holdings mismatch for a non-Excel-sourced ticker disagreeing with a screenshot", async () => {
+    const verification: PositionVerification = { id: "v1", portfolioId: "p1", ticker: "COMI", units: 999, capturedAt: "2026-01-06", source: "screenshot" };
+    const repos = createFakeRepositories({
+      portfolios: [portfolio()],
+      verifications: [verification],
+      uploads: [upload("u1", [buy({ ticker: "COMI", shares: 100, source: "statement" })])],
+    });
+    const report = await dryRunLedgerRebuild(repos);
+    expect(report.holdingsMismatches).toHaveLength(1);
+    expect(report.holdingsMismatches[0]).toMatchObject({ ticker: "COMI", calculatedRemaining: 100, verifiedUnits: 999 });
+  });
+
+  it("never flags a holdings mismatch for a ticker whose complete canonical history is invoice-sourced, when no screenshot exists to disagree with", async () => {
+    // Per checkTickerMatch's own policy, invoice-verified (unlike
+    // broker-excel-verified) only ever substitutes for a MISSING screenshot
+    // — a real, present disagreement still blocks, for either engine.
+    const repos = createFakeRepositories({
+      portfolios: [portfolio()],
+      uploads: [upload("u1", [buy({ ticker: "SWDY", shares: 100, source: "invoice" })])],
+    });
+    const report = await dryRunLedgerRebuild(repos);
+    expect(report.holdingsMismatches).toEqual([]);
+  });
+
+  it("preserves the surviving canonical row's own source — the invoice donor, not the statement it corroborates — after a cross-source merge", async () => {
+    const { buys } = buildCanonicalTrades([
+      upload("statement", [buy({ source: "statement", price: 10 })]),
+      upload("invoice", [buy({ source: "invoice", price: 10.02, fees: 5 })]),
+    ]);
+    expect(buys).toHaveLength(1);
+    expect(buys[0].source).toBe("invoice");
+  });
+
   it("never reads Trade/TradeAllocation as reconstruction input — an existing trade with no upload has zero influence on tradesToAdd", async () => {
     const trade = createTrade({ id: "t1", portfolioId: "p1", ticker: "ORHD", shares: 500, entryPrice: 3, executionDate: "2026-01-01", executionTime: "10:00" });
     const repos = createFakeRepositories({ portfolios: [portfolio()], trades: [trade], uploads: [] });
