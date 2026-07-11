@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reconcilePositions, suggestDuplicateTradeIds } from "./reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations } from "./reconciliation";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
@@ -177,5 +177,81 @@ describe("suggestDuplicateTradeIds", () => {
 
   it("returns an empty list for an empty trade list", () => {
     expect(suggestDuplicateTradeIds({ openTrades: [], computedShares: 0, verifiedUnits: 0 })).toEqual([]);
+  });
+});
+
+describe("findPendingConfirmations", () => {
+  it("returns one BUY entry per pending trade, and ignores a verified/ordinary trade", () => {
+    const pending = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "ABUK",
+      shares: 29,
+      entryPrice: 41.17,
+      executionDate: "2026-02-26",
+      executionTime: "10:54",
+    });
+    pending.confirmationStatus = "pending";
+    const ordinary = createTrade({
+      id: "t2",
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    const results = findPendingConfirmations([pending, ordinary], []);
+    expect(results).toEqual([
+      { ticker: "ABUK", side: "BUY", date: "2026-02-26", time: "10:54", shares: 29, price: 41.17, refId: "t1" },
+    ]);
+  });
+
+  it("groups a pending sell's allocations by sellGroupId into one SELL entry with summed shares", () => {
+    const allocation1 = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "g1",
+      portfolioId: "p1",
+      tradeId: "t1",
+      ticker: "ABUK",
+      sharesClosed: 20,
+      exitPrice: 41.17,
+      executionDate: "2026-02-26",
+      executionTime: "10:54",
+    });
+    allocation1.confirmationStatus = "pending";
+    const allocation2 = createTradeAllocation({
+      id: "a2",
+      sellGroupId: "g1",
+      portfolioId: "p1",
+      tradeId: "t2",
+      ticker: "ABUK",
+      sharesClosed: 9,
+      exitPrice: 41.17,
+      executionDate: "2026-02-26",
+      executionTime: "10:54",
+    });
+    allocation2.confirmationStatus = "pending";
+    const verifiedAllocation = createTradeAllocation({
+      id: "a3",
+      sellGroupId: "g2",
+      portfolioId: "p1",
+      tradeId: "t3",
+      ticker: "COMI",
+      sharesClosed: 100,
+      exitPrice: 60,
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+
+    const results = findPendingConfirmations([], [allocation1, allocation2, verifiedAllocation]);
+    expect(results).toEqual([
+      { ticker: "ABUK", side: "SELL", date: "2026-02-26", time: "10:54", shares: 29, price: 41.17, refId: "g1" },
+    ]);
+  });
+
+  it("returns an empty list when nothing is pending", () => {
+    expect(findPendingConfirmations([], [])).toEqual([]);
   });
 });

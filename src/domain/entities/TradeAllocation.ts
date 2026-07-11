@@ -27,6 +27,14 @@ export interface TradeAllocation {
   createdAt: string;
   /** Broker-assigned unique execution ID for this sell order (e.g. Thndr's Invoice "Transaction No.") when the import that created it carried one — every allocation row from the same sell order shares the same value, same as sellGroupId. See duplicateDetection.ts's sameExecution. */
   transactionNumber?: string;
+  /**
+   * Same meaning and TradeService-owned mutability as `Trade.confirmationStatus`
+   * — set only for an allocation imported from a partial-fill execution
+   * still awaiting its broker invoice. Every allocation row sharing one
+   * `sellGroupId` gets the same value at creation and is confirmed together
+   * (`confirmPendingSell`).
+   */
+  confirmationStatus?: "pending" | "verified";
 }
 
 export function createTradeAllocation(input: {

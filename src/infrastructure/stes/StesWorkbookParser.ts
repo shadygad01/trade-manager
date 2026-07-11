@@ -402,6 +402,13 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
       continue;
     }
 
+    // "Needs Confirmation" (per Instructions rule 16 — a partially filled
+    // execution whose final numbers await the broker invoice) is a signal to
+    // propagate, never a reason to reject: the row is a real observation and
+    // imports exactly like any other BUY/SELL, just flagged for follow-up.
+    const notesText = asText(cell(row, "Extraction Notes"));
+    const needsConfirmation = notesText?.trim().toLowerCase() === "needs confirmation" ? true : undefined;
+
     candidates.push({
       ticker: tickerText,
       companyName,
@@ -415,6 +422,7 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
       confidence,
       source: document.source,
       transactionNumber: asText(cell(row, "Transaction Reference")),
+      needsConfirmation,
     });
   }
 

@@ -26,6 +26,16 @@ export interface Trade {
   createdAt: string;
   /** Broker-assigned unique execution ID (e.g. Thndr's Invoice "Transaction No.") when the import that created this trade carried one — the most reliable signal for matching a later re-import against this exact trade (see duplicateDetection.ts's sameExecution). Undefined for manually-entered trades and for every import format that doesn't print one. */
   transactionNumber?: string;
+  /**
+   * Set only for a trade imported from a partial-fill execution (STES
+   * `Extraction Notes: "Needs Confirmation"`) whose exact shares/price still
+   * need corroborating against the broker invoice. Undefined for every
+   * ordinary trade — this was never meant to be. Like `remainingShares`,
+   * this is the one other field TradeService is allowed to mutate after
+   * creation (`confirmPendingBuy`) — flips to `"verified"` once the invoice
+   * confirms it, never edited any other way.
+   */
+  confirmationStatus?: "pending" | "verified";
 }
 
 export function createTrade(input: {

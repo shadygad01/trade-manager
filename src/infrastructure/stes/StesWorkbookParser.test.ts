@@ -63,6 +63,7 @@ interface ObsInput {
   currency?: string;
   transactionReference?: string;
   confidence?: string;
+  notes?: string;
 }
 
 function obsRow(o: ObsInput): Cell[] {
@@ -91,7 +92,7 @@ function obsRow(o: ObsInput): Cell[] {
     null,
     null,
     o.confidence ?? null,
-    null,
+    o.notes ?? null,
   ];
 }
 
@@ -245,6 +246,44 @@ describe("parseStesWorkbook — valid workbooks", () => {
     expect(result.warnings).toHaveLength(1);
     expect(result.warnings[0]).toContain("OBS-0001");
     expect(result.warnings[0]).toContain("Gross Amount");
+  });
+});
+
+describe("parseStesWorkbook — Extraction Notes: needsConfirmation", () => {
+  it("flags a candidate needsConfirmation when Extraction Notes is exactly 'Needs Confirmation'", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "ORDERS_SCREEN")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "SELL", ticker: "ABUK", date: "2026-02-26", quantity: 29, price: 41.17, notes: "Needs Confirmation" }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].needsConfirmation).toBe(true);
+  });
+
+  it("is case/whitespace-insensitive", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "ORDERS_SCREEN")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "BUY", ticker: "COMI", date: "2026-03-02", quantity: 10, price: 5, notes: "  needs confirmation  " }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.candidates[0].needsConfirmation).toBe(true);
+  });
+
+  it("leaves needsConfirmation unset for a blank or unrelated Extraction Notes value", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "STATEMENT")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "BUY", ticker: "COMI", date: "2026-03-02", quantity: 10, price: 5 }),
+        obsRow({ id: "OBS-0002", doc: "DOC-01", type: "BUY", ticker: "COMI", date: "2026-03-03", quantity: 10, price: 5, notes: "Ticker was slightly blurry" }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.candidates[0].needsConfirmation).toBeUndefined();
+    expect(result.candidates[1].needsConfirmation).toBeUndefined();
   });
 });
 

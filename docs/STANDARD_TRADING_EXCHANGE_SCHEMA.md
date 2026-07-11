@@ -111,7 +111,7 @@ manual editing before upload regardless of how the generator wrote its cells.
 | `Transaction Reference` | Text | Optional — the most valuable traceability field | The broker's per-execution identifier, copied exactly. Becomes the fact's `transactionNumber`, the strongest same-execution signal in matching. |
 | `Order Number` / `Execution Number` | Text | Optional | As printed. |
 | `Extraction Confidence` | Enum | Optional | `HIGH`/`MEDIUM`/`LOW`; blank → MEDIUM. Maps to the fact's `confidence`; a LOW row is never hidden, only visibly cued. |
-| `Extraction Notes` | Text | Optional | The AI's honest doubts, shown at review. |
+| `Extraction Notes` | Text | Optional | The AI's honest doubts, shown at review. The exact value `Needs Confirmation` (case-insensitive) flags a partial-fill BUY/SELL — see Instructions rule 16 — and is imported with the resulting `Trade`/`TradeAllocation`'s `confirmationStatus` set to `pending`, surfaced on the Portfolio Detail page's holdings table until the broker invoice is uploaded to confirm it. |
 
 **Validation model**: file-level failures (unreadable workbook, missing
 sheet/required column, wrong schema name/major version, duplicate Document
