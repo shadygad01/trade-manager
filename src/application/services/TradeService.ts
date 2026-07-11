@@ -12,7 +12,13 @@ import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolio, ap
 import { canonicalKey } from "./ledgerRebuild";
 import { resolveLotRef } from "./ledgerProjection";
 import { isRetracted } from "./rawTransactionFolds";
-import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
+import {
+  createRawTransaction,
+  type BuyExecutionPayload,
+  type SellExecutionPayload,
+  type SellAllocationDecisionPayload,
+  type RawTransactionSource,
+} from "@domain/entities/RawTransaction";
 
 function companyNameForTicker(ticker: string): string | undefined {
   return KNOWN_EGX_TICKERS.find((t) => t.ticker === ticker)?.companyName;
@@ -417,6 +423,16 @@ export interface RecordSellInput {
   executionTime: string;
   /** Broker-assigned unique execution ID for the sell order this allocates (e.g. Thndr's Invoice "Transaction No.") — applied to every resulting allocation row, same as sellGroupId. See TradeAllocation.transactionNumber. */
   transactionNumber?: string;
+  /**
+   * Which document type this sell was actually read from (see
+   * ParsedTradeCandidate.source) — threaded through from the parsed
+   * candidate so the SellExecution fact ensureSellFacts writes reflects the
+   * real originating document instead of defaulting to "manual" for every
+   * sell, regardless of source. Undefined only for a genuinely
+   * user-typed sell with no document behind it (e.g. the Lot Manager's own
+   * manual entry), where "manual" is the correct, real answer.
+   */
+  source?: RawTransactionSource;
 }
 
 export interface RecordSellResult {
@@ -546,6 +562,21 @@ export async function recordSell(repos: AppRepositories & Partial<CommitEngineRe
  * module's regression tests ("a second sell sharing another's exact value
  * never merges with it").
  *
+ * The fact's `source` is `input.source` when the caller provided one (the
+ * originating parsed candidate's own document type — e.g.
+ * "official-broker-excel") and falls back to "manual" only when it didn't
+ * (a genuinely user-typed sell). This was the real, business-logic root
+ * cause of a ticker showing "needs corroborating evidence" after a fully
+ * broker-Excel-sourced import was verified AND allocated: this fact used to
+ * hardcode "manual" unconditionally, so the moment ANY sell got allocated
+ * through this path, its RawTransaction fact silently lost the candidate's
+ * real provenance — breaking isTickerFullyOfficialBrokerExcelSourced's
+ * "every live fact for this ticker is Excel-sourced" check, no matter how
+ * the ticker's Buy side was recorded. Threading the source through (instead
+ * of trying to look it up from an already-written fact by value, which is
+ * exactly the fragile approach the doc comment above already rejected) never
+ * risks the coincidence-collision regression described above.
+ *
  * `sellExecutionId`/`lotRef` reference the real RawTransaction ids
  * (`sellGroupId` for the sell itself, `resolveLotRef` for each closed lot)
  * instead of a recomputed canonical key — real ids are always unique, so
@@ -579,7 +610,7 @@ async function ensureSellFacts(
   };
   await appendAndMaybeCommit(
     repos,
-    createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: "manual", portfolioId: input.portfolioId, ticker, payload })
+    createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: input.source ?? "manual", portfolioId: input.portfolioId, ticker, payload })
   );
 
   const all = await repos.rawTransactions.getAll();

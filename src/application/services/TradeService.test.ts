@@ -557,6 +557,64 @@ describe("recordSell", () => {
     expect(allocations.every((a) => a.transactionNumber === "N000000000099")).toBe(true);
   });
 
+  // CLHO regression: verifying and allocating a sell recorded from the
+  // official broker Excel export used to always write its SellExecution
+  // RawTransaction fact with source "manual", hardcoded — regardless of the
+  // real originating document — which silently broke
+  // isTickerFullyOfficialBrokerExcelSourced's "every live fact for this
+  // ticker is Excel-sourced" check the moment ANY sell was allocated,
+  // reintroducing "Closed — needs corroborating evidence" for a ticker that
+  // should never need it. Root-caused to ensureSellFacts (TradeService.ts)
+  // rather than any UI code.
+  it("stamps the SellExecution fact with the caller's real source instead of hardcoding 'manual'", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      shares: 3000,
+      entryPrice: 0.38,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      allocations: [{ tradeId: trade.id, shares: 3000, exitPrice: 0.5 }],
+      executionDate: "2026-01-10",
+      executionTime: "10:00",
+      source: "official-broker-excel",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFact = facts.find((f) => f.kind === "SellExecution");
+    expect(sellFact?.source).toBe("official-broker-excel");
+  });
+
+  it("still defaults the SellExecution fact's source to 'manual' when the caller provides none — a genuinely user-typed sell", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [{ tradeId: trade.id, shares: 100, exitPrice: 60 }],
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFact = facts.find((f) => f.kind === "SellExecution");
+    expect(sellFact?.source).toBe("manual");
+  });
+
   it("emits PartialSell when a trade is only partially closed", async () => {
     const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
     const { trade } = await recordBuy(repos, {
