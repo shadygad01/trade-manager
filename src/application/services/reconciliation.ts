@@ -1,12 +1,12 @@
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
-import type { RawTransaction, BuyExecutionPayload, SellExecutionPayload } from "@domain/entities/RawTransaction";
+import type { RawTransaction } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { PositionAggregate } from "./TradeService";
 import { checkTickerMatch } from "./importVerification";
 import { suggestRemovalsToReconcile, MAX_RECONCILE_ROWS, type ReconcilableRow } from "./mismatchResolver";
-import { isRetracted } from "./rawTransactionFolds";
+import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
 
 /**
  * True only when every live Buy/Sell RawTransaction fact for this ticker
@@ -19,13 +19,21 @@ import { isRetracted } from "./rawTransactionFolds";
  * facts (nothing to be "fully" anything of) or any mixed provenance — a
  * ticker with even one non-Excel-sourced execution still goes through
  * ordinary reconciliation.
+ *
+ * Resolves each fact's CURRENT ticker via `resolveCurrentTicker` (folding
+ * any live Correction) rather than reading `payload.ticker` directly — a
+ * fact's own `ticker` field is immutable and never rewritten in place (e.g.
+ * TradeService.renameTickerEverywhere's wrong-ticker fix is its own separate
+ * Correction fact), so reading it raw silently stops recognizing an
+ * Excel-sourced ticker's facts the moment it's ever renamed/corrected.
  */
 export function isTickerFullyOfficialBrokerExcelSourced(rawTransactions: RawTransaction[], ticker: string): boolean {
   const normalized = normalizeTicker(ticker);
   const live = rawTransactions.filter((t) => {
     if (t.kind !== "BuyExecution" && t.kind !== "SellExecution") return false;
-    const payload = t.payload as BuyExecutionPayload | SellExecutionPayload;
-    return normalizeTicker(payload.ticker) === normalized && !isRetracted(rawTransactions, t.id);
+    if (isRetracted(rawTransactions, t.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(rawTransactions, t);
+    return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalized;
   });
   return live.length > 0 && live.every((t) => t.source === "official-broker-excel");
 }

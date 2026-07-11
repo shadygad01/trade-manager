@@ -15,6 +15,7 @@ import {
 } from "./TradeService";
 import { commitTicker, assignPortfolio, type CommitEngineRepos } from "./commitEngine";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
+import { isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
 
 /** The migration dual-write is opt-in per repos bundle — plain createFakeRepositories() output doesn't satisfy it, matching the app's real repos singleton (which always does). */
 function withMigrationRepos(repos: ReturnType<typeof createFakeRepositories>): ReturnType<typeof createFakeRepositories> & CommitEngineRepos {
@@ -613,6 +614,118 @@ describe("recordSell", () => {
     const facts = await repos.rawTransactions.getAll();
     const sellFact = facts.find((f) => f.kind === "SellExecution");
     expect(sellFact?.source).toBe("manual");
+  });
+
+  // The actual architectural fix, exercised end-to-end exactly like a real
+  // Import → Verify → Allocate lifecycle: a SellExecution fact already
+  // exists (written at extraction time, before the user ever opens the
+  // allocation modal — see recordImportedRawTransactions), correctly
+  // sourced. recordSell is called with NO explicit `source` at all (the
+  // shape PortfolioDetailPage's PendingExecution-confirmed sells use, and
+  // any future caller that never learns about the `source` field) — the
+  // fix must still work by ADOPTING the pre-existing fact, not by relying
+  // on every caller remembering to thread a source through.
+  it("adopts an already-existing SellExecution fact (written at extraction time) instead of minting a duplicate 'manual' one — works even when the caller passes no source at all", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+
+    // Simulates recordImportedRawTransactions' extraction-time write: the
+    // Buy candidate is already a live fact before recordBuy ever runs, so
+    // ensureBuyFact's own live-match check adopts it instead of writing its
+    // own "manual" one — this is what lets the ticker's Buy side start out
+    // fully Excel-sourced.
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "CLHO",
+        payload: { ticker: "CLHO", shares: 3000, price: 0.38, executionDate: "2026-01-05", executionTime: "10:00" },
+      }),
+    );
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      shares: 3000,
+      entryPrice: 0.38,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+
+    // Simulates recordImportedRawTransactions' extraction-time write: the
+    // Sell candidate is already a live fact before any allocation happens,
+    // correctly sourced.
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-sell-1",
+        kind: "SellExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "CLHO",
+        payload: { ticker: "CLHO", shares: 3000, price: 0.5, executionDate: "2026-01-10", executionTime: "10:00" },
+      }),
+    );
+
+    // No `source` passed here at all — proving the fix doesn't depend on it.
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      allocations: [{ tradeId: trade.id, shares: 3000, exitPrice: 0.5 }],
+      executionDate: "2026-01-10",
+      executionTime: "10:00",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFacts = facts.filter((f) => f.kind === "SellExecution");
+    // Exactly one SellExecution fact for this sell — the pre-existing one,
+    // adopted, never duplicated.
+    expect(sellFacts).toHaveLength(1);
+    expect(sellFacts[0].id).toBe("extracted-sell-1");
+    expect(sellFacts[0].source).toBe("official-broker-excel");
+
+    const decision = facts.find((f) => f.kind === "SellAllocationDecision");
+    expect((decision?.payload as { sellExecutionId: string }).sellExecutionId).toBe("extracted-sell-1");
+
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "CLHO")).toBe(true);
+  });
+
+  it("never merges two genuinely different sells that coincidentally share the same ticker/date/shares/price — each still gets its own fact", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(100_000)] }));
+    const buy1 = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+    const buy2 = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 48,
+      executionDate: "2026-01-06",
+      executionTime: "10:00",
+    });
+
+    const commonSell = {
+      portfolioId: "p1",
+      ticker: "COMI",
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+      source: "official-broker-excel" as const,
+    };
+    await recordSell(repos, { ...commonSell, allocations: [{ tradeId: buy1.trade.id, shares: 100, exitPrice: 60 }] });
+    await recordSell(repos, { ...commonSell, allocations: [{ tradeId: buy2.trade.id, shares: 100, exitPrice: 60 }] });
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFacts = facts.filter((f) => f.kind === "SellExecution");
+    expect(sellFacts).toHaveLength(2);
+    const decisions = facts.filter((f) => f.kind === "SellAllocationDecision");
+    const claimedIds = new Set(decisions.map((d) => (d.payload as { sellExecutionId: string }).sellExecutionId));
+    // Each decision claims a DIFFERENT SellExecution fact — neither sell's
+    // allocation was orphaned by the other.
+    expect(claimedIds.size).toBe(2);
   });
 
   it("emits PartialSell when a trade is only partially closed", async () => {

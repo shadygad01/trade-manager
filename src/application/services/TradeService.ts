@@ -11,7 +11,7 @@ import type { AppRepositories } from "./types";
 import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolio, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 import { canonicalKey } from "./ledgerRebuild";
 import { resolveLotRef } from "./ledgerProjection";
-import { isRetracted } from "./rawTransactionFolds";
+import { isRetracted, findUnclaimedSellExecutionFact } from "./rawTransactionFolds";
 import {
   createRawTransaction,
   type BuyExecutionPayload,
@@ -548,42 +548,44 @@ export async function recordSell(repos: AppRepositories & Partial<CommitEngineRe
  * SellAllocationDecision fact, the immutable record of WHICH lots the user
  * chose to close (ADR-002).
  *
- * The SellExecution fact is always written, unconditionally — `recordSell`
- * (this function's only caller, via SellAllocationForm) always mints a
- * fresh `sellGroupId` for a genuinely new sell order, so there is never a
- * legitimate "this sell's fact already exists" case to dedupe against here.
- * An earlier version tried to skip writing when a live fact already matched
- * by VALUE (ticker/date/shares/price) — meant to avoid double-writing an
- * Import-sourced fact, but with no real caller ever relying on it, it only
- * ever fired on a coincidence: two genuinely different sells sharing the
- * same value (same-price same-day orders are routine) silently lost the
- * second sell's own fact, orphaning its allocations from the next commit's
- * projection and corrupting an UNRELATED sell's/lot's numbers. See this
- * module's regression tests ("a second sell sharing another's exact value
- * never merges with it").
+ * The SellExecution fact is ADOPTED, not always freshly written: this ticker
+ * may already have a live SellExecution fact for this exact sell (ticker/
+ * date/shares/price) sitting in the log — the one `recordImportedRawTransactions`
+ * wrote at extraction time, correctly sourced from the real originating
+ * document (e.g. "official-broker-excel"). `findUnclaimedSellExecutionFact`
+ * (rawTransactionFolds.ts) finds it, and this function reuses its id instead
+ * of minting a new fact that would otherwise have to guess or hardcode a
+ * source — this is the single, universal fix for a whole class of bug: a
+ * ticker whose ENTIRE history should be traceable to one document silently
+ * lost that provenance the moment ANY sell got allocated, regardless of
+ * which specific ticker or how the ticker's Buy side was recorded (see
+ * reconciliation.ts's isTickerFullyOfficialBrokerExcelSourced, and the
+ * "needs corroborating evidence" regression this fixes for every affected
+ * ticker at once, not one at a time).
  *
- * The fact's `source` is `input.source` when the caller provided one (the
- * originating parsed candidate's own document type — e.g.
- * "official-broker-excel") and falls back to "manual" only when it didn't
- * (a genuinely user-typed sell). This was the real, business-logic root
- * cause of a ticker showing "needs corroborating evidence" after a fully
- * broker-Excel-sourced import was verified AND allocated: this fact used to
- * hardcode "manual" unconditionally, so the moment ANY sell got allocated
- * through this path, its RawTransaction fact silently lost the candidate's
- * real provenance — breaking isTickerFullyOfficialBrokerExcelSourced's
- * "every live fact for this ticker is Excel-sourced" check, no matter how
- * the ticker's Buy side was recorded. Threading the source through (instead
- * of trying to look it up from an already-written fact by value, which is
- * exactly the fragile approach the doc comment above already rejected) never
- * risks the coincidence-collision regression described above.
+ * Only when NO unclaimed match exists does this write a genuinely fresh
+ * fact, using `input.source` when the caller provided one (a fallback layer,
+ * for the rare case the extraction-time write itself failed) or "manual"
+ * (a genuinely user-typed sell with no candidate behind it at all).
  *
- * `sellExecutionId`/`lotRef` reference the real RawTransaction ids
- * (`sellGroupId` for the sell itself, `resolveLotRef` for each closed lot)
- * instead of a recomputed canonical key — real ids are always unique, so
- * two coincidentally-identical sells/lots can never be conflated by the
- * Allocation Engine, which resolves a reference by real id first (see
- * allocationEngine.indexEventsByReference) and only falls back to the
- * value-keyed identity for decisions written before this fix.
+ * An EARLIER version of this exact idea (match by value, adopt if found)
+ * caused a real regression: it had no notion of a fact already being
+ * "claimed" by a previous sell, so two genuinely different sells sharing the
+ * same value (same-price same-day orders are routine) silently merged onto
+ * the SAME fact, orphaning the second sell's allocations. `sellExecutionId`
+ * in the SellAllocationDecision below is what makes a fact "claimed" —
+ * findUnclaimedSellExecutionFact excludes any fact a live decision already
+ * points at, so a second same-value sell correctly falls through to minting
+ * its own fact instead of reusing (and silently merging into) the first
+ * sell's. See this module's regression tests ("a second sell sharing
+ * another's exact value never merges with it").
+ *
+ * `lotRef` still references the real RawTransaction ids (via `resolveLotRef`
+ * for each closed lot) instead of a recomputed canonical key — real ids are
+ * always unique, so two coincidentally-identical lots can never be
+ * conflated by the Allocation Engine, which resolves a reference by real id
+ * first (see allocationEngine.indexEventsByReference) and only falls back to
+ * the value-keyed identity for decisions written before this fix.
  */
 async function ensureSellFacts(
   repos: CommitEngineRepos & Partial<AppRepositories>,
@@ -608,14 +610,24 @@ async function ensureSellFacts(
     notes: createdAllocations[0].notes,
     exitReason: createdAllocations[0].exitReason,
   };
-  await appendAndMaybeCommit(
-    repos,
-    createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: input.source ?? "manual", portfolioId: input.portfolioId, ticker, payload })
-  );
 
   const all = await repos.rawTransactions.getAll();
+  const existingFact = findUnclaimedSellExecutionFact(all, {
+    ticker,
+    executionDate: input.executionDate,
+    shares: totalShares,
+    price,
+  });
+  const sellExecutionId = existingFact?.id ?? sellGroupId;
+  if (!existingFact) {
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: input.source ?? "manual", portfolioId: input.portfolioId, ticker, payload })
+    );
+  }
+
   const decisionPayload: SellAllocationDecisionPayload = {
-    sellExecutionId: sellGroupId,
+    sellExecutionId,
     allocations: createdAllocations.map((a, i) => ({
       lotRef: resolveLotRef(all, closedTrades[i]),
       shares: a.sharesClosed,

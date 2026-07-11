@@ -10,7 +10,7 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { verifyAll } from "./verificationEngine";
 import { generateLedgerEvents } from "./ledgerEngine";
 import { generateAllocations } from "./allocationEngine";
-import { isRetracted } from "./rawTransactionFolds";
+import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
 import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } from "./ledgerProjection";
 
 /**
@@ -60,28 +60,9 @@ function resolveCurrentPortfolioId(all: RawTransaction[], transaction: RawTransa
   return (latest.payload as PortfolioAssignmentPayload).portfolioId;
 }
 
-/**
- * Same fold rule as resolveCurrentPortfolioId, generalized to a second
- * field: a transaction's own `ticker` is set once at write time and never
- * changes (immutability) — a later correction (e.g. fixing an OCR-garbled
- * ticker) is its own separate Correction raw transaction referencing the
- * original by id, not an edit to it. `excludeCorrectionId` resolves what the
- * ticker was immediately BEFORE one specific correction landed, so a caller
- * reacting to that correction's arrival can tell which two tickers' caches
- * need re-deriving (see appendAndMaybeCommit's Correction branch).
- */
-function resolveCurrentTicker(all: RawTransaction[], transaction: RawTransaction, excludeCorrectionId?: string): string | undefined {
-  const corrections = all.filter(
-    (t) =>
-      t.kind === "Correction" &&
-      t.id !== excludeCorrectionId &&
-      (t.payload as CorrectionPayload).targetId === transaction.id &&
-      (t.payload as CorrectionPayload).patch.ticker !== undefined
-  );
-  if (corrections.length === 0) return transaction.ticker;
-  const latest = corrections.reduce((a, b) => (b.seq > a.seq ? b : a));
-  return (latest.payload as CorrectionPayload).patch.ticker;
-}
+// resolveCurrentTicker moved to rawTransactionFolds.ts (a shared leaf module)
+// so reconciliation.ts's isTickerFullyOfficialBrokerExcelSourced can fold
+// through a ticker correction too, without this file depending on that one.
 
 /** Exported for lotManager.ts, which needs the identical "what facts currently belong to this ticker" resolution (portfolio/ticker folds, retraction exclusion) but reads ALL of them regardless of import-verification verdict — a Lot Manager action is the user's own direct, deliberate statement, not an OCR read awaiting corroboration. */
 export async function relevantTradeTransactions(repos: CommitEngineRepos, portfolioId: string, ticker: string) {
