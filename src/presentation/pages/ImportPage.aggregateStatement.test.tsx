@@ -70,6 +70,7 @@ vi.mock("@presentation/lib/data", () => ({
       },
     },
     timeline: { getAll: () => Promise.resolve([]), save: () => Promise.resolve(), delete: () => Promise.resolve() },
+    rawTransactions: { getAll: () => Promise.resolve([]) },
     uploads: {
       getAll: () => Promise.resolve([]),
       getByHash: () => Promise.resolve(undefined),

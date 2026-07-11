@@ -23,6 +23,7 @@ import {
   findDateMisreadDuplicateHints,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
+import { isTickerFullyOfficialBrokerExcelSourced } from "@application/services/reconciliation";
 import {
   orderEvidenceContentKey,
   findOrderConfirmedKeys,
@@ -194,6 +195,13 @@ export function ImportPage() {
   const existingTrades = existingTradesRaw ?? [];
   const existingAllocationsRaw = useLiveQuery(() => repos.allocations.getAll(), []);
   const existingAllocations = existingAllocationsRaw ?? [];
+  // The legacy Trade/TradeAllocation entities carry no provenance field at
+  // all — this is the only way to know a ticker's ALREADY-COMMITTED history
+  // (as opposed to this batch's still-pending candidates) came entirely from
+  // the official broker Excel export (see tickerMatchStatuses below, and
+  // reconciliation.ts's own doc comment on isTickerFullyOfficialBrokerExcelSourced).
+  const existingRawTransactionsRaw = useLiveQuery(() => repos.rawTransactions.getAll(), []);
+  const existingRawTransactions = existingRawTransactionsRaw ?? [];
   // Ground truth for the verification gate below — a broker "My Position"
   // screenshot accepted in an earlier session still counts as this ticker's
   // reference even if this batch re-extracts more buys/sells for it.
@@ -1394,9 +1402,22 @@ export function ImportPage() {
       const remainingBuysAndSells = [...remainingBuys, ...remainingSells];
       const allPendingFromInvoice =
         remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
+      // While rows are still pending, only trust THIS batch's own sourcing —
+      // never let the ticker's past history override a genuinely new,
+      // not-yet-verified row from a different source (e.g. a fresh
+      // screenshot-sourced buy on a ticker whose OLDER history happens to be
+      // Excel-sourced must still go through ordinary verification). Only
+      // once nothing is left pending at all (already fully committed, this
+      // session or an earlier one) does the ticker's full committed history
+      // matter — a closed position with zero remaining pending rows would
+      // otherwise fall through to checkTickerMatch's "closed-position, no
+      // corroboration" branch purely because there's nothing left pending to
+      // check the source of, even though every real transaction behind it
+      // came from the broker's own official export.
       const allPendingFromOfficialBrokerExcel =
-        remainingBuysAndSells.length > 0 &&
-        remainingBuysAndSells.every((e) => e.candidate.source === "official-broker-excel");
+        remainingBuysAndSells.length > 0
+          ? remainingBuysAndSells.every((e) => e.candidate.source === "official-broker-excel")
+          : isTickerFullyOfficialBrokerExcelSourced(existingRawTransactions, ticker);
       const allPendingSelfVerified =
         remainingBuysAndSells.length > 0 &&
         remainingBuysAndSells.every(
@@ -1452,6 +1473,7 @@ export function ImportPage() {
     dismissedKeys,
     existingTrades,
     existingVerifications,
+    existingRawTransactions,
     crossVerifiedKeys,
     aggregateConfirmedKeys,
     orderConfirmedKeys,
