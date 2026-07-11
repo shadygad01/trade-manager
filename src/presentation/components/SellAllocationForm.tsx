@@ -32,6 +32,8 @@ interface SellAllocationFormProps {
     executionTime?: string;
     /** Broker-assigned unique execution ID for this sell (e.g. Thndr's Invoice "Transaction No.") carried over from the parsed candidate, if the source document had one — see TradeAllocation.transactionNumber. */
     transactionNumber?: string;
+    /** Which document type this sell was actually read from, carried over from the parsed candidate — see RecordSellInput.source's own doc comment for why this must be threaded through rather than defaulted. Undefined for a sell with no parsed candidate behind it (e.g. the Lot Manager's own manual entry). */
+    source?: RecordSellInput["source"];
   };
 }
 
@@ -186,6 +188,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, pend
         executionDate,
         executionTime,
         transactionNumber: initial?.transactionNumber,
+        source: initial?.source,
       };
 
       const result = await recordSell(repos, input);

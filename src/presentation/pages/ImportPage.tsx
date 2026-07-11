@@ -1996,6 +1996,7 @@ export function ImportPage() {
               executionDate: sellCandidate.candidate.date,
               executionTime: sellCandidate.candidate.time,
               transactionNumber: sellCandidate.candidate.transactionNumber,
+              source: sellCandidate.candidate.source,
             }}
             onDone={(created) => {
               importSession.update((prev) => ({
