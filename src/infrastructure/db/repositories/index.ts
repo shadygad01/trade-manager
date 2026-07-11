@@ -8,6 +8,7 @@ import { DexieVerificationRepository } from "./DexieVerificationRepository";
 import { DexieUploadRepository } from "./DexieUploadRepository";
 import { DexieRawTransactionRepository } from "./DexieRawTransactionRepository";
 import { DexieCommittedLedgerRepository } from "./DexieCommittedLedgerRepository";
+import { DexiePendingExecutionRepository } from "./DexiePendingExecutionRepository";
 
 export { DexiePortfolioRepository } from "./DexiePortfolioRepository";
 export { DexieTradeRepository } from "./DexieTradeRepository";
@@ -18,6 +19,7 @@ export { DexieVerificationRepository } from "./DexieVerificationRepository";
 export { DexieUploadRepository } from "./DexieUploadRepository";
 export { DexieRawTransactionRepository } from "./DexieRawTransactionRepository";
 export { DexieCommittedLedgerRepository } from "./DexieCommittedLedgerRepository";
+export { DexiePendingExecutionRepository } from "./DexiePendingExecutionRepository";
 
 export interface Repositories {
   portfolios: DexiePortfolioRepository;
@@ -29,6 +31,7 @@ export interface Repositories {
   uploads: DexieUploadRepository;
   rawTransactions: DexieRawTransactionRepository;
   committedLedger: DexieCommittedLedgerRepository;
+  pendingExecutions: DexiePendingExecutionRepository;
 }
 
 export function createRepositories(database: PortfolioOsDatabase = sharedDb): Repositories {
@@ -42,5 +45,6 @@ export function createRepositories(database: PortfolioOsDatabase = sharedDb): Re
     uploads: new DexieUploadRepository(database),
     rawTransactions: new DexieRawTransactionRepository(database),
     committedLedger: new DexieCommittedLedgerRepository(database),
+    pendingExecutions: new DexiePendingExecutionRepository(database),
   };
 }

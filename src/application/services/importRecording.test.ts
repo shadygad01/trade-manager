@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { recordImportedRawTransactions } from "./importRecording";
 import { createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
-import type { ParsedTradeCandidate, ParsedDividendCandidate, ParsedOrderEvidence } from "@domain/entities/Upload";
+import type { ParsedTradeCandidate, ParsedDividendCandidate, ParsedOrderEvidence, ParsedCancelledOrder } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
-import type { BuyExecutionPayload, SellExecutionPayload, PositionVerificationCapturePayload, DividendPaymentPayload, OrderEvidenceCapturePayload } from "@domain/entities/RawTransaction";
+import type { BuyExecutionPayload, SellExecutionPayload, PositionVerificationCapturePayload, DividendPaymentPayload, OrderEvidenceCapturePayload, CancelledOrderPayload } from "@domain/entities/RawTransaction";
 import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
 
 function buyCandidate(overrides: Partial<ParsedTradeCandidate> = {}): ParsedTradeCandidate {
@@ -27,7 +27,7 @@ describe("recordImportedRawTransactions", () => {
       candidates: [{ key: "k1", candidate: buyCandidate({ confidence: "high", source: "invoice" }) }],
       verifications: [],
       dividends: [],
-      orderEvidences: [],
+      cancelledOrders: [], orderEvidences: [],
     });
 
     const all = await rawTransactions.getAll();
@@ -51,7 +51,7 @@ describe("recordImportedRawTransactions", () => {
       candidates: [{ key: "k1", candidate: buyCandidate({ side: "SELL", price: 50 }) }],
       verifications: [],
       dividends: [],
-      orderEvidences: [],
+      cancelledOrders: [], orderEvidences: [],
     });
 
     const [txn] = await rawTransactions.getAll();
@@ -66,7 +66,7 @@ describe("recordImportedRawTransactions", () => {
       candidates: [{ key: "k1", candidate: buyCandidate({ source: undefined }) }],
       verifications: [],
       dividends: [],
-      orderEvidences: [],
+      cancelledOrders: [], orderEvidences: [],
     });
     expect((await rawTransactions.getAll())[0].source).toBe("statement");
   });
@@ -77,7 +77,7 @@ describe("recordImportedRawTransactions", () => {
       candidates: [{ key: "session-key-42", candidate: buyCandidate() }],
       verifications: [],
       dividends: [],
-      orderEvidences: [],
+      cancelledOrders: [], orderEvidences: [],
     });
     const [txn] = await rawTransactions.getAll();
     expect(txn.id).toBe("session-key-42");
@@ -90,7 +90,7 @@ describe("recordImportedRawTransactions", () => {
       candidates: [],
       verifications: [],
       dividends: [],
-      orderEvidences: [{ key: "evidence-key-7", evidence }],
+      cancelledOrders: [], orderEvidences: [{ key: "evidence-key-7", evidence }],
     });
     const [txn] = await rawTransactions.getAll();
     expect(txn.id).toBe("evidence-key-7");
@@ -98,7 +98,7 @@ describe("recordImportedRawTransactions", () => {
 
   it("appends a PositionVerificationCapture per verification, sourced as position-verification", async () => {
     const verification: Omit<PositionVerification, "id" | "portfolioId"> = { ticker: "HRHO", units: 200, avgCost: 18.2, capturedAt: "2026-02-10T00:00", source: "screenshot" };
-    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [verification], dividends: [], orderEvidences: [] });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [verification], dividends: [], cancelledOrders: [], orderEvidences: [] });
 
     const [txn] = await rawTransactions.getAll();
     expect(txn.kind).toBe("PositionVerificationCapture");
@@ -108,7 +108,7 @@ describe("recordImportedRawTransactions", () => {
 
   it("appends a DividendPayment per dividend", async () => {
     const dividend: ParsedDividendCandidate = { ticker: "COMI", date: "2026-01-20", amount: 350 };
-    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [], dividends: [dividend], orderEvidences: [] });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [], dividends: [dividend], cancelledOrders: [], orderEvidences: [] });
 
     const [txn] = await rawTransactions.getAll();
     expect(txn.kind).toBe("DividendPayment");
@@ -117,7 +117,7 @@ describe("recordImportedRawTransactions", () => {
 
   it("appends an OrderEvidenceCapture per order-history row, sourced as orders-timeline", async () => {
     const evidence: ParsedOrderEvidence = { ticker: "COMI", side: "BUY", totalValue: 4550, status: "fulfilled" };
-    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [], dividends: [], orderEvidences: [{ key: "k1", evidence }] });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [{ key: "k1", evidence }] });
 
     const [txn] = await rawTransactions.getAll();
     expect(txn.kind).toBe("OrderEvidenceCapture");
@@ -134,14 +134,41 @@ describe("recordImportedRawTransactions", () => {
       ],
       verifications: [{ ticker: "COMI", units: 100, capturedAt: "2026-02-10T00:00", source: "screenshot" }],
       dividends: [{ ticker: "COMI", date: "2026-01-20", amount: 100 }],
-      orderEvidences: [{ key: "k3", evidence: { ticker: "COMI", side: "BUY", totalValue: 4550, status: "fulfilled" } }],
+      cancelledOrders: [], orderEvidences: [{ key: "k3", evidence: { ticker: "COMI", side: "BUY", totalValue: 4550, status: "fulfilled" } }],
     });
     expect(await rawTransactions.getAll()).toHaveLength(5);
   });
 
   it("an empty batch appends nothing", async () => {
-    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [], dividends: [], orderEvidences: [] });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "upload-1", candidates: [], verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [] });
     expect(await rawTransactions.getAll()).toEqual([]);
+  });
+
+  it("appends a CancelledOrder per fully-cancelled order, preserving the broker's own status text — never a BuyExecution/SellExecution", async () => {
+    const cancelledOrder: ParsedCancelledOrder = {
+      ticker: "abuk",
+      side: "SELL",
+      originalShares: 190,
+      originalPrice: 41.17,
+      date: "2026-02-26",
+      brokerStatus: "Cancelled",
+      source: "orders-screen",
+    };
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "upload-1",
+      candidates: [],
+      verifications: [],
+      dividends: [],
+      orderEvidences: [],
+      cancelledOrders: [cancelledOrder],
+    });
+
+    const [txn] = await rawTransactions.getAll();
+    expect(txn.kind).toBe("CancelledOrder");
+    expect(txn.source).toBe("orders-screen");
+    expect(txn.ticker).toBe("ABUK");
+    const payload = txn.payload as CancelledOrderPayload;
+    expect(payload).toMatchObject({ ticker: "ABUK", side: "SELL", originalShares: 190, originalPrice: 41.17, date: "2026-02-26", brokerStatus: "Cancelled" });
   });
 
   it("never triggers a commit — every row Import writes is unassigned to a portfolio, so the reactive trigger stays correctly inert", async () => {
@@ -155,7 +182,7 @@ describe("recordImportedRawTransactions", () => {
       ],
       verifications: [],
       dividends: [],
-      orderEvidences: [],
+      cancelledOrders: [], orderEvidences: [],
     });
     expect(await committedLedger.getLedgerEvents("any-portfolio", "COMI")).toEqual([]);
   });

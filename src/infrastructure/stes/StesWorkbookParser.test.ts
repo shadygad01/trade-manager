@@ -31,6 +31,7 @@ const OBS_HEADERS = [
   "Execution Number",
   "Extraction Confidence",
   "Extraction Notes",
+  "Order Status",
 ];
 
 const DOC_HEADERS = [
@@ -64,6 +65,7 @@ interface ObsInput {
   transactionReference?: string;
   confidence?: string;
   notes?: string;
+  orderStatus?: string;
 }
 
 function obsRow(o: ObsInput): Cell[] {
@@ -93,6 +95,7 @@ function obsRow(o: ObsInput): Cell[] {
     null,
     o.confidence ?? null,
     o.notes ?? null,
+    o.orderStatus ?? null,
   ];
 }
 
@@ -284,6 +287,84 @@ describe("parseStesWorkbook — Extraction Notes: needsConfirmation", () => {
     const result = await parseStesWorkbook(buffer);
     expect(result.candidates[0].needsConfirmation).toBeUndefined();
     expect(result.candidates[1].needsConfirmation).toBeUndefined();
+  });
+
+  it("Order Status = 'Partially filled' flags needsConfirmation and preserves the broker's own status text", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "ORDERS_SCREEN")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "SELL", ticker: "ABUK", date: "2026-02-26", quantity: 29, price: 41.17, orderStatus: "Partially filled, canceled" }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].needsConfirmation).toBe(true);
+    expect(result.candidates[0].brokerStatus).toBe("Partially filled, canceled");
+  });
+
+  it("Order Status = 'Partial fill' also flags needsConfirmation (any 'partial' status, not just the literal Extraction Notes convention)", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "ORDERS_SCREEN")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "BUY", ticker: "HRHO", date: "2026-06-24", quantity: 15, price: 26.98, orderStatus: "Partial fill" }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.candidates[0].needsConfirmation).toBe(true);
+  });
+
+  it("Order Status = 'Fulfilled' (or blank) imports as an ordinary candidate — no confirmation needed", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "STATEMENT")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "BUY", ticker: "COMI", date: "2026-03-02", quantity: 10, price: 5, orderStatus: "Fulfilled" }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.candidates[0].needsConfirmation).toBeUndefined();
+    expect(result.candidates[0].brokerStatus).toBeUndefined();
+  });
+});
+
+describe("parseStesWorkbook — Order Status: CANCELLED", () => {
+  it("Order Status = 'Cancelled' becomes a cancelledOrder, never a trade candidate — Quantity/Price aren't required", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "ORDERS_SCREEN")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "SELL", ticker: "ABUK", date: "2026-02-26", orderStatus: "Cancelled" }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.candidates).toHaveLength(0);
+    expect(result.cancelledOrders).toHaveLength(1);
+    expect(result.cancelledOrders[0]).toMatchObject({ ticker: "ABUK", side: "SELL", date: "2026-02-26", brokerStatus: "Cancelled" });
+  });
+
+  it("still records original Quantity/Price when the row does include them, for audit context only", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "ORDERS_SCREEN")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "BUY", ticker: "HRHO", date: "2026-06-24", quantity: 190, price: 41.17, orderStatus: "Cancelled" }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.cancelledOrders[0].originalShares).toBe(190);
+    expect(result.cancelledOrders[0].originalPrice).toBe(41.17);
+  });
+
+  it("a Cancelled row never affects Ledger/Holdings by never becoming a candidate — mixed with a real BUY, only the BUY is a candidate", async () => {
+    const buffer = buildWorkbook({
+      documents: [doc("DOC-01", "STATEMENT")],
+      observations: [
+        obsRow({ id: "OBS-0001", doc: "DOC-01", type: "BUY", ticker: "COMI", date: "2026-03-02", quantity: 10, price: 5 }),
+        obsRow({ id: "OBS-0002", doc: "DOC-01", type: "SELL", ticker: "ABUK", date: "2026-02-26", orderStatus: "Cancelled" }),
+      ],
+    });
+    const result = await parseStesWorkbook(buffer);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].ticker).toBe("COMI");
+    expect(result.cancelledOrders).toHaveLength(1);
+    expect(result.cancelledOrders[0].ticker).toBe("ABUK");
   });
 });
 

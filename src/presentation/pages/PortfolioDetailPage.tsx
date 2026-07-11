@@ -3,7 +3,8 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { useParams, Link } from "wouter";
 import { Banknote, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser, FileWarning, Upload } from "lucide-react";
 import { repos, getImportOrchestrator } from "@presentation/lib/data";
-import { deleteTrade, confirmPendingBuy, confirmPendingSell } from "@application/services/TradeService";
+import { deleteTrade } from "@application/services/TradeService";
+import { confirmPendingExecution } from "@application/services/pendingExecutions";
 import { computeCanonicalPositions } from "@application/services/canonicalHoldings";
 import {
   setCash,
@@ -15,8 +16,9 @@ import {
   unarchivePortfolio,
   renamePortfolio,
 } from "@application/services/PortfolioService";
-import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations, type PendingConfirmation } from "@application/services/reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds } from "@application/services/reconciliation";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import type { PendingExecution } from "@domain/entities/PendingExecution";
 import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
 import { PageHeader } from "@presentation/components/PageHeader";
@@ -25,6 +27,7 @@ import { EmptyState } from "@presentation/components/EmptyState";
 import { Modal } from "@presentation/components/Modal";
 import { StatTile } from "@presentation/components/StatTile";
 import { CapitalDeploymentFlow } from "@presentation/components/CapitalDeploymentFlow";
+import { SellAllocationForm } from "@presentation/components/SellAllocationForm";
 import { formatDate, formatMoney, formatPercent, formatShares, signClass } from "@presentation/lib/format";
 import { useT } from "@presentation/i18n/translations";
 
@@ -43,6 +46,7 @@ export function PortfolioDetailPage() {
   const [clearingAll, setClearingAll] = useState(false);
   const [confirming, setConfirming] = useState<Record<string, boolean>>({});
   const [confirmError, setConfirmError] = useState<Record<string, string | undefined>>({});
+  const [allocatingPendingExecution, setAllocatingPendingExecution] = useState<PendingExecution | null>(null);
   // Deleting a trade doesn't reliably retrigger dexie-react-hooks' liveQuery
   // for this page's positions/reconciliation (a pre-existing gap, not
   // specific to this action) — bumping this forces both queries to
@@ -65,15 +69,21 @@ export function PortfolioDetailPage() {
     return reconcilePositions(positions, verifications, trades, allocations);
   }, [id, positions, refreshKey]);
   const reconciliationByTicker = new Map((reconciliations ?? []).map((r) => [r.ticker, r]));
-  const pendingConfirmations = useLiveQuery(async (): Promise<PendingConfirmation[]> => {
-    const [trades, allocations] = await Promise.all([repos.trades.getByPortfolio(id), repos.allocations.getByPortfolio(id)]);
-    return findPendingConfirmations(trades, allocations);
-  }, [id, refreshKey]);
-  const pendingConfirmationsByTicker = new Map<string, PendingConfirmation[]>();
-  for (const item of pendingConfirmations ?? []) {
-    const list = pendingConfirmationsByTicker.get(item.ticker) ?? [];
+  // Every PendingExecution still short of a Ledger Entry — includes both
+  // verificationStatus: "needs-confirmation" (invoice not uploaded yet) and
+  // "verified" (BUY already ledgered by confirmPendingExecution; a SELL
+  // stays here until its explicit lot allocation completes — see
+  // pendingExecutions.ts's own doc comment for why). Never reads
+  // Trade/TradeAllocation — this table doesn't exist there until execution.
+  const pendingExecutions = useLiveQuery(
+    () => repos.pendingExecutions.getByPortfolio(id).then((rows) => rows.filter((r) => r.executionStatus !== "executed")),
+    [id, refreshKey]
+  );
+  const pendingExecutionsByTicker = new Map<string, PendingExecution[]>();
+  for (const item of pendingExecutions ?? []) {
+    const list = pendingExecutionsByTicker.get(item.ticker) ?? [];
     list.push(item);
-    pendingConfirmationsByTicker.set(item.ticker, list);
+    pendingExecutionsByTicker.set(item.ticker, list);
   }
   const timelineEvents = useLiveQuery(() => repos.timeline.getByPortfolio(id), [id]);
 
@@ -85,9 +95,9 @@ export function PortfolioDetailPage() {
    * clicking its upload control; a ticker/side mismatch or an ambiguous read
    * surfaces a clear error instead of guessing which candidate to trust.
    */
-  async function handleUploadInvoice(item: PendingConfirmation, file: File) {
-    setConfirmError((prev) => ({ ...prev, [item.refId]: undefined }));
-    setConfirming((prev) => ({ ...prev, [item.refId]: true }));
+  async function handleUploadInvoice(item: PendingExecution, file: File) {
+    setConfirmError((prev) => ({ ...prev, [item.id]: undefined }));
+    setConfirming((prev) => ({ ...prev, [item.id]: true }));
     try {
       const orchestrator = await getImportOrchestrator();
       const result = await orchestrator.importFile(file);
@@ -104,23 +114,24 @@ export function PortfolioDetailPage() {
         throw new Error(t("portfolioDetail.confirmInvoiceAmbiguous", { ticker: item.ticker }));
       }
       const candidate = matches[0];
-      const confirmed = {
+      const { pendingExecution } = await confirmPendingExecution(repos, item.id, {
         shares: candidate.shares,
         price: candidate.price,
         fees: candidate.fees,
         taxes: candidate.taxes,
         transactionNumber: candidate.transactionNumber,
-      };
-      if (item.side === "BUY") {
-        await confirmPendingBuy(repos, item.refId, confirmed);
-      } else {
-        await confirmPendingSell(repos, item.refId, confirmed);
+      });
+      if (pendingExecution.side === "SELL") {
+        // Verified, but a SELL still needs its explicit lot allocation
+        // (ADR-002) — open it immediately so confirming and allocating read
+        // as one continuous action instead of a second silent click.
+        setAllocatingPendingExecution(pendingExecution);
       }
       setRefreshKey((k) => k + 1);
     } catch (e) {
-      setConfirmError((prev) => ({ ...prev, [item.refId]: e instanceof Error ? e.message : t("portfolioDetail.confirmInvoiceFailed") }));
+      setConfirmError((prev) => ({ ...prev, [item.id]: e instanceof Error ? e.message : t("portfolioDetail.confirmInvoiceFailed") }));
     } finally {
-      setConfirming((prev) => ({ ...prev, [item.refId]: false }));
+      setConfirming((prev) => ({ ...prev, [item.id]: false }));
     }
   }
 
@@ -411,32 +422,43 @@ export function PortfolioDetailPage() {
                     </td>
                     <td className="px-4 py-2.5 text-end tabular-nums text-slate-400">{p.openTrades.length}</td>
                     <td className="px-4 py-2.5">
-                      {pendingConfirmationsByTicker.get(p.ticker)?.length ? (
+                      {pendingExecutionsByTicker.get(p.ticker)?.length ? (
                         <div className="flex flex-col gap-1.5">
-                          {pendingConfirmationsByTicker.get(p.ticker)!.map((item) => (
-                            <div key={item.refId} className="flex flex-col gap-1 rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5">
+                          {pendingExecutionsByTicker.get(p.ticker)!.map((item) => (
+                            <div key={item.id} className="flex flex-col gap-1 rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5">
                               <span className="flex items-center gap-1 text-xs text-cyan-300">
-                                <FileWarning size={13} /> {t("portfolioDetail.needsConfirmation")}
+                                <FileWarning size={13} />
+                                {item.verificationStatus === "verified" ? t("portfolioDetail.readyToAllocate") : t("portfolioDetail.needsConfirmation")}
                               </span>
                               <span className="text-[11px] tabular-nums text-slate-400">
-                                {item.side} {formatShares(item.shares)} {t("portfolioDetail.shSuffix")} @ {formatMoney(item.price)} · {formatDate(item.date)}
+                                {item.side} {formatShares(item.originalShares)} {t("portfolioDetail.shSuffix")} @ {formatMoney(item.originalPrice)} · {formatDate(item.executionDate)}
+                                <span className="ms-1 opacity-70">({item.brokerStatus})</span>
                               </span>
-                              <label className="inline-flex w-fit cursor-pointer items-center gap-1 rounded border border-cyan-500/40 px-2 py-1 text-[11px] text-cyan-300 hover:bg-cyan-500/10">
-                                <Upload size={11} />
-                                {confirming[item.refId] ? t("portfolioDetail.confirming") : t("portfolioDetail.uploadInvoice")}
-                                <input
-                                  type="file"
-                                  accept="image/*,.pdf,.csv,.xlsx"
-                                  className="hidden"
-                                  disabled={confirming[item.refId]}
-                                  onChange={(e) => {
-                                    const file = e.target.files?.[0];
-                                    e.target.value = "";
-                                    if (file) void handleUploadInvoice(item, file);
-                                  }}
-                                />
-                              </label>
-                              {confirmError[item.refId] ? <p className="text-[11px] text-rose-400">{confirmError[item.refId]}</p> : null}
+                              {item.verificationStatus === "verified" ? (
+                                <button
+                                  onClick={() => setAllocatingPendingExecution(item)}
+                                  className="inline-flex w-fit items-center gap-1 rounded border border-cyan-500/40 px-2 py-1 text-[11px] text-cyan-300 hover:bg-cyan-500/10"
+                                >
+                                  {t("portfolioDetail.allocateSell")}
+                                </button>
+                              ) : (
+                                <label className="inline-flex w-fit cursor-pointer items-center gap-1 rounded border border-cyan-500/40 px-2 py-1 text-[11px] text-cyan-300 hover:bg-cyan-500/10">
+                                  <Upload size={11} />
+                                  {confirming[item.id] ? t("portfolioDetail.confirming") : t("portfolioDetail.uploadInvoice")}
+                                  <input
+                                    type="file"
+                                    accept="image/*,.pdf,.csv,.xlsx"
+                                    className="hidden"
+                                    disabled={confirming[item.id]}
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      e.target.value = "";
+                                      if (file) void handleUploadInvoice(item, file);
+                                    }}
+                                  />
+                                </label>
+                              )}
+                              {confirmError[item.id] ? <p className="text-[11px] text-rose-400">{confirmError[item.id]}</p> : null}
                             </div>
                           ))}
                         </div>
@@ -562,6 +584,34 @@ export function PortfolioDetailPage() {
         currentName={portfolio.name}
         onClose={() => setRenameOpen(false)}
       />
+
+      <Modal
+        title={t("portfolioDetail.allocateSellModalTitle", { ticker: allocatingPendingExecution?.ticker ?? "" })}
+        open={allocatingPendingExecution !== null}
+        onClose={() => setAllocatingPendingExecution(null)}
+        widthClassName="max-w-2xl"
+      >
+        {allocatingPendingExecution ? (
+          <SellAllocationForm
+            portfolioId={allocatingPendingExecution.portfolioId}
+            ticker={allocatingPendingExecution.ticker}
+            pendingExecutionId={allocatingPendingExecution.id}
+            initial={{
+              exitPrice: allocatingPendingExecution.confirmedPrice,
+              fees: allocatingPendingExecution.confirmedFees ?? 0,
+              taxes: allocatingPendingExecution.confirmedTaxes ?? 0,
+              executionDate: allocatingPendingExecution.executionDate,
+              executionTime: allocatingPendingExecution.executionTime,
+              transactionNumber: allocatingPendingExecution.transactionNumber,
+            }}
+            onDone={() => {
+              setAllocatingPendingExecution(null);
+              setRefreshKey((k) => k + 1);
+            }}
+            onCancel={() => setAllocatingPendingExecution(null)}
+          />
+        ) : null}
+      </Modal>
     </div>
   );
 }

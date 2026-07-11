@@ -1,4 +1,4 @@
-import type { ParsedDividendCandidate, ParsedOrderEvidence, ParsedTradeCandidate } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedOrderEvidence, ParsedTradeCandidate, ParsedCancelledOrder } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import type { ExtractionMethod } from "@domain/entities/RawTransaction";
 import { extractPdfText } from "./pdfText";
@@ -22,6 +22,8 @@ export interface ImportResult {
   dividends: ParsedDividendCandidate[];
   /** Per-order corroborating evidence read from an account-wide "Orders" timeline screen — undated, so never trade candidates (see ParsedOrderEvidence). */
   orderEvidences: ParsedOrderEvidence[];
+  /** Fully-cancelled orders (STES `Order Status` containing "cancel" but not "partial") — audit trail only, never a trade candidate. Always empty outside the STES path today. */
+  cancelledOrders: ParsedCancelledOrder[];
   rawText: string;
   warnings: string[];
   /** SHA-256 hex digest of the file's bytes — callers persisting an Upload entity use this for its fileHash field / per-file dedup. */
@@ -74,13 +76,14 @@ export class ImportOrchestrator {
     // the evidence graph) treats an STES upload as just another document.
     if (isStesWorkbookFile(file)) {
       const stes = await parseStesWorkbook(buffer);
-      const hasRows = stes.candidates.length > 0 || stes.dividends.length > 0;
+      const hasRows = stes.candidates.length > 0 || stes.dividends.length > 0 || stes.cancelledOrders.length > 0;
       return {
         status: stes.ok && hasRows ? "parsed" : "failed",
         docType: "stes-workbook",
         candidates: withProvenance(stes.candidates, "stes-workbook", STES_PARSER_VERSION),
         verifications: [],
         dividends: stes.dividends,
+        cancelledOrders: stes.cancelledOrders,
         orderEvidences: [],
         rawText: stes.rawText,
         warnings:
@@ -137,6 +140,7 @@ export class ImportOrchestrator {
         candidates: [],
         verifications: [],
         dividends: [],
+        cancelledOrders: [],
         orderEvidences: [],
         rawText,
         warnings: ["No text could be read from the file — try another file."],
@@ -167,7 +171,8 @@ export class ImportOrchestrator {
             candidates: [],
             verifications: [],
             dividends: [],
-            orderEvidences: [],
+            cancelledOrders: [],
+        orderEvidences: [],
             rawText,
             warnings: ["Recognized a position screen but couldn't read the ticker/units — try a clearer screenshot."],
             fileHash,
@@ -180,7 +185,8 @@ export class ImportOrchestrator {
           candidates: [],
           verifications,
           dividends: parser.parseDividends(rawText),
-          orderEvidences: [],
+          cancelledOrders: [],
+        orderEvidences: [],
           rawText,
           warnings: [],
           fileHash,
@@ -206,7 +212,8 @@ export class ImportOrchestrator {
           candidates: [],
           verifications: [],
           dividends: [],
-          orderEvidences: [],
+          cancelledOrders: [],
+        orderEvidences: [],
           rawText,
           warnings: ["Recognized an Orders history screen but couldn't read any order rows — try a clearer or larger screenshot."],
           fileHash,
@@ -225,6 +232,7 @@ export class ImportOrchestrator {
         candidates: [],
         verifications: [],
         dividends: [],
+        cancelledOrders: [],
         orderEvidences: withProvenance(evidences, extractionMethod, parser.version),
         rawText,
         warnings,
@@ -243,7 +251,8 @@ export class ImportOrchestrator {
           candidates: withProvenance(candidates, extractionMethod, parser.version),
           verifications: [],
           dividends: [],
-          orderEvidences: [],
+          cancelledOrders: [],
+        orderEvidences: [],
           rawText,
           warnings: [],
           fileHash,
@@ -333,7 +342,8 @@ export class ImportOrchestrator {
           candidates: withProvenance(candidates, extractionMethod, parser.version),
           verifications: [],
           dividends: [],
-          orderEvidences: [],
+          cancelledOrders: [],
+        orderEvidences: [],
           rawText: rawText + rowScanLog,
           warnings,
           fileHash,
@@ -358,6 +368,7 @@ export class ImportOrchestrator {
       candidates: [],
       verifications: [],
       dividends: [],
+      cancelledOrders: [],
       orderEvidences: [],
       rawText,
       warnings: [

@@ -1,4 +1,4 @@
-import type { ParsedDividendCandidate, ParsedTradeCandidate, ParseConfidence } from "@domain/entities/Upload";
+import type { ParsedDividendCandidate, ParsedTradeCandidate, ParsedCancelledOrder, ParseConfidence } from "@domain/entities/Upload";
 import { defaultTrackedSince, isWithinTrackedRange } from "../ocr/parsers/trackedDateRange";
 
 /**
@@ -33,6 +33,8 @@ export interface StesParseResult {
   ok: boolean;
   candidates: ParsedTradeCandidate[];
   dividends: ParsedDividendCandidate[];
+  /** Fully-cancelled orders (Order Status contains "cancel" but not "partial") — audit trail only, never a trade candidate. See ParsedCancelledOrder's own doc comment. */
+  cancelledOrders: ParsedCancelledOrder[];
   warnings: string[];
   /** Plain-text rendering of the workbook's sheets, for Upload.rawText (audit/debug) — the original bytes are archived separately via Upload.fileBlob. */
   rawText: string;
@@ -161,6 +163,7 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
     ok: false,
     candidates: [],
     dividends: [],
+    cancelledOrders: [],
     warnings,
     rawText,
     documentCount: 0,
@@ -274,6 +277,7 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
 
   const candidates: ParsedTradeCandidate[] = [];
   const dividends: ParsedDividendCandidate[] = [];
+  const cancelledOrders: ParsedCancelledOrder[] = [];
   const seenObservationIds = new Set<string>();
   const trackedSince = defaultTrackedSince();
   let outOfRangeCount = 0;
@@ -366,6 +370,42 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
       reject(`Ticker "${tickerText}" is not a valid symbol (2-6 letters/digits)`);
       continue;
     }
+
+    // Order Status classifies the row into one of the three execution
+    // states this app recognizes (see docs/STANDARD_TRADING_EXCHANGE_SCHEMA.md):
+    // "cancel" without "partial" = fully cancelled (zero shares ever
+    // executed — never a trade candidate, no Quantity/Price required);
+    // "partial" (with or without "cancel", e.g. "Partially filled" /
+    // "Partially filled, canceled" / "Partial fill") = needs confirmation.
+    // The old convention (Extraction Notes = "Needs Confirmation" with no
+    // Order Status column at all) still works — a workbook generated before
+    // this column existed must keep importing unchanged.
+    const orderStatusText = asText(cell(row, "Order Status"));
+    const orderStatusLower = orderStatusText?.toLowerCase() ?? "";
+    const notesText = asText(cell(row, "Extraction Notes"));
+    const legacyNeedsConfirmation = notesText?.trim().toLowerCase() === "needs confirmation";
+    const isCancelled = /cancel/.test(orderStatusLower) && !/partial/.test(orderStatusLower);
+    const isPartialFill = /partial/.test(orderStatusLower) || legacyNeedsConfirmation;
+
+    if (isCancelled) {
+      if (!isWithinTrackedRange(date, trackedSince)) {
+        outOfRangeCount += 1;
+        continue;
+      }
+      cancelledOrders.push({
+        ticker: tickerText,
+        companyName,
+        side: typeText,
+        originalShares: asNumber(cell(row, "Quantity")),
+        originalPrice: asNumber(cell(row, "Price")),
+        date,
+        time: asTime(cell(row, "Trade Time")),
+        brokerStatus: orderStatusText ?? "Cancelled",
+        source: document.source,
+      });
+      continue;
+    }
+
     const shares = asNumber(cell(row, "Quantity"));
     if (shares === undefined || shares <= 0 || !Number.isInteger(shares)) {
       reject(`missing or invalid Quantity "${asText(cell(row, "Quantity")) ?? "(blank)"}" — expected a positive whole-share count`);
@@ -402,13 +442,6 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
       continue;
     }
 
-    // "Needs Confirmation" (per Instructions rule 16 — a partially filled
-    // execution whose final numbers await the broker invoice) is a signal to
-    // propagate, never a reason to reject: the row is a real observation and
-    // imports exactly like any other BUY/SELL, just flagged for follow-up.
-    const notesText = asText(cell(row, "Extraction Notes"));
-    const needsConfirmation = notesText?.trim().toLowerCase() === "needs confirmation" ? true : undefined;
-
     candidates.push({
       ticker: tickerText,
       companyName,
@@ -422,7 +455,8 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
       confidence,
       source: document.source,
       transactionNumber: asText(cell(row, "Transaction Reference")),
-      needsConfirmation,
+      needsConfirmation: isPartialFill ? true : undefined,
+      brokerStatus: isPartialFill ? (orderStatusText ?? "Needs Confirmation") : undefined,
     });
   }
 
@@ -439,6 +473,7 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
     ok: true,
     candidates,
     dividends,
+    cancelledOrders,
     warnings,
     rawText,
     documentCount: documents.size,

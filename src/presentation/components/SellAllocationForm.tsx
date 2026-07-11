@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { recordSell } from "@application/services/TradeService";
+import { completeSellAllocationForPendingExecution } from "@application/services/pendingExecutions";
 import { repos } from "@presentation/lib/data";
 import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -14,6 +15,15 @@ interface SellAllocationFormProps {
   /** `created.allocationIds` are the TradeAllocation ids this sell just wrote — callers that show the sell row afterward can exclude them from duplicate checks so the row never "matches" itself (see ImportPage's duplicateMatch). */
   onDone: (created?: { allocationIds: string[] }) => void;
   onCancel?: () => void;
+  /**
+   * Set only when this form is completing a verified `PendingExecution`
+   * (see PortfolioDetailPage) — the moment `recordSell` succeeds, the SAME
+   * PendingExecution row is updated (executionStatus: "executed") rather
+   * than left stuck at "pending-verification" forever. Unset for a normal
+   * sell (ImportPage's own allocation flow), which has no PendingExecution
+   * to update.
+   */
+  pendingExecutionId?: string;
   initial?: {
     exitPrice?: number;
     fees?: number;
@@ -22,8 +32,6 @@ interface SellAllocationFormProps {
     executionTime?: string;
     /** Broker-assigned unique execution ID for this sell (e.g. Thndr's Invoice "Transaction No.") carried over from the parsed candidate, if the source document had one — see TradeAllocation.transactionNumber. */
     transactionNumber?: string;
-    /** See TradeAllocation.confirmationStatus, carried over from the parsed candidate. */
-    needsConfirmation?: boolean;
   };
 }
 
@@ -33,7 +41,7 @@ interface SellAllocationFormProps {
  * no auto-FIFO suggestion — allocation across lots is always a deliberate,
  * per-trade choice, per TradeAllocation's design contract.
  */
-export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, initial }: SellAllocationFormProps) {
+export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, pendingExecutionId, initial }: SellAllocationFormProps) {
   const t = useT();
   const trackingStartDate = useTrackingStartDate();
   const normalizedTicker = normalizeTicker(ticker);
@@ -178,10 +186,12 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
         executionDate,
         executionTime,
         transactionNumber: initial?.transactionNumber,
-        needsConfirmation: initial?.needsConfirmation,
       };
 
       const result = await recordSell(repos, input);
+      if (pendingExecutionId) {
+        await completeSellAllocationForPendingExecution(repos, pendingExecutionId, result);
+      }
       onDone({ allocationIds: result.allocations.map((a) => a.id) });
     } catch (e) {
       setError(e instanceof Error ? e.message : t("sellForm.recordSellFailed"));

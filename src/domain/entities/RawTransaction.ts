@@ -28,7 +28,16 @@ export type RawTransactionKind =
   | "Note"
   | "PortfolioAssignment"
   | "Correction"
-  | "Retraction";
+  | "Retraction"
+  /**
+   * A fully-cancelled order (zero shares ever executed) imported from an
+   * STES `Transaction Type: CANCELLED` observation — audit trail only. Never
+   * a subject of `commitEngine.ts`'s Buy/Sell fold (see
+   * `relevantTradeTransactions`'s `NON_SUBJECT_KINDS`-style exclusion),
+   * never read by `TradeService`/`computePositions` — structurally
+   * incapable of creating a Ledger Entry or affecting Holdings.
+   */
+  | "CancelledOrder";
 
 export type RawTransactionSource =
   | "statement"
@@ -171,6 +180,18 @@ export interface RetractionPayload {
   reason?: string;
 }
 
+/** See `RawTransactionKind`'s `"CancelledOrder"` doc comment — a fully-cancelled order, audit trail only. */
+export interface CancelledOrderPayload {
+  ticker: string;
+  side?: "BUY" | "SELL";
+  originalShares?: number;
+  originalPrice?: number;
+  date: string;
+  time?: string;
+  brokerStatus: string;
+  companyName?: string;
+}
+
 export type RawTransactionPayload =
   | BuyExecutionPayload
   | SellExecutionPayload
@@ -185,7 +206,8 @@ export type RawTransactionPayload =
   | NotePayload
   | PortfolioAssignmentPayload
   | CorrectionPayload
-  | RetractionPayload;
+  | RetractionPayload
+  | CancelledOrderPayload;
 
 import { generateId } from "../value-objects/id";
 

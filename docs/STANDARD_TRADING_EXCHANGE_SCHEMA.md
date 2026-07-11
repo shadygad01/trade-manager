@@ -111,7 +111,8 @@ manual editing before upload regardless of how the generator wrote its cells.
 | `Transaction Reference` | Text | Optional — the most valuable traceability field | The broker's per-execution identifier, copied exactly. Becomes the fact's `transactionNumber`, the strongest same-execution signal in matching. |
 | `Order Number` / `Execution Number` | Text | Optional | As printed. |
 | `Extraction Confidence` | Enum | Optional | `HIGH`/`MEDIUM`/`LOW`; blank → MEDIUM. Maps to the fact's `confidence`; a LOW row is never hidden, only visibly cued. |
-| `Extraction Notes` | Text | Optional | The AI's honest doubts, shown at review. The exact value `Needs Confirmation` (case-insensitive) flags a partial-fill BUY/SELL — see Instructions rule 16 — and is imported with the resulting `Trade`/`TradeAllocation`'s `confirmationStatus` set to `pending`, surfaced on the Portfolio Detail page's holdings table until the broker invoice is uploaded to confirm it. |
+| `Extraction Notes` | Text | Optional | The AI's honest doubts, shown at review. Legacy compatibility: the exact value `Needs Confirmation` (case-insensitive), with `Order Status` left blank, is still treated the same as `Order Status` containing "partial" (see below) — a workbook generated before `Order Status` existed keeps importing unchanged. |
+| `Order Status` | Text | Optional | The broker's own status text, verbatim (`Fulfilled`, `Partially filled`, `Partially filled, canceled`, `Partial fill`, `Cancelled`, …) — see Instructions rules 16–17. Classifies the row into one of the three execution states this app recognizes: **containing "cancel" but not "partial"** → the row is a fully-cancelled order — `Quantity`/`Price` are not required, and the row is imported as an audit-only `CancelledOrder` fact, never a BUY/SELL candidate, never entering the ledger. **Containing "partial"** (with or without "cancel") → a partial-fill execution — imported as a normal BUY/SELL candidate, flagged `needsConfirmation`, held as a `PendingExecution` (not yet a `Trade`/`TradeAllocation`) until a broker invoice confirms its real executed shares/price, surfaced on the Portfolio Detail page's holdings table with an upload action in the meantime. **Blank or "Fulfilled"** → an ordinary candidate, imported and ledgered exactly as before. |
 
 **Validation model**: file-level failures (unreadable workbook, missing
 sheet/required column, wrong schema name/major version, duplicate Document
@@ -163,6 +164,19 @@ pipeline is byte-for-byte the existing one:
    confirms — the same two-phase Extract → Verify & Distribute workflow as
    every other document. Only then are ledger facts committed and projections
    regenerated.
+5. **Two rows never become a Ledger Entry at all, by construction, not by a
+   status check that could be bypassed:**
+   - A row whose `Order Status` needs confirmation (see the `Order Status`
+     column above) is recorded as a `PendingExecution` instead of a `Trade`/
+     `TradeAllocation` — it has no Ledger Entry, no Holdings/cost-basis
+     impact, and isn't allocatable until a broker invoice is uploaded and
+     matched, at which point the SAME `PendingExecution` row is updated (a
+     `Trade` is only created then, for a BUY; a SELL still requires its own
+     explicit lot-allocation step, per ADR-002, before it's ledgered).
+   - A row whose `Order Status` is a full cancellation is recorded as a
+     `RawTransaction` of kind `CancelledOrder` — never a `ParsedTradeCandidate`
+     at all, so `commitEngine`/`TradeService`/`computePositions` never read
+     it. It's audit trail only.
 
 ## Rules for generating AIs (the contract, in one place)
 
@@ -183,3 +197,9 @@ The same rules ship inside the template's `Instructions` sheet:
    `Extraction Notes`.
 8. Do not decide duplicates, do not reconcile, do not allocate sells, do not
    compute positions or P/L. That is Trade Manager's investigation, later.
+9. Write the broker's own status text into `Order Status` verbatim. A
+   partial fill (`Partially filled`, `Partially filled, canceled`, `Partial
+   fill`) is never ignored — extract it like any other BUY/SELL row, never
+   estimating the executed quantity. A fully cancelled order (zero shares
+   executed) is still recorded — Ticker/Trade Date/BUY-SELL only, `Quantity`/
+   `Price` left blank — but is never treated as an execution.

@@ -8,6 +8,7 @@ import type { Upload } from "../entities/Upload";
 import type { RawTransaction } from "../entities/RawTransaction";
 import type { LedgerEvent } from "../entities/LedgerEvent";
 import type { Allocation } from "../entities/Allocation";
+import type { PendingExecution } from "../entities/PendingExecution";
 
 export interface PortfolioRepository {
   getAll(): Promise<Portfolio[]>;
@@ -62,6 +63,20 @@ export interface UploadRepository {
   /** File-hash dedup is global — the same screenshot re-uploaded is a duplicate regardless of which portfolio its candidates end up assigned to. */
   getByHash(fileHash: string): Promise<Upload | undefined>;
   save(upload: Upload): Promise<void>;
+  delete(id: string): Promise<void>;
+}
+
+/**
+ * Storage for partial-fill executions awaiting broker-invoice confirmation
+ * (see PendingExecution's own doc comment). `save` both creates (first
+ * write) and updates in place (every later write reuses the same `id`) —
+ * confirming an invoice never creates a second row for the same execution.
+ */
+export interface PendingExecutionRepository {
+  getAll(): Promise<PendingExecution[]>;
+  getByPortfolio(portfolioId: string): Promise<PendingExecution[]>;
+  getById(id: string): Promise<PendingExecution | undefined>;
+  save(pendingExecution: PendingExecution): Promise<void>;
   delete(id: string): Promise<void>;
 }
 

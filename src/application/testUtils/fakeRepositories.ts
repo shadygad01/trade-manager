@@ -8,6 +8,7 @@ import type {
   UploadRepository,
   RawTransactionRepository,
   CommittedLedgerRepository,
+  PendingExecutionRepository,
 } from "@domain/repositories";
 import type { Portfolio } from "@domain/entities/Portfolio";
 import type { Trade } from "@domain/entities/Trade";
@@ -19,6 +20,7 @@ import type { Upload } from "@domain/entities/Upload";
 import type { RawTransaction } from "@domain/entities/RawTransaction";
 import type { LedgerEvent } from "@domain/entities/LedgerEvent";
 import type { Allocation } from "@domain/entities/Allocation";
+import type { PendingExecution } from "@domain/entities/PendingExecution";
 import type { AppRepositories } from "@application/services/types";
 
 export function createFakePortfolioRepository(seed: Portfolio[] = []): PortfolioRepository {
@@ -194,6 +196,27 @@ export function createFakeRawTransactionRepository(seed: RawTransaction[] = []):
   };
 }
 
+export function createFakePendingExecutionRepository(seed: PendingExecution[] = []): PendingExecutionRepository {
+  const store = new Map(seed.map((p) => [p.id, p]));
+  return {
+    async getAll() {
+      return [...store.values()];
+    },
+    async getByPortfolio(portfolioId) {
+      return [...store.values()].filter((p) => p.portfolioId === portfolioId);
+    },
+    async getById(id) {
+      return store.get(id);
+    },
+    async save(pendingExecution) {
+      store.set(pendingExecution.id, pendingExecution);
+    },
+    async delete(id) {
+      store.delete(id);
+    },
+  };
+}
+
 /** Mirrors DexieCommittedLedgerRepository: commitTicker is the only write path, full delete-and-replace per (portfolioId, ticker). */
 export function createFakeCommittedLedgerRepository(): CommittedLedgerRepository {
   const events = new Map<string, LedgerEvent[]>();
@@ -221,6 +244,7 @@ export function createFakeRepositories(seed?: {
   journal?: JournalEntry[];
   verifications?: PositionVerification[];
   uploads?: Upload[];
+  pendingExecutions?: PendingExecution[];
 }): AppRepositories {
   return {
     portfolios: createFakePortfolioRepository(seed?.portfolios),
@@ -230,5 +254,6 @@ export function createFakeRepositories(seed?: {
     journal: createFakeJournalRepository(seed?.journal),
     verifications: createFakeVerificationRepository(seed?.verifications),
     uploads: createFakeUploadRepository(seed?.uploads),
+    pendingExecutions: createFakePendingExecutionRepository(seed?.pendingExecutions),
   };
 }

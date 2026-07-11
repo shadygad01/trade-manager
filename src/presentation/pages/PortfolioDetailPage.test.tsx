@@ -59,6 +59,7 @@ vi.mock("@presentation/lib/data", () => ({
     },
     journal: { getByTrade: () => Promise.resolve(undefined) },
     prices: { getAllPrices: () => Promise.resolve({}), getSnapshotInfo: () => Promise.resolve(undefined) },
+    pendingExecutions: { getByPortfolio: () => Promise.resolve([]) },
   },
 }));
 
