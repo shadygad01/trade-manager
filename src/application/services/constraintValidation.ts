@@ -1,3 +1,5 @@
+import type { TickerMatchReason } from "./importVerification";
+
 /**
  * Constraint Validation Layer.
  *
@@ -28,11 +30,26 @@ export interface InventoryFacts {
   holdingsRemaining?: number;
   /** A closed position (calculatedRemaining == 0) never has Holdings to compare against — a broker "My Position" screenshot never lists a zero position, so its absence is expected. */
   closed: boolean;
+  /**
+   * True when checkTickerMatch already resolved this ticker as
+   * "broker-excel-verified" — every transaction behind this batch traces to
+   * the broker's own official Excel export, per the broker-record trust
+   * policy the Single Source of Truth for this ticker's current position,
+   * never something a "My Position" screenshot needs to additionally
+   * corroborate (see checkTickerMatch's own doc comment: the Excel source is
+   * authoritative even against a DISAGREEING screenshot, surfaced only as a
+   * non-blocking `secondaryMismatch`, never a contradiction). Without this
+   * flag, evaluateInventoryConstraint had no way to know a `holdingsRemaining`
+   * value it was handed came from a screenshot the trust policy has already
+   * ruled non-authoritative for this ticker — it would silently re-derive the
+   * same "needs corroboration" verdict checkTickerMatch already rejected.
+   */
+  brokerExcelVerified: boolean;
 }
 
 export function buildInventoryFacts(
   ticker: string,
-  status: { existingRemainingShares?: number; pendingBuyShares?: number; pendingSellShares?: number; netShares: number; verifiedUnits?: number },
+  status: { existingRemainingShares?: number; pendingBuyShares?: number; pendingSellShares?: number; netShares: number; verifiedUnits?: number; reason?: TickerMatchReason },
 ): InventoryFacts {
   const openingShares = status.existingRemainingShares ?? 0;
   const buyShares = status.pendingBuyShares ?? 0;
@@ -45,6 +62,7 @@ export function buildInventoryFacts(
     calculatedRemaining: status.netShares,
     holdingsRemaining: status.verifiedUnits,
     closed: Math.abs(status.netShares) < EPSILON,
+    brokerExcelVerified: status.reason === "broker-excel-verified",
   };
 }
 
@@ -61,9 +79,21 @@ export interface InventoryContradiction {
  * equal the broker's Holdings exactly; a closed position requires no
  * Holdings at all. Returns the objective, arithmetic contradiction — never a
  * guess about its cause. Empty array means the constraint is satisfied.
+ *
+ * A `brokerExcelVerified` ticker is exempt from this comparison entirely, the
+ * same way a closed position already is, and for the same reason: the
+ * broker's own Excel export already IS this ticker's Single Source of Truth
+ * for its current position (Σ Executed BUY − Σ Executed SELL), so a "My
+ * Position" screenshot is never required to prove it and a disagreeing one
+ * is never grounds for a contradiction — only checkTickerMatch's own
+ * `secondaryMismatch` flag, which never blocks. Skipping this BEFORE the
+ * `holdingsRemaining` check (rather than only when it's undefined) is
+ * deliberate: the whole point is to stop treating a PRESENT, disagreeing
+ * screenshot as a reason to distrust the Excel-sourced ledger.
  */
 export function evaluateInventoryConstraint(facts: InventoryFacts): InventoryContradiction[] {
   if (facts.closed) return [];
+  if (facts.brokerExcelVerified) return [];
   if (facts.holdingsRemaining === undefined) return [];
   if (Math.abs(facts.calculatedRemaining - facts.holdingsRemaining) < EPSILON) return [];
   return [
@@ -177,7 +207,7 @@ export interface TickerConstraintReport {
  */
 export function buildTickerConstraintReport(
   ticker: string,
-  status: { existingRemainingShares?: number; pendingBuyShares?: number; pendingSellShares?: number; netShares: number; verifiedUnits?: number },
+  status: { existingRemainingShares?: number; pendingBuyShares?: number; pendingSellShares?: number; netShares: number; verifiedUnits?: number; reason?: TickerMatchReason },
   diagnosisInputs: DiagnosisInputs,
 ): TickerConstraintReport {
   const facts = buildInventoryFacts(ticker, status);
