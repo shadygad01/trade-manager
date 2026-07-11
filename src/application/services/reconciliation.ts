@@ -1,10 +1,34 @@
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
+import type { RawTransaction, BuyExecutionPayload, SellExecutionPayload } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { PositionAggregate } from "./TradeService";
 import { checkTickerMatch } from "./importVerification";
 import { suggestRemovalsToReconcile, MAX_RECONCILE_ROWS, type ReconcilableRow } from "./mismatchResolver";
+import { isRetracted } from "./rawTransactionFolds";
+
+/**
+ * True only when every live Buy/Sell RawTransaction fact for this ticker
+ * came from the broker's own official Excel export (see
+ * ThndrOrdersWorkbookParser.ts) — the "My Position" screenshot verification
+ * workflow no longer applies to such a ticker at all, per the broker-record
+ * trust policy: the Excel-derived executed-BUY-minus-executed-SELL count
+ * already IS the broker-confirmed position, regardless of whether a
+ * screenshot exists, agrees, or disagrees. False for a ticker with zero
+ * facts (nothing to be "fully" anything of) or any mixed provenance — a
+ * ticker with even one non-Excel-sourced execution still goes through
+ * ordinary reconciliation.
+ */
+export function isTickerFullyOfficialBrokerExcelSourced(rawTransactions: RawTransaction[], ticker: string): boolean {
+  const normalized = normalizeTicker(ticker);
+  const live = rawTransactions.filter((t) => {
+    if (t.kind !== "BuyExecution" && t.kind !== "SellExecution") return false;
+    const payload = t.payload as BuyExecutionPayload | SellExecutionPayload;
+    return normalizeTicker(payload.ticker) === normalized && !isRetracted(rawTransactions, t.id);
+  });
+  return live.length > 0 && live.every((t) => t.source === "official-broker-excel");
+}
 
 export interface PositionReconciliation {
   ticker: string;
@@ -112,12 +136,23 @@ export function latestByTicker(verifications: PositionVerification[]): Map<strin
  * now," with no notion of a screenshot predating trades recorded since) —
  * remains this module's own, layered on top: a mismatch a newer trade would
  * fully explain is suppressed rather than reported as a live discrepancy.
+ *
+ * A ticker fully sourced from the broker's own official Excel export (see
+ * `isTickerFullyOfficialBrokerExcelSourced`) never produces a row at all,
+ * regardless of any "My Position" screenshot on file — per the broker-record
+ * trust policy, that whole comparison no longer applies once the Excel
+ * export alone already confirms the position; a stray disagreeing
+ * screenshot is not this module's concern to surface for such a ticker.
+ * `rawTransactions` defaults to empty for callers that haven't started
+ * fetching it (equivalent to "no ticker is Excel-sourced," i.e. unchanged
+ * legacy behavior).
  */
 export function reconcilePositions(
   positions: PositionAggregate[],
   verifications: PositionVerification[],
   trades: Trade[],
-  allocations: TradeAllocation[]
+  allocations: TradeAllocation[],
+  rawTransactions: RawTransaction[] = []
 ): PositionReconciliation[] {
   const verificationByTicker = latestByTicker(verifications);
   const computedByTicker = new Map(positions.map((p) => [p.ticker, p.totalShares]));
@@ -125,6 +160,7 @@ export function reconcilePositions(
 
   const results: PositionReconciliation[] = [];
   for (const ticker of tickers) {
+    if (isTickerFullyOfficialBrokerExcelSourced(rawTransactions, ticker)) continue;
     const verification = verificationByTicker.get(ticker);
     if (!verification) continue;
 

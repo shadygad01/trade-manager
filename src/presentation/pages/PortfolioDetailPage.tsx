@@ -16,7 +16,7 @@ import {
   unarchivePortfolio,
   renamePortfolio,
 } from "@application/services/PortfolioService";
-import { reconcilePositions, suggestDuplicateTradeIds } from "@application/services/reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds, isTickerFullyOfficialBrokerExcelSourced } from "@application/services/reconciliation";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { PendingExecution } from "@domain/entities/PendingExecution";
 import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
@@ -59,15 +59,29 @@ export function PortfolioDetailPage() {
     const priceMap = await repos.prices.getAllPrices();
     return computeCanonicalPositions(repos, id, priceMap);
   }, [id, refreshKey]);
-  const reconciliations = useLiveQuery(async (): Promise<PositionReconciliation[]> => {
-    if (!positions) return [];
-    const [verifications, trades, allocations] = await Promise.all([
+  const reconciliationData = useLiveQuery(async () => {
+    if (!positions) return { reconciliations: [] as PositionReconciliation[], brokerExcelVerifiedTickers: new Set<string>() };
+    const [verifications, trades, allocations, rawTransactions] = await Promise.all([
       repos.verifications.getByPortfolio(id),
       repos.trades.getByPortfolio(id),
       repos.allocations.getByPortfolio(id),
+      repos.rawTransactions.getByPortfolio(id),
     ]);
-    return reconcilePositions(positions, verifications, trades, allocations);
+    return {
+      reconciliations: reconcilePositions(positions, verifications, trades, allocations, rawTransactions),
+      // Tickers fully sourced from the broker's own official Excel export —
+      // the "My Position" screenshot workflow doesn't apply to these at all
+      // (see reconcilePositions' own doc comment), so the holdings table
+      // shows a positive "Verified" state for them instead of falling
+      // through to the dash/mismatch/stale states below, which are all
+      // about a screenshot comparison this ticker's position no longer needs.
+      brokerExcelVerifiedTickers: new Set(
+        positions.map((p) => p.ticker).filter((ticker) => isTickerFullyOfficialBrokerExcelSourced(rawTransactions, ticker)),
+      ),
+    };
   }, [id, positions, refreshKey]);
+  const reconciliations = reconciliationData?.reconciliations;
+  const brokerExcelVerifiedTickers = reconciliationData?.brokerExcelVerifiedTickers ?? new Set<string>();
   const reconciliationByTicker = new Map((reconciliations ?? []).map((r) => [r.ticker, r]));
   // Every PendingExecution still short of a Ledger Entry — includes both
   // verificationStatus: "needs-confirmation" (invoice not uploaded yet) and
@@ -462,6 +476,10 @@ export function PortfolioDetailPage() {
                             </div>
                           ))}
                         </div>
+                      ) : brokerExcelVerifiedTickers.has(p.ticker) ? (
+                        <span className="flex items-center gap-1 text-xs text-emerald-400">
+                          <ShieldCheck size={13} /> {t("portfolioDetail.matchesBrokerExcel")}
+                        </span>
                       ) : !r ? (
                         <span className="text-xs text-slate-600">{t("common.dash")}</span>
                       ) : r.verificationStale ? (

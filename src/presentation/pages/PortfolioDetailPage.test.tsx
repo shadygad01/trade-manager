@@ -7,6 +7,7 @@ import { memoryLocation } from "wouter/memory-location";
 import { createPortfolio, type Portfolio } from "@domain/entities/Portfolio";
 import { createTrade, type Trade } from "@domain/entities/Trade";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
+import { createRawTransaction, type RawTransaction } from "@domain/entities/RawTransaction";
 
 /**
  * Same mocking seam as PortfoliosPage.test.tsx: mock the module-level `repos`
@@ -17,6 +18,7 @@ const state = vi.hoisted(() => ({
   portfolios: [] as Portfolio[],
   trades: [] as Trade[],
   verifications: [] as PositionVerification[],
+  rawTransactions: [] as RawTransaction[],
 }));
 
 vi.mock("@presentation/lib/data", () => ({
@@ -60,6 +62,9 @@ vi.mock("@presentation/lib/data", () => ({
     journal: { getByTrade: () => Promise.resolve(undefined) },
     prices: { getAllPrices: () => Promise.resolve({}), getSnapshotInfo: () => Promise.resolve(undefined) },
     pendingExecutions: { getByPortfolio: () => Promise.resolve([]) },
+    rawTransactions: {
+      getByPortfolio: (portfolioId: string) => Promise.resolve(state.rawTransactions.filter((t) => t.portfolioId === portfolioId)),
+    },
   },
 }));
 
@@ -81,6 +86,7 @@ describe("PortfolioDetailPage — Clear all suspected duplicates", () => {
     state.portfolios = [createPortfolio({ id: "p1", name: "Dup Test", kind: "Trading", initialCash: 1_000_000 })];
     state.trades = [];
     state.verifications = [];
+    state.rawTransactions = [];
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
@@ -147,6 +153,36 @@ describe("PortfolioDetailPage — Clear all suspected duplicates", () => {
     await screen.findByText("COMI");
     expect(screen.queryByRole("button", { name: /clear all suspected duplicates/i })).not.toBeInTheDocument();
   });
+
+  it("shows 'Verified — official broker Excel' instead of a mismatch, and never offers a duplicate-cleanup button, for a ticker fully sourced from the Excel export — even against a disagreeing screenshot", async () => {
+    state.trades = [
+      createTrade({ id: "t1", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 50, executionDate: "2026-01-05", executionTime: "10:00" }),
+    ];
+    // Deliberately disagrees with the computed 100 shares — must never
+    // surface as a mismatch for this ticker.
+    state.verifications = [
+      { id: "v1", portfolioId: "p1", ticker: "COMI", units: 30, capturedAt: "2026-06-01T00:00", source: "screenshot" },
+    ];
+    state.rawTransactions = [
+      {
+        ...createRawTransaction({
+          id: "rt1",
+          portfolioId: "p1",
+          kind: "BuyExecution",
+          source: "official-broker-excel",
+          ticker: "COMI",
+          payload: { ticker: "COMI", shares: 100, price: 50, executionDate: "2026-01-05" },
+        }),
+        seq: 1,
+      },
+    ];
+
+    renderPage("p1");
+
+    expect(await screen.findByText("Verified — official broker Excel")).toBeInTheDocument();
+    expect(screen.queryByText(/mismatch/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /clear all suspected duplicates/i })).not.toBeInTheDocument();
+  });
 });
 
 describe("PortfolioDetailPage — a verified-but-untracked position points at Import, never a placeholder", () => {
@@ -208,6 +244,7 @@ describe("PortfolioDetailPage — Edit Cash", () => {
     state.portfolios = [createPortfolio({ id: "p1", name: "Cash Edit Test", kind: "Trading", initialCash: 413_154.06 })];
     state.trades = [];
     state.verifications = [];
+    state.rawTransactions = [];
   });
 
   it("lets a cleared field be typed into without snapping back to the old balance", async () => {

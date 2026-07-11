@@ -286,6 +286,7 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
     const existingRemainingShares = position?.totalShares ?? 0;
     const verification = verificationByTicker.get(ticker);
     const allPendingFromInvoice = tickerEntries.every((e) => e.candidate.source === "invoice");
+    const allPendingFromOfficialBrokerExcel = tickerEntries.every((e) => e.candidate.source === "official-broker-excel");
     const allPendingSelfVerified = tickerEntries.every((e) => crossVerified.has(e.key) || aggregatedKeys.has(e.key));
     const allPendingOrderConfirmed = tickerEntries.every((e) => orderConfirmed.has(e.key));
 
@@ -297,6 +298,7 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
       verifiedUnits: verification?.units,
       verifiedAvgCost: verification?.avgCost,
       allPendingFromInvoice,
+      allPendingFromOfficialBrokerExcel,
       allPendingSelfVerified,
       allPendingOrderConfirmed,
     });
