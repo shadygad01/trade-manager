@@ -63,6 +63,29 @@ function corruptedCloheLikeFixture(): RawTransaction[] {
 }
 
 describe("dryRunProvenanceRepair", () => {
+  it("finds a wrongly-'manual' fact even though it was written under a ticker later renamed via a Correction fact", async () => {
+    const facts: RawTransaction[] = [
+      { ...createRawTransaction({ id: "buy-1", portfolioId: "p1", kind: "BuyExecution", source: "official-broker-excel", ticker: "CLHOA", payload: { ticker: "CLHOA", shares: 3000, price: 0.38, executionDate: "2022-11-02", executionTime: "10:00" } }), seq: 1 },
+      { ...createRawTransaction({ id: "sell-correct-orphaned", portfolioId: "p1", kind: "SellExecution", source: "official-broker-excel", ticker: "CLHOA", payload: { ticker: "CLHOA", shares: 3000, price: 0.5, executionDate: "2022-11-10", executionTime: "10:00" } }), seq: 2 },
+      { ...createRawTransaction({ id: "sell-wrong-operative", portfolioId: "p1", kind: "SellExecution", source: "manual", ticker: "CLHOA", payload: { ticker: "CLHOA", shares: 3000, price: 0.5, executionDate: "2022-11-10", executionTime: "10:00" } }), seq: 3 },
+      { ...createRawTransaction({ id: "decision-1", portfolioId: "p1", kind: "SellAllocationDecision", source: "manual", ticker: "CLHOA", payload: { sellExecutionId: "sell-wrong-operative", allocations: [{ lotRef: "buy-1", shares: 3000 }] } }), seq: 4 },
+      // Every fact above was renamed to "CLHO" afterward — the repair must
+      // resolve through this Correction, not the facts' own immutable,
+      // stale "CLHOA" ticker field, when searching for the correct twin.
+      { ...createRawTransaction({ kind: "Correction", source: "manual", payload: { targetId: "sell-wrong-operative", patch: { ticker: "CLHO" } } }), seq: 5 },
+      { ...createRawTransaction({ kind: "Correction", source: "manual", payload: { targetId: "sell-correct-orphaned", patch: { ticker: "CLHO" } } }), seq: 6 },
+    ];
+    const report = await dryRunProvenanceRepair(repos(facts));
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0]).toMatchObject({
+      ticker: "CLHO",
+      decisionId: "decision-1",
+      wrongFactId: "sell-wrong-operative",
+      correctFactId: "sell-correct-orphaned",
+    });
+  });
+
+
   it("finds a decision referencing a wrongly-'manual'-sourced fact when a correctly-sourced unclaimed twin exists", async () => {
     const report = await dryRunProvenanceRepair(repos(corruptedCloheLikeFixture()));
     expect(report.findings).toHaveLength(1);

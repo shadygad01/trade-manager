@@ -1390,3 +1390,22 @@ Direct, sharp follow-up question: do the previous architectural fixes retroactiv
 - **Verified live**: ran the dev server, navigated to `/data`, confirmed the new panel renders correctly (matching the existing Rebuild panel's styling) and "Run Check" works with zero console errors, correctly reporting "No affected sells found" against this session's empty database.
 - `tsc --noEmit`/`arch:check` clean; full suite green.
 - **Not done**: this migration exists in the app now but hasn't been run against any real user data — no such data is reachable from this session. The user needs to open the app, go to Data, and run it themselves once.
+
+### Third real bug found via user report ("same problem, same conditions"): the ticker-resolution fix from the audit above wasn't applied consistently within its own PR
+
+User reported the exact same "Closed — needs corroborating evidence" symptom recurring again, without naming a ticker — a direct test of whether the prior "full architectural audit" entry actually closed the gap. It hadn't, fully.
+
+**Root cause**: `findUnclaimedSellExecutionFact` (`rawTransactionFolds.ts`), written in the very same PR as the `resolveCurrentTicker` ticker-correction fold it depends on, read the candidate fact's `t.ticker` field **directly** instead of resolving it through `resolveCurrentTicker` — the identical bug class that same PR had just fixed in `isTickerFullyOfficialBrokerExcelSourced`, but never applied to this sibling function. Net effect: any ticker whose extraction-time Sell candidate fact was written under a ticker string later corrected (e.g. an OCR misread fixed via `TradeService.renameTickerEverywhere`) would fail to be recognized as "already existing" during allocation — `ensureSellFacts` would fall through, mint a fresh `"manual"`-sourced fact for the resolved name, and orphan the correctly-sourced one, reproducing the exact bug the prior fix was supposed to eliminate for good.
+
+The prior entry's audit claim that "`ensureBuyFact`'s existing canonical-key + `otherTradeIds` dedup ... Buy side never had this bug" was re-checked and was **wrong** — `ensureBuyFact`'s `liveMatch` lookup had the identical raw-`t.ticker`-read defect (it was just never exercised by the two reported tickers, so it hadn't yet surfaced as a symptom).
+
+**Fix, applied to every fact-adoption/resolution site that reads a candidate's ticker, not just the one that happened to reproduce**:
+1. `rawTransactionFolds.ts` — `findUnclaimedSellExecutionFact` now resolves each candidate's ticker via `resolveCurrentTicker` before comparing, instead of reading `t.ticker` directly.
+2. `TradeService.ts` — `ensureBuyFact`'s `liveMatch` lookup does the same.
+3. `provenanceRepair.ts` — `dryRunProvenanceRepair` resolved `currentFact.ticker` directly as the search key it hands to `findUnclaimedSellExecutionFact`; a wrongly-sourced fact written under a since-renamed ticker would search for its correct twin under the OLD name and never find it. Now resolves through `resolveCurrentTicker` first.
+
+- **Files modified**: `rawTransactionFolds.ts`, `TradeService.ts`, `provenanceRepair.ts`.
+- 6 new tests (928 total): `rawTransactionFolds.test.ts` (new file) — `findUnclaimedSellExecutionFact` finds a candidate under its current, corrected ticker and no longer under the old one; `TradeService.test.ts` — `ensureBuyFact` end-to-end adopts a pre-existing Buy fact extracted under a ticker later renamed via a Correction; `provenanceRepair.test.ts` — `dryRunProvenanceRepair` finds the wrongly-sourced fact even when the whole corrupted fixture was written under a since-renamed ticker. Verified every new test fails without its corresponding fix (`git stash push` on the three fixed source files only, re-ran, confirmed all three failed, `git stash pop` to restore) before shipping.
+- `tsc --noEmit`/`arch:check` clean; full suite (928 tests) green.
+- **No ticker-specific logic introduced anywhere** — all three fixes are the same generic "resolve through `resolveCurrentTicker` before comparing" change already established by the prior audit, applied to the two sibling call sites that were missed.
+- **Lesson for future audits in this codebase**: when a shared helper (`resolveCurrentTicker`) is introduced to fix one call site, grep for every other place reading the same immutable field directly (`t.ticker`, `currentFact.ticker`, etc.) in the same change, not just the one call site the reported bug happened to touch — a sibling function written in the same PR is not automatically safe just because it looks similar.
