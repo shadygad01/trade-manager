@@ -23,17 +23,19 @@ const allTables = (db: PortfolioOsDatabase) => [
   db.rawTransactions,
   db.ledgerCache,
   db.allocationsCache,
+  db.pendingExecutions,
 ];
 
 /**
  * Erases every record of one ticker — trades, allocations, timeline events,
  * journal entries, verifications, raw transactions (including the
- * retraction/correction rows that pointed at them), ledger caches, and any
- * upload whose candidates carried the ticker (so re-uploading the same file
- * isn't blocked by its hash) — leaving the app looking like the ticker was
- * never imported. Each portfolio's cash is adjusted by reversing the
- * ticker's net timeline cash impact (buys are negative amounts,
- * sells/dividends positive), so balances also read as if it never traded.
+ * retraction/correction rows that pointed at them), ledger caches, pending
+ * (unconfirmed partial-fill) executions, and any upload whose candidates
+ * carried the ticker (so re-uploading the same file isn't blocked by its
+ * hash) — leaving the app looking like the ticker was never imported. Each
+ * portfolio's cash is adjusted by reversing the ticker's net timeline cash
+ * impact (buys are negative amounts, sells/dividends positive), so balances
+ * also read as if it never traded.
  */
 export async function purgeTickerData(tickerRaw: string, db: PortfolioOsDatabase = defaultDb): Promise<void> {
   const ticker = normalizeTicker(tickerRaw);
@@ -83,6 +85,7 @@ export async function purgeTickerData(tickerRaw: string, db: PortfolioOsDatabase
 
     const ledgerRowIds = (await db.ledgerCache.toArray()).filter((r) => matchesTicker(r.ticker)).map((r) => r.id);
     const allocationRowIds = (await db.allocationsCache.toArray()).filter((r) => matchesTicker(r.ticker)).map((r) => r.id);
+    const pendingExecutionIds = (await db.pendingExecutions.toArray()).filter((p) => matchesTicker(p.ticker)).map((p) => p.id);
 
     await Promise.all([
       db.trades.bulkDelete([...tradeIds]),
@@ -94,6 +97,7 @@ export async function purgeTickerData(tickerRaw: string, db: PortfolioOsDatabase
       db.rawTransactions.bulkDelete([...purgedRawIds]),
       db.ledgerCache.bulkDelete(ledgerRowIds),
       db.allocationsCache.bulkDelete(allocationRowIds),
+      db.pendingExecutions.bulkDelete(pendingExecutionIds),
     ]);
   });
 }

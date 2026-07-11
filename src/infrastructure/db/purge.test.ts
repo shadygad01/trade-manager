@@ -5,6 +5,7 @@ import { createPortfolio } from "@domain/entities/Portfolio";
 import { createTrade } from "@domain/entities/Trade";
 import { createTimelineEvent } from "@domain/entities/TimelineEvent";
 import { createRawTransaction } from "@domain/entities/RawTransaction";
+import { createPendingExecution } from "@domain/entities/PendingExecution";
 
 function buyCandidate(ticker: string) {
   return { ticker, side: "BUY" as const, shares: 100, price: 50, date: "2026-01-05" };
@@ -69,6 +70,12 @@ async function seed(db: PortfolioOsDatabase) {
   });
   await db.ledgerCache.put({ id: "p1|comi-ev", portfolioId: "p1", ticker: "COMI", event: {} as never });
   await db.ledgerCache.put({ id: "p1|swdy-ev", portfolioId: "p1", ticker: "SWDY", event: {} as never });
+  await db.pendingExecutions.put(
+    createPendingExecution({ id: "pe-comi", portfolioId: "p1", ticker: "COMI", side: "BUY", originalShares: 31, originalPrice: 50, executionDate: "2026-01-05", brokerStatus: "Partially filled" }),
+  );
+  await db.pendingExecutions.put(
+    createPendingExecution({ id: "pe-swdy", portfolioId: "p1", ticker: "SWDY", side: "BUY", originalShares: 40, originalPrice: 30, executionDate: "2026-01-06", brokerStatus: "Partially filled" }),
+  );
 }
 
 describe("purgeTickerData", () => {
@@ -88,12 +95,14 @@ describe("purgeTickerData", () => {
     expect(await db.uploads.get("u-comi")).toBeUndefined();
     expect(await db.rawTransactions.get("r-comi")).toBeUndefined();
     expect(await db.ledgerCache.get("p1|comi-ev")).toBeUndefined();
+    expect(await db.pendingExecutions.get("pe-comi")).toBeUndefined();
 
     expect(await db.trades.get("t-swdy")).toBeDefined();
     expect(await db.timelineEvents.get("e-swdy")).toBeDefined();
     expect(await db.uploads.get("u-swdy")).toBeDefined();
     expect(await db.rawTransactions.get("r-swdy")).toBeDefined();
     expect(await db.ledgerCache.get("p1|swdy-ev")).toBeDefined();
+    expect(await db.pendingExecutions.get("pe-swdy")).toBeDefined();
   });
 
   it("purges retraction rows that pointed at the ticker's raw transactions", async () => {
@@ -130,5 +139,6 @@ describe("purgeAllData", () => {
     expect(await db.rawTransactions.count()).toBe(0);
     expect(await db.ledgerCache.count()).toBe(0);
     expect(await db.allocationsCache.count()).toBe(0);
+    expect(await db.pendingExecutions.count()).toBe(0);
   });
 });
