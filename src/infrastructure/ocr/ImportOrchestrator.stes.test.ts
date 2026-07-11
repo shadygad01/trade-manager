@@ -87,7 +87,7 @@ describe("ImportOrchestrator — STES workbook routing", () => {
     expect(result.rawText).toContain("Observations");
   });
 
-  it("fails an .xlsx that is not an STES workbook, with a specific reason", async () => {
+  it("fails an .xlsx that is neither an STES workbook nor a Thndr Orders export, with a specific reason", async () => {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["Just", "Numbers"], [1, 2]]), "Sheet1");
     const bytes = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
@@ -96,7 +96,9 @@ describe("ImportOrchestrator — STES workbook routing", () => {
     const orchestrator = new ImportOrchestrator();
     const result = await orchestrator.importFile(file);
     expect(result.status).toBe("failed");
-    expect(result.docType).toBe("stes-workbook");
+    // Neither xlsx shape claims this file, so it falls through both
+    // recognizers rather than misreporting itself as either one's docType.
+    expect(result.docType).toBeUndefined();
     expect(result.candidates).toEqual([]);
     expect(result.warnings[0]).toContain("Metadata");
   });
