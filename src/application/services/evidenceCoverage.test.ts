@@ -37,6 +37,21 @@ describe("evidenceCoverage.buildCoverageClaims", () => {
     expect(claims).toEqual([]);
   });
 
+  it("an official-broker-excel upload's coverage is one ticker-history claim per ticker it actually contains, not one for the whole upload", () => {
+    const claims = buildCoverageClaims([
+      buy({ id: "b1", source: "official-broker-excel", sourceUploadId: "u4", ticker: "EAST", executionDate: "2026-06-01" }),
+      buy({ id: "b2", source: "official-broker-excel", sourceUploadId: "u4", ticker: "EAST", executionDate: "2026-06-20" }),
+      buy({ id: "b3", source: "official-broker-excel", sourceUploadId: "u4", ticker: "ABUK", executionDate: "2026-05-10" }),
+    ]);
+    expect(claims).toHaveLength(2);
+    expect(claims).toEqual(
+      expect.arrayContaining([
+        { kind: "ticker-history", sourceUploadId: "u4", documentType: "orders", ticker: "EAST", from: "2026-06-01", to: "2026-06-20" },
+        { kind: "ticker-history", sourceUploadId: "u4", documentType: "orders", ticker: "ABUK", from: "2026-05-10", to: "2026-05-10" },
+      ]),
+    );
+  });
+
   it("one upload never produces more than one claim, even with several rows", () => {
     const claims = buildCoverageClaims([
       buy({ id: "s1", source: "statement", sourceUploadId: "u1", executionDate: "2026-01-05" }),

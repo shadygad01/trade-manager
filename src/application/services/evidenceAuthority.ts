@@ -31,7 +31,9 @@ export const MY_POSITION_EXCLUDED_REASON =
 
 const AUTHORITY_RANK: Record<Exclude<RawTransactionSource, "position-verification">, number> = {
   /** The Email Invoice PDF — the only source with an itemized fee schedule (see docs/EVIDENCE_ARCHITECTURE.md and the first architecture review). */
-  invoice: 5,
+  invoice: 6,
+  /** The broker's own native "Your Orders" screen exported directly to Excel — every field printed verbatim by the broker's own system, no OCR involved. Ranked just below invoice (which alone itemizes fees), above every OCR-derived document type. */
+  "official-broker-excel": 5,
   /** Customer Account Statement — broker-authored, dated, but net-value-only per row (fees not itemized). */
   statement: 4,
   /** Per-ticker "Orders" screen — dated, priced, quantity-exact, no fees. */

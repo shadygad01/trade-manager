@@ -91,13 +91,19 @@ const RECOVERY_CONFIDENCE = {
  * — the real historical cases this was written from (JUFO, SKPC; see
  * docs/ROADMAP.md) are exactly this shape. Complete is reserved for reasons
  * that mean a SECOND, independent source corroborated every row
- * (invoice-verified/cross-verified/orders-verified) — real independent
+ * (invoice-verified/broker-excel-verified/cross-verified/orders-verified) — real independent
  * evidence, not just self-consistent numbers.
  */
 function classify(status: TickerStatus): LedgerCompletenessStatus {
   if (status.reason === "no-shares-to-verify") return "Unknown";
   if (status.reason === "matched") return "Verified";
-  if (status.reason === "invoice-verified" || status.reason === "cross-verified" || status.reason === "orders-verified") return "Complete";
+  if (
+    status.reason === "invoice-verified" ||
+    status.reason === "broker-excel-verified" ||
+    status.reason === "cross-verified" ||
+    status.reason === "orders-verified"
+  )
+    return "Complete";
   if (status.reason === "closed-position" || status.reason === "mismatch" || status.reason === "no-verification") return "Incomplete";
   return "Unknown";
 }

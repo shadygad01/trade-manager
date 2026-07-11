@@ -3,6 +3,7 @@ export type TickerMatchReason =
   | "no-shares-to-verify"
   | "closed-position"
   | "invoice-verified"
+  | "broker-excel-verified"
   | "cross-verified"
   | "orders-verified"
   | "no-verification"
@@ -96,6 +97,15 @@ export interface TickerMatchStatus {
  * blocks, since a real discrepancy (e.g. a duplicate invoice) shouldn't be
  * silently overridden just because this batch happens to be invoice-sourced.
  *
+ * A ticker whose every still-pending candidate came from the broker's own
+ * native "Your Orders" Excel export (`source: "official-broker-excel"`, see
+ * ThndrOrdersWorkbookParser.ts) is verified the same way, for the same
+ * reason: every field is printed verbatim by the broker's own system, no
+ * OCR or AI extraction involved, so it needs no screenshot, invoice, or
+ * manual confirmation of its own either. Same "only when no broker
+ * verification exists at all" caveat as invoice — an actual mismatch
+ * against a real screenshot still blocks.
+ *
  * A fourth way, one level broader — the dual-source rule: a ticker whose
  * every still-pending candidate is *either* invoice-sourced *or*
  * cross-verified by a second, DIFFERENT document type describing the same
@@ -143,6 +153,7 @@ export function checkTickerMatch(params: {
   verifiedUnits?: number;
   verifiedAvgCost?: number;
   allPendingFromInvoice?: boolean;
+  allPendingFromOfficialBrokerExcel?: boolean;
   allPendingSelfVerified?: boolean;
   allPendingOrderConfirmed?: boolean;
 }): TickerMatchStatus {
@@ -169,6 +180,9 @@ export function checkTickerMatch(params: {
     // "the arithmetic happens to cancel."
     if (params.allPendingFromInvoice) {
       return { matched: true, reason: "invoice-verified", netShares, ...common };
+    }
+    if (params.allPendingFromOfficialBrokerExcel) {
+      return { matched: true, reason: "broker-excel-verified", netShares, ...common };
     }
     if (params.allPendingSelfVerified) {
       return { matched: true, reason: "cross-verified", netShares, ...common };
