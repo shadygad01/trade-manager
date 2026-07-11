@@ -544,6 +544,22 @@ export const en: Dict = {
       "Apply this rebuild? This will add {{add}} trade(s), remove {{remove}} trade(s), and correct {{modify}} trade(s)' metadata. This writes to your ledger and can't be undone except by restoring a backup.",
     applyResult: "Added {{added}}, removed {{removed}}, corrected {{modified}} ({{skipped}} skipped — see rows above).",
   },
+  provenanceRepair: {
+    title: "Repair Official Broker Excel Provenance",
+    description:
+      "Fixes sells recorded before a bug fix: allocating a sell used to always write a fresh, wrongly-'manual'-sourced fact even when the correctly-sourced fact from the original import already existed, unclaimed. This finds every sell still affected and re-points it at its correct, already-existing fact — the lots closed and shares never change, only which fact the ledger resolves the sell to. Nothing is written until you review this check and explicitly repair.",
+    runCheck: "Run Check",
+    checking: "Checking…",
+    checkFailed: "Check failed.",
+    noneFound: "No affected sells found — nothing to repair.",
+    findingLine: "currently {{wrongSource}}, should be {{correctSource}}",
+    repairWarning: "Only the sells listed above are touched. Every other fact, ticker, and trade is left exactly as-is.",
+    repairButton: "Repair {{n}} Sell(s)",
+    repairing: "Repairing…",
+    repairFailed: "Repair failed.",
+    repairConfirm: "Repair {{n}} sell(s)? This re-points each one at its correct, already-existing fact. This writes to your ledger and can't be undone except by restoring a backup.",
+    repairResult: "Repaired {{repaired}} ({{skipped}} skipped — already changed since the check ran, re-run the check to see their current state).",
+  },
   buyZoneChart: {
     noTrades: "No trades recorded for this ticker yet.",
     tooltipLabel: "Entry price · {{remaining}}/{{total}} shares remaining",
@@ -1268,6 +1284,22 @@ export const ar: Dict = {
     applyConfirm:
       "تطبيق إعادة البناء هذه؟ سيضيف هذا {{add}} صفقة، ويحذف {{remove}} صفقة، ويصحح بيانات {{modify}} صفقة. هذا يكتب في سجلك ولا يمكن التراجع عنه إلا باستعادة نسخة احتياطية.",
     applyResult: "أُضيف {{added}}، حُذف {{removed}}، صُحّح {{modified}} (تم تخطي {{skipped}} — راجع الصفوف أعلاه).",
+  },
+  provenanceRepair: {
+    title: "إصلاح مصدر ملف إكسل الرسمي من الوسيط",
+    description:
+      "يصلح عمليات البيع المسجَّلة قبل إصلاح خلل: تخصيص عملية بيع كان دائمًا يكتب حقيقة جديدة بمصدر \"يدوي\" خاطئ، حتى عندما تكون الحقيقة الصحيحة من الاستيراد الأصلي موجودة بالفعل دون استخدام. يجد هذا كل عملية بيع لا تزال متأثرة ويعيد توجيهها إلى حقيقتها الصحيحة الموجودة بالفعل — الدفعات المُغلقة وعدد الأسهم لا تتغيران أبدًا، فقط الحقيقة التي يعتمد عليها السجل لهذا البيع. لا يُكتب شيء حتى تراجع هذا الفحص وتوافق على الإصلاح صراحةً.",
+    runCheck: "تشغيل الفحص",
+    checking: "جارٍ الفحص…",
+    checkFailed: "فشل الفحص.",
+    noneFound: "لم يُعثر على عمليات بيع متأثرة — لا شيء لإصلاحه.",
+    findingLine: "حاليًا {{wrongSource}}، ويجب أن يكون {{correctSource}}",
+    repairWarning: "لا يُمس سوى عمليات البيع المذكورة أعلاه. كل حقيقة ورمز وصفقة أخرى تُترك كما هي تمامًا.",
+    repairButton: "إصلاح {{n}} عملية بيع",
+    repairing: "جارٍ الإصلاح…",
+    repairFailed: "فشل الإصلاح.",
+    repairConfirm: "إصلاح {{n}} عملية بيع؟ سيعيد هذا توجيه كل واحدة إلى حقيقتها الصحيحة الموجودة بالفعل. هذا يكتب في سجلك ولا يمكن التراجع عنه إلا باستعادة نسخة احتياطية.",
+    repairResult: "تم إصلاح {{repaired}} (تم تخطي {{skipped}} — تغيّرت بالفعل منذ تشغيل الفحص، أعد تشغيل الفحص لرؤية حالتها الحالية).",
   },
   buyZoneChart: {
     noTrades: "لا توجد صفقات مسجّلة لهذا الرمز بعد.",

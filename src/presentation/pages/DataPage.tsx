@@ -6,6 +6,7 @@ import { importSession } from "@presentation/lib/importSession";
 import { exportLedger, importLedger, parseLedgerSnapshot } from "@application/services/BackupService";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { RebuildLedgerPanel } from "@presentation/components/RebuildLedgerPanel";
+import { ProvenanceRepairPanel } from "@presentation/components/ProvenanceRepairPanel";
 import { formatDate } from "@presentation/lib/format";
 import { useT } from "@presentation/i18n/translations";
 
@@ -164,6 +165,10 @@ export function DataPage() {
 
       <div className="mt-4">
         <RebuildLedgerPanel />
+      </div>
+
+      <div className="mt-4">
+        <ProvenanceRepairPanel />
       </div>
 
       <div className="mt-4 rounded-xl border border-rose-500/30 bg-rose-500/5 p-5">
