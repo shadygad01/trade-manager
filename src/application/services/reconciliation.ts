@@ -23,6 +23,64 @@ export interface PositionReconciliation {
   verificationStale: boolean;
 }
 
+export interface PendingConfirmation {
+  ticker: string;
+  side: "BUY" | "SELL";
+  date: string;
+  time: string;
+  shares: number;
+  price: number;
+  /** The Trade id (BUY) or sellGroupId (SELL) to pass into confirmPendingBuy/confirmPendingSell. */
+  refId: string;
+}
+
+/**
+ * Every Trade/TradeAllocation still `confirmationStatus: "pending"` — a
+ * partial-fill execution imported from STES (Extraction Notes = "Needs
+ * Confirmation") whose exact final numbers await the broker invoice.
+ * Independent of `reconcilePositions`: that function only ever produces a
+ * row for a ticker with a broker "My Position" screenshot on file, but a
+ * pending confirmation has nothing to do with that and must surface
+ * regardless of whether one exists.
+ */
+export function findPendingConfirmations(trades: Trade[], allocations: TradeAllocation[]): PendingConfirmation[] {
+  const results: PendingConfirmation[] = [];
+
+  for (const trade of trades) {
+    if (trade.confirmationStatus !== "pending") continue;
+    results.push({
+      ticker: trade.ticker,
+      side: "BUY",
+      date: trade.executionDate,
+      time: trade.executionTime,
+      shares: trade.shares,
+      price: trade.entryPrice,
+      refId: trade.id,
+    });
+  }
+
+  const pendingBySellGroup = new Map<string, TradeAllocation[]>();
+  for (const allocation of allocations) {
+    if (allocation.confirmationStatus !== "pending") continue;
+    const group = pendingBySellGroup.get(allocation.sellGroupId) ?? [];
+    group.push(allocation);
+    pendingBySellGroup.set(allocation.sellGroupId, group);
+  }
+  for (const [sellGroupId, group] of pendingBySellGroup) {
+    results.push({
+      ticker: group[0].ticker,
+      side: "SELL",
+      date: group[0].executionDate,
+      time: group[0].executionTime,
+      shares: group.reduce((sum, a) => sum + a.sharesClosed, 0),
+      price: group[0].exitPrice,
+      refId: sellGroupId,
+    });
+  }
+
+  return results;
+}
+
 /** The most recent PositionVerification per ticker — the same "which broker screenshot is ground truth" reduction reused by ledgerRebuild.ts's holdings diff. */
 export function latestByTicker(verifications: PositionVerification[]): Map<string, PositionVerification> {
   const latest = new Map<string, PositionVerification>();

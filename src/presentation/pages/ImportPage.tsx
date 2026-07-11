@@ -644,6 +644,7 @@ export function ImportPage() {
         executionTime: entry.candidate.time ?? "00:00",
         notes: "Imported from screenshot/PDF",
         transactionNumber: entry.candidate.transactionNumber,
+        needsConfirmation: entry.candidate.needsConfirmation,
       });
       importSession.update((prev) => ({
         ...prev,
@@ -1898,6 +1899,7 @@ export function ImportPage() {
               executionDate: sellCandidate.candidate.date,
               executionTime: sellCandidate.candidate.time,
               transactionNumber: sellCandidate.candidate.transactionNumber,
+              needsConfirmation: sellCandidate.candidate.needsConfirmation,
             }}
             onDone={(created) => {
               importSession.update((prev) => ({

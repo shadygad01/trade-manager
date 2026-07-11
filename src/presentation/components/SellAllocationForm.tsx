@@ -22,6 +22,8 @@ interface SellAllocationFormProps {
     executionTime?: string;
     /** Broker-assigned unique execution ID for this sell (e.g. Thndr's Invoice "Transaction No.") carried over from the parsed candidate, if the source document had one — see TradeAllocation.transactionNumber. */
     transactionNumber?: string;
+    /** See TradeAllocation.confirmationStatus, carried over from the parsed candidate. */
+    needsConfirmation?: boolean;
   };
 }
 
@@ -176,6 +178,7 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, init
         executionDate,
         executionTime,
         transactionNumber: initial?.transactionNumber,
+        needsConfirmation: initial?.needsConfirmation,
       };
 
       const result = await recordSell(repos, input);

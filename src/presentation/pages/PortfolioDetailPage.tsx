@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams, Link } from "wouter";
-import { Banknote, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser } from "lucide-react";
-import { repos } from "@presentation/lib/data";
-import { deleteTrade } from "@application/services/TradeService";
+import { Banknote, CircleDollarSign, ShieldAlert, ShieldCheck, Wrench, SplitSquareHorizontal, Archive, ArchiveRestore, Trash2, Pencil, Eraser, FileWarning, Upload } from "lucide-react";
+import { repos, getImportOrchestrator } from "@presentation/lib/data";
+import { deleteTrade, confirmPendingBuy, confirmPendingSell } from "@application/services/TradeService";
 import { computeCanonicalPositions } from "@application/services/canonicalHoldings";
 import {
   setCash,
@@ -15,7 +15,7 @@ import {
   unarchivePortfolio,
   renamePortfolio,
 } from "@application/services/PortfolioService";
-import { reconcilePositions, suggestDuplicateTradeIds } from "@application/services/reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations, type PendingConfirmation } from "@application/services/reconciliation";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
 import type { Position, PositionReconciliation } from "@presentation/lib/types";
@@ -41,6 +41,8 @@ export function PortfolioDetailPage() {
   const [deleteError, setDeleteError] = useState<{ tradeId: string; message: string } | null>(null);
   const [clearAllError, setClearAllError] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
+  const [confirming, setConfirming] = useState<Record<string, boolean>>({});
+  const [confirmError, setConfirmError] = useState<Record<string, string | undefined>>({});
   // Deleting a trade doesn't reliably retrigger dexie-react-hooks' liveQuery
   // for this page's positions/reconciliation (a pre-existing gap, not
   // specific to this action) — bumping this forces both queries to
@@ -63,7 +65,64 @@ export function PortfolioDetailPage() {
     return reconcilePositions(positions, verifications, trades, allocations);
   }, [id, positions, refreshKey]);
   const reconciliationByTicker = new Map((reconciliations ?? []).map((r) => [r.ticker, r]));
+  const pendingConfirmations = useLiveQuery(async (): Promise<PendingConfirmation[]> => {
+    const [trades, allocations] = await Promise.all([repos.trades.getByPortfolio(id), repos.allocations.getByPortfolio(id)]);
+    return findPendingConfirmations(trades, allocations);
+  }, [id, refreshKey]);
+  const pendingConfirmationsByTicker = new Map<string, PendingConfirmation[]>();
+  for (const item of pendingConfirmations ?? []) {
+    const list = pendingConfirmationsByTicker.get(item.ticker) ?? [];
+    list.push(item);
+    pendingConfirmationsByTicker.set(item.ticker, list);
+  }
   const timelineEvents = useLiveQuery(() => repos.timeline.getByPortfolio(id), [id]);
+
+  /**
+   * Runs an uploaded broker invoice through the same OCR pipeline Import
+   * itself uses, then confirms exactly the one pending item it was uploaded
+   * for — never a fuzzy search across every pending transaction. The user
+   * already told the app which specific transaction this file is for by
+   * clicking its upload control; a ticker/side mismatch or an ambiguous read
+   * surfaces a clear error instead of guessing which candidate to trust.
+   */
+  async function handleUploadInvoice(item: PendingConfirmation, file: File) {
+    setConfirmError((prev) => ({ ...prev, [item.refId]: undefined }));
+    setConfirming((prev) => ({ ...prev, [item.refId]: true }));
+    try {
+      const orchestrator = await getImportOrchestrator();
+      const result = await orchestrator.importFile(file);
+      if (result.status === "failed") {
+        throw new Error(t("portfolioDetail.confirmInvoiceUnreadable"));
+      }
+      const matches = result.candidates.filter(
+        (c) => normalizeTicker(c.ticker) === normalizeTicker(item.ticker) && c.side === item.side
+      );
+      if (matches.length === 0) {
+        throw new Error(t("portfolioDetail.confirmInvoiceNoMatch", { ticker: item.ticker }));
+      }
+      if (matches.length > 1) {
+        throw new Error(t("portfolioDetail.confirmInvoiceAmbiguous", { ticker: item.ticker }));
+      }
+      const candidate = matches[0];
+      const confirmed = {
+        shares: candidate.shares,
+        price: candidate.price,
+        fees: candidate.fees,
+        taxes: candidate.taxes,
+        transactionNumber: candidate.transactionNumber,
+      };
+      if (item.side === "BUY") {
+        await confirmPendingBuy(repos, item.refId, confirmed);
+      } else {
+        await confirmPendingSell(repos, item.refId, confirmed);
+      }
+      setRefreshKey((k) => k + 1);
+    } catch (e) {
+      setConfirmError((prev) => ({ ...prev, [item.refId]: e instanceof Error ? e.message : t("portfolioDetail.confirmInvoiceFailed") }));
+    } finally {
+      setConfirming((prev) => ({ ...prev, [item.refId]: false }));
+    }
+  }
 
   async function handleDeleteTrade(tradeId: string) {
     if (!confirm(t("portfolioDetail.deleteTradeConfirm"))) {
@@ -352,7 +411,36 @@ export function PortfolioDetailPage() {
                     </td>
                     <td className="px-4 py-2.5 text-end tabular-nums text-slate-400">{p.openTrades.length}</td>
                     <td className="px-4 py-2.5">
-                      {!r ? (
+                      {pendingConfirmationsByTicker.get(p.ticker)?.length ? (
+                        <div className="flex flex-col gap-1.5">
+                          {pendingConfirmationsByTicker.get(p.ticker)!.map((item) => (
+                            <div key={item.refId} className="flex flex-col gap-1 rounded border border-cyan-500/30 bg-cyan-500/5 px-2 py-1.5">
+                              <span className="flex items-center gap-1 text-xs text-cyan-300">
+                                <FileWarning size={13} /> {t("portfolioDetail.needsConfirmation")}
+                              </span>
+                              <span className="text-[11px] tabular-nums text-slate-400">
+                                {item.side} {formatShares(item.shares)} {t("portfolioDetail.shSuffix")} @ {formatMoney(item.price)} · {formatDate(item.date)}
+                              </span>
+                              <label className="inline-flex w-fit cursor-pointer items-center gap-1 rounded border border-cyan-500/40 px-2 py-1 text-[11px] text-cyan-300 hover:bg-cyan-500/10">
+                                <Upload size={11} />
+                                {confirming[item.refId] ? t("portfolioDetail.confirming") : t("portfolioDetail.uploadInvoice")}
+                                <input
+                                  type="file"
+                                  accept="image/*,.pdf,.csv,.xlsx"
+                                  className="hidden"
+                                  disabled={confirming[item.refId]}
+                                  onChange={(e) => {
+                                    const file = e.target.files?.[0];
+                                    e.target.value = "";
+                                    if (file) void handleUploadInvoice(item, file);
+                                  }}
+                                />
+                              </label>
+                              {confirmError[item.refId] ? <p className="text-[11px] text-rose-400">{confirmError[item.refId]}</p> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : !r ? (
                         <span className="text-xs text-slate-600">{t("common.dash")}</span>
                       ) : r.verificationStale ? (
                         <span className="text-xs text-slate-500">{t("portfolioDetail.verificationOutdated")}</span>

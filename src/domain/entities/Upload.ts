@@ -52,6 +52,15 @@ export interface ParsedTradeCandidate {
    * duplicateDetection.ts's sameExecution().
    */
   transactionNumber?: string;
+  /**
+   * STES-only: set when the extracting AI wrote "Needs Confirmation" into
+   * the row's Extraction Notes cell (see STANDARD_TRADING_EXCHANGE_SCHEMA.md)
+   * — a partial-fill execution whose exact final numbers still need
+   * confirming against the broker invoice. Committing this candidate flags
+   * the resulting Trade/TradeAllocation `confirmationStatus: "pending"`
+   * instead of leaving the signal to rot in free text.
+   */
+  needsConfirmation?: boolean;
 }
 
 /**
