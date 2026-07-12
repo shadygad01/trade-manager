@@ -292,6 +292,33 @@ export function ImportPage() {
    * transaction is already fully recorded. Gated on initialDataLoaded so a
    * briefly-empty trades/allocations read can't mislabel (or fail to label)
    * a row off stale data.
+   *
+   * `inFlightKeys` exclusion closes a real, reproduced race: commitTickerGroup's
+   * own addBuyCandidate saves the Trade (repos.trades.save) several awaits
+   * BEFORE it ever updates addedKeys — a window in which this effect's own
+   * existingTrades dependency (a live Dexie query) can already see the
+   * brand-new Trade and re-run before addedKeys catches up. Without this
+   * guard, a candidate mid-commit briefly looks like "not yet added, and now
+   * duplicates an existing trade" (the trade its OWN commit just wrote), so
+   * this effect would skip it and retract its RawTransaction fact out from
+   * under ensureBuyFact/ensureSellFacts — which then finds no live fact left
+   * to adopt and mints a fresh one hardcoded to source "manual", silently
+   * destroying the ticker's official-broker-excel provenance (reproduced:
+   * an Excel-sourced ticker with nothing left pending immediately reads as
+   * "Needs broker screenshot"/"Closed — needs corroborating evidence" right
+   * after Confirm, exactly the recurring class of bug this file has chased
+   * before — see docs/ROADMAP.md). commitTickerGroup already marks a key
+   * in-flight before its first await for exactly this kind of reentrancy;
+   * this effect just needs to respect the same guard.
+   *
+   * `sellCandidate?.key` closes the identical race for the OTHER commit path
+   * this file has — SellAllocationForm's submission, which isn't covered by
+   * `inFlightKeys` at all (that Set is only touched by commitTickerGroup's
+   * own three loops). recordSell saves each TradeAllocation, several awaits
+   * before its own fact is ensured, exactly like recordBuy — the sell
+   * candidate's key stays excluded for the whole time its modal is open,
+   * which safely covers the in-flight submission window too (nothing else
+   * can add this key while its own modal is up).
    */
   useEffect(() => {
     if (!initialDataLoaded) return;
@@ -303,6 +330,8 @@ export function ImportPage() {
           !state.addedKeys.includes(e.key) &&
           !state.skippedKeys.includes(e.key) &&
           !state.dismissedKeys.includes(e.key) &&
+          !inFlightKeys.has(e.key) &&
+          e.key !== sellCandidate?.key &&
           (() => {
             const m = duplicateMatch(e.candidate, undefined, ownAllocs[e.key]);
             return m !== undefined && (m.matchType === "exact" || pricesWithinOcrNoise(m.matchedPrice, e.candidate.price));
@@ -321,6 +350,7 @@ export function ImportPage() {
     session.addedKeys,
     session.skippedKeys,
     session.dismissedKeys,
+    sellCandidate,
   ]);
 
   /**
@@ -339,12 +369,16 @@ export function ImportPage() {
    * self-contained like its sibling above). The matched execution rows
    * themselves are never skipped — they commit normally and are surfaced as
    * "Confirmed by Statement" via aggregateConfirmedKeys below.
+   *
+   * Same `inFlightKeys` exclusion as the exact-duplicate effect above, and
+   * for the same reason — a key mid-commit must never be retracted out from
+   * under the commit that's still in flight on it.
    */
   useEffect(() => {
     if (!initialDataLoaded) return;
     const state = importSession.getState();
     const stillPending = state.pendingCandidates.filter(
-      (e) => !state.addedKeys.includes(e.key) && !state.skippedKeys.includes(e.key) && !state.dismissedKeys.includes(e.key),
+      (e) => !state.addedKeys.includes(e.key) && !state.skippedKeys.includes(e.key) && !state.dismissedKeys.includes(e.key) && !inFlightKeys.has(e.key),
     );
     const crossSourceVerified = findCrossSourceVerifiedKeys(stillPending);
     const aggregateMatches = findAggregateStatementMatches(stillPending, crossSourceVerified);
@@ -817,20 +851,6 @@ export function ImportPage() {
     const portfolioId = resolvedPortfolioId(ticker);
     if (!portfolioId) return;
 
-    // Migration dual-write: setTickerPortfolio's own assignPortfolio call
-    // only fires when the user explicitly picks from the dropdown —
-    // resolvedPortfolioId can also resolve implicitly (a ticker already
-    // uniquely tied to one portfolio, or a single-portfolio app), in which
-    // case that call never happens and this ticker's RawTransactions would
-    // stay unassigned forever, never reaching the new architecture's commit
-    // trigger. Calling it here too, on every commit regardless of how the
-    // portfolio resolved, closes that gap; it's a harmless no-op once
-    // setTickerPortfolio already assigned everything. Isolated and
-    // non-fatal for the same reason as every other shadow write here.
-    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
-      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
-    });
-
     const state = importSession.getState();
 
     const buys = state.pendingCandidates.filter(
@@ -885,6 +905,45 @@ export function ImportPage() {
         inFlightKeys.delete(entry.key);
       }
     }
+
+    // Migration dual-write: setTickerPortfolio's own assignPortfolio call
+    // only fires when the user explicitly picks from the dropdown —
+    // resolvedPortfolioId can also resolve implicitly (a ticker already
+    // uniquely tied to one portfolio, or a single-portfolio app), in which
+    // case that call never happens and this ticker's RawTransactions would
+    // stay unassigned forever, never reaching the new architecture's commit
+    // trigger. Calling it here too, on every commit regardless of how the
+    // portfolio resolved, closes that gap; it's a harmless no-op once
+    // setTickerPortfolio already assigned everything. Isolated and
+    // non-fatal for the same reason as every other shadow write here.
+    //
+    // Deliberately run AFTER the three loops above, not before (a real,
+    // reproduced bug this ordering fixes): assignPortfolio assigns EVERY
+    // still-unassigned live fact for this ticker in one sweep, and each
+    // assignment reactively fires commitEngine's own shouldCommit/commitTicker
+    // trigger (appendAndMaybeCommit's PortfolioAssignment branch) — a
+    // SEPARATE commit pathway from this function's own recordBuy/recordSell
+    // calls. Running the sweep BEFORE the buys loop let it assign a SECOND
+    // (or later) still-unprocessed candidate the moment the FIRST one's
+    // assignment made the whole ticker's verification batch terminal —
+    // triggering commitEngine's own projectLegacyTicker to materialize a
+    // legacy Trade for that second candidate from raw facts alone, racing
+    // this function's own recordBuy call for the SAME candidate moments
+    // later and producing two Trade rows for one real execution (reproduced:
+    // a ticker with two Excel-sourced Buys in the same import batch ended up
+    // with a duplicate Trade, and the genuine candidate's own RawTransaction
+    // fact got auto-skipped/retracted as an apparent "exact duplicate" of
+    // the phantom one, permanently losing its official-broker-excel
+    // provenance the same way the single-Buy race did). Running the sweep
+    // LAST means every candidate this call itself processes already has its
+    // own Trade AND its own assignment (ensureBuyFact/ensureSellFacts assign
+    // individually, immediately after adopting/creating their fact) by the
+    // time this blanket sweep runs — it only ever has real gaps left to
+    // close (dividends/verifications, which never assign themselves), never
+    // a not-yet-recordBuy'd candidate to race.
+    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
+      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
+    });
   }
 
   /**

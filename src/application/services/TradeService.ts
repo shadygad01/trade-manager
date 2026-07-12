@@ -8,7 +8,7 @@ import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { KNOWN_EGX_TICKERS, tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
 import { getTrackingStartDate, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
-import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolio, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
+import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolioToFact, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 import { canonicalKey } from "./ledgerRebuild";
 import { resolveLotRef } from "./ledgerProjection";
 import { isRetracted, resolveCurrentTicker, findUnclaimedSellExecutionFact } from "./rawTransactionFolds";
@@ -119,7 +119,7 @@ async function ensureBuyFact(repos: CommitEngineRepos & Partial<AppRepositories>
       createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "manual", portfolioId: trade.portfolioId, ticker, payload })
     );
   } else {
-    await assignPortfolio(repos, ticker, trade.portfolioId);
+    await assignPortfolioToFact(repos, liveMatch.id, trade.portfolioId);
   }
 }
 
@@ -651,7 +651,7 @@ async function ensureSellFacts(
     })
   );
 
-  await assignPortfolio(repos, ticker, input.portfolioId);
+  await assignPortfolioToFact(repos, sellExecutionId, input.portfolioId);
 }
 
 export interface MoveTradeResult {
