@@ -292,6 +292,33 @@ export function ImportPage() {
    * transaction is already fully recorded. Gated on initialDataLoaded so a
    * briefly-empty trades/allocations read can't mislabel (or fail to label)
    * a row off stale data.
+   *
+   * `inFlightKeys` exclusion closes a real, reproduced race: commitTickerGroup's
+   * own addBuyCandidate saves the Trade (repos.trades.save) several awaits
+   * BEFORE it ever updates addedKeys — a window in which this effect's own
+   * existingTrades dependency (a live Dexie query) can already see the
+   * brand-new Trade and re-run before addedKeys catches up. Without this
+   * guard, a candidate mid-commit briefly looks like "not yet added, and now
+   * duplicates an existing trade" (the trade its OWN commit just wrote), so
+   * this effect would skip it and retract its RawTransaction fact out from
+   * under ensureBuyFact/ensureSellFacts — which then finds no live fact left
+   * to adopt and mints a fresh one hardcoded to source "manual", silently
+   * destroying the ticker's official-broker-excel provenance (reproduced:
+   * an Excel-sourced ticker with nothing left pending immediately reads as
+   * "Needs broker screenshot"/"Closed — needs corroborating evidence" right
+   * after Confirm, exactly the recurring class of bug this file has chased
+   * before — see docs/ROADMAP.md). commitTickerGroup already marks a key
+   * in-flight before its first await for exactly this kind of reentrancy;
+   * this effect just needs to respect the same guard.
+   *
+   * `sellCandidate?.key` closes the identical race for the OTHER commit path
+   * this file has — SellAllocationForm's submission, which isn't covered by
+   * `inFlightKeys` at all (that Set is only touched by commitTickerGroup's
+   * own three loops). recordSell saves each TradeAllocation, several awaits
+   * before its own fact is ensured, exactly like recordBuy — the sell
+   * candidate's key stays excluded for the whole time its modal is open,
+   * which safely covers the in-flight submission window too (nothing else
+   * can add this key while its own modal is up).
    */
   useEffect(() => {
     if (!initialDataLoaded) return;
@@ -303,6 +330,8 @@ export function ImportPage() {
           !state.addedKeys.includes(e.key) &&
           !state.skippedKeys.includes(e.key) &&
           !state.dismissedKeys.includes(e.key) &&
+          !inFlightKeys.has(e.key) &&
+          e.key !== sellCandidate?.key &&
           (() => {
             const m = duplicateMatch(e.candidate, undefined, ownAllocs[e.key]);
             return m !== undefined && (m.matchType === "exact" || pricesWithinOcrNoise(m.matchedPrice, e.candidate.price));
@@ -321,6 +350,7 @@ export function ImportPage() {
     session.addedKeys,
     session.skippedKeys,
     session.dismissedKeys,
+    sellCandidate,
   ]);
 
   /**
@@ -339,12 +369,16 @@ export function ImportPage() {
    * self-contained like its sibling above). The matched execution rows
    * themselves are never skipped — they commit normally and are surfaced as
    * "Confirmed by Statement" via aggregateConfirmedKeys below.
+   *
+   * Same `inFlightKeys` exclusion as the exact-duplicate effect above, and
+   * for the same reason — a key mid-commit must never be retracted out from
+   * under the commit that's still in flight on it.
    */
   useEffect(() => {
     if (!initialDataLoaded) return;
     const state = importSession.getState();
     const stillPending = state.pendingCandidates.filter(
-      (e) => !state.addedKeys.includes(e.key) && !state.skippedKeys.includes(e.key) && !state.dismissedKeys.includes(e.key),
+      (e) => !state.addedKeys.includes(e.key) && !state.skippedKeys.includes(e.key) && !state.dismissedKeys.includes(e.key) && !inFlightKeys.has(e.key),
     );
     const crossSourceVerified = findCrossSourceVerifiedKeys(stillPending);
     const aggregateMatches = findAggregateStatementMatches(stillPending, crossSourceVerified);
