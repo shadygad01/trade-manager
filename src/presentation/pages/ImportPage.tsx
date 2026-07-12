@@ -364,6 +364,7 @@ export function ImportPage() {
           date: e.candidate.date,
           shares: e.candidate.shares,
           price: m.matchedPrice,
+          time: e.candidate.time,
         },
         e.key,
       );
@@ -3033,6 +3034,7 @@ export function TickerGroupCard({
               aggregateMatchDetail={aggregateGroupDetailByKey?.get(entry.key)}
               orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
               noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
+              error={rowErrors[entry.key]}
               onDiscardPending={() => onDiscardPending(entry)}
             />
           );
@@ -3536,6 +3538,7 @@ export function CandidateRow({
   aggregateMatchDetail,
   orderConfirmed = false,
   noMatchingOrder = false,
+  error,
   onDiscardPending,
 }: {
   entry: CandidateEntry;
@@ -3569,6 +3572,8 @@ export function CandidateRow({
   orderConfirmed?: boolean;
   /** True on a mismatch when this ticker's Orders history was uploaded and no fulfilled order matches this row (see AutoCommitRow's twin prop). */
   noMatchingOrder?: boolean;
+  /** Set when onAction/onSmartAction threw (see ImportPage's rowErrors/setRowError) — previously silently swallowed for a Sell row (unlike AutoCommitRow's own twin prop), which made a failing Smart Allocate/Allocate Sell click look like a no-op with zero feedback. */
+  error?: string;
   /** Discards this row from the pending pool outright — available on every still-pending row, not just ones auto-flagged as a suspected duplicate (see AutoCommitRow's onDiscardPending). */
   onDiscardPending?: () => void;
 }) {
@@ -3739,6 +3744,7 @@ export function CandidateRow({
           </span>
         )}
       </div>
+      {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
     </div>
   );
 }

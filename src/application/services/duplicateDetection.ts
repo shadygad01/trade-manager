@@ -90,8 +90,22 @@ function parseTimeToMinutes(raw: string): number | undefined {
  * trade of the same ticker/shares/price as one already recorded (an
  * ordinary accumulation pattern, not a re-import) would be misjudged as an
  * exact duplicate and silently auto-skipped during commit.
+ *
+ * Exported for reuse by every other place a "same real execution?" identity
+ * question comes down to value alone (ticker/side/date/shares/price) and
+ * needs execution time as the tiebreaker between two candidates sharing that
+ * exact value — TradeService.ensureBuyFact's liveMatch search,
+ * ledgerProjection.ts's resolveExistingTradeForLot fallback, and
+ * rawTransactionFolds.ts's findUnclaimedSellExecutionFact/findLiveExecutionFact
+ * — all of which used to pick whichever same-value candidate came first in
+ * array order, with no regard for time. A real, reproduced bug: two genuine
+ * same-day, same-price, same-share-count Buy orders (a common pattern —
+ * splitting a large order into smaller fills at an identical limit price)
+ * placed minutes apart got cross-linked to the wrong RawTransaction fact
+ * during commit, spawning a phantom extra Trade row for one execution and
+ * leaving the other's row wrongly flagged "Duplicate" in the Import UI.
  */
-function timesConflict(a?: string, b?: string): boolean {
+export function timesConflict(a?: string, b?: string): boolean {
   if (!a || !b || a === UNKNOWN_TIME || b === UNKNOWN_TIME) return false;
   const minutesA = parseTimeToMinutes(a);
   const minutesB = parseTimeToMinutes(b);

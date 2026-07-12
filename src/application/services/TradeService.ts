@@ -12,6 +12,7 @@ import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolioToFa
 import { canonicalKey } from "./ledgerRebuild";
 import { resolveLotRef } from "./ledgerProjection";
 import { isRetracted, resolveCurrentTicker, findUnclaimedSellExecutionFact } from "./rawTransactionFolds";
+import { timesConflict } from "./duplicateDetection";
 import {
   createRawTransaction,
   type BuyExecutionPayload,
@@ -84,7 +85,7 @@ async function ensureBuyFact(repos: CommitEngineRepos & Partial<AppRepositories>
   const otherTradeIds = new Set(
     (await repos.trades!.getByPortfolio(trade.portfolioId)).filter((t) => t.id !== trade.id).map((t) => t.id)
   );
-  const liveMatch = all.find((t) => {
+  const sameValueCandidates = all.filter((t) => {
     if (t.kind !== "BuyExecution") return false;
     if (isRetracted(all, t.id)) return false;
     // Resolved through any live Correction (see rawTransactionFolds.ts's
@@ -97,6 +98,20 @@ async function ensureBuyFact(repos: CommitEngineRepos & Partial<AppRepositories>
     const p = t.payload as BuyExecutionPayload;
     return canonicalKey({ side: "BUY", ticker, date: p.executionDate, shares: p.shares, price: p.price }) === key;
   });
+  // canonicalKey is time-blind (ticker/side/date/shares/price only) — two
+  // genuinely distinct real Buys sharing every other field (e.g. two same-
+  // price limit fills minutes apart) both land in sameValueCandidates. Prefer
+  // whichever one's own executionTime actually agrees with this trade's, so
+  // this trade adopts ITS OWN real fact rather than an arbitrary sibling's
+  // (a real, reproduced bug: cross-linking two such facts spawned a phantom
+  // extra Trade and left the other's row wrongly flagged "Duplicate" in
+  // Import — see this module's own regression test). Falls back to the
+  // first candidate, unchanged from the prior behavior, when time can't
+  // disambiguate (only one candidate, or none has a matching time).
+  const liveMatch =
+    sameValueCandidates.length > 1
+      ? (sameValueCandidates.find((t) => !timesConflict(trade.executionTime, (t.payload as BuyExecutionPayload).executionTime)) ?? sameValueCandidates[0])
+      : sameValueCandidates[0];
 
   if (!liveMatch) {
     const payload: BuyExecutionPayload = {
@@ -623,6 +638,7 @@ async function ensureSellFacts(
     executionDate: input.executionDate,
     shares: totalShares,
     price,
+    executionTime: input.executionTime,
   });
   const sellExecutionId = existingFact?.id ?? sellGroupId;
   if (!existingFact) {

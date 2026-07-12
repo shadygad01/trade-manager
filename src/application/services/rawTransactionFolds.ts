@@ -7,6 +7,7 @@ import type {
   SellAllocationDecisionPayload,
 } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { timesConflict } from "./duplicateDetection";
 
 /**
  * Shared supersede/retract folds over the append-only RawTransaction log (see
@@ -85,7 +86,7 @@ export function resolveCurrentTicker(all: RawTransaction[], transaction: RawTran
  */
 export function findUnclaimedSellExecutionFact(
   all: RawTransaction[],
-  match: { ticker: string; executionDate: string; shares: number; price: number },
+  match: { ticker: string; executionDate: string; shares: number; price: number; executionTime?: string },
 ): RawTransaction | undefined {
   const ticker = normalizeTicker(match.ticker);
   const claimedIds = new Set(
@@ -93,7 +94,7 @@ export function findUnclaimedSellExecutionFact(
       .filter((t) => t.kind === "SellAllocationDecision" && !isRetracted(all, t.id))
       .map((t) => (t.payload as SellAllocationDecisionPayload).sellExecutionId),
   );
-  return all.find((t) => {
+  const candidates = all.filter((t) => {
     if (t.kind !== "SellExecution") return false;
     if (isRetracted(all, t.id)) return false;
     // Resolved through any live Correction, not read from t.ticker directly
@@ -108,6 +109,15 @@ export function findUnclaimedSellExecutionFact(
     const p = t.payload as SellExecutionPayload;
     return p.executionDate === match.executionDate && p.shares === match.shares && p.price === match.price;
   });
+  // Ticker/date/shares/price alone doesn't distinguish two genuinely
+  // different real Sells sharing every one of those fields (e.g. two
+  // same-price fills minutes apart) — prefer whichever candidate's own
+  // executionTime actually agrees with match.executionTime, same fix as
+  // TradeService.ensureBuyFact's liveMatch and ledgerProjection.ts's
+  // resolveExistingTradeForLot. Falls back to the first candidate,
+  // unchanged from prior behavior, when time can't disambiguate.
+  if (candidates.length <= 1) return candidates[0];
+  return candidates.find((t) => !timesConflict(match.executionTime, (t.payload as SellExecutionPayload).executionTime)) ?? candidates[0];
 }
 
 /**
@@ -128,11 +138,11 @@ export function findUnclaimedSellExecutionFact(
  */
 export function findLiveExecutionFact(
   all: RawTransaction[],
-  match: { kind: "BuyExecution" | "SellExecution"; ticker: string; date: string; shares: number; price: number },
+  match: { kind: "BuyExecution" | "SellExecution"; ticker: string; date: string; shares: number; price: number; time?: string },
   excludeId?: string,
 ): RawTransaction | undefined {
   const ticker = normalizeTicker(match.ticker);
-  return all.find((t) => {
+  const candidates = all.filter((t) => {
     if (t.id === excludeId) return false;
     if (t.kind !== match.kind) return false;
     if (isRetracted(all, t.id)) return false;
@@ -141,4 +151,9 @@ export function findLiveExecutionFact(
     const p = t.payload as BuyExecutionPayload | SellExecutionPayload;
     return p.executionDate === match.date && p.shares === match.shares && p.price === match.price;
   });
+  // Same time-blind-value-key fix as findUnclaimedSellExecutionFact above —
+  // prefer whichever candidate's own executionTime actually agrees with
+  // match.time when more than one shares the plain value.
+  if (candidates.length <= 1) return candidates[0];
+  return candidates.find((t) => !timesConflict(match.time, (t.payload as BuyExecutionPayload | SellExecutionPayload).executionTime)) ?? candidates[0];
 }

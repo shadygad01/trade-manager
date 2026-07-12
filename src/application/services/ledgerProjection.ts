@@ -20,6 +20,7 @@ import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { generateId } from "@domain/value-objects/id";
 import { canonicalKey } from "./ledgerRebuild";
 import { isRetracted } from "./rawTransactionFolds";
+import { timesConflict } from "./duplicateDetection";
 import type { LedgerEvent, LotOpenedEvent } from "./ledgerEngine";
 import type { Allocation } from "./allocationEngine";
 
@@ -343,7 +344,18 @@ export async function projectLegacyTicker(
     const reservedForOtherLot = new Set(
       [...exactMatchByLotEventId.entries()].filter(([eventId]) => eventId !== lot.eventId).map(([, t]) => t.id)
     );
-    return candidates.find((t) => !claimedTradeIds.has(t.id) && !reservedForOtherLot.has(t.id));
+    const available = candidates.filter((t) => !claimedTradeIds.has(t.id) && !reservedForOtherLot.has(t.id));
+    // The value key is time-blind (ticker/date/shares/price only), so two
+    // genuinely distinct lots (e.g. two same-price fills minutes apart) can
+    // both land in `available`. Prefer whichever one's own executionTime
+    // actually agrees with this lot's, rather than array order, so a real
+    // execution's Trade row keeps updating in place instead of a wrong
+    // sibling being claimed here (real, reproduced bug: the unclaimed
+    // sibling then fell to the "no match" branch below and spawned a
+    // phantom extra Trade for the SAME real execution). Falls back to the
+    // first available candidate, unchanged from prior behavior, when time
+    // can't disambiguate.
+    return available.length > 1 ? (available.find((t) => !timesConflict(lot.executionTime, t.executionTime)) ?? available[0]) : available[0];
   }
 
   const tradeIdByLotEventId = new Map<string, string>();
