@@ -13,7 +13,7 @@ import {
   consolidateTicker,
   findMisnamedTickers,
 } from "./TradeService";
-import { commitTicker, assignPortfolio, type CommitEngineRepos } from "./commitEngine";
+import { commitTicker, assignPortfolio, resolveCurrentPortfolioId, type CommitEngineRepos } from "./commitEngine";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
 import { isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
 
@@ -687,6 +687,64 @@ describe("recordSell", () => {
     expect((decision?.payload as { sellExecutionId: string }).sellExecutionId).toBe("extracted-sell-1");
 
     expect(isTickerFullyOfficialBrokerExcelSourced(facts, "CLHO")).toBe(true);
+  });
+
+  // Real, reported bug: two genuinely distinct real Buys sharing every field
+  // EXCEPT execution time (a common pattern — splitting a large order into
+  // smaller fills at the same limit price, minutes apart) both extracted
+  // as separate, still-unassigned BuyExecution facts. ensureBuyFact's own
+  // live-match search used to be time-blind (canonicalKey is
+  // ticker/side/date/shares/price only), so it could adopt whichever fact
+  // came first in array order rather than the one actually matching this
+  // trade's own execution time — leaving the WRONG fact "claimed" and the
+  // CORRECT one still unassigned, which spawned a phantom extra Trade for
+  // it during the next ledger projection, plus a false "Duplicate" badge in
+  // the Import UI. Both facts are seeded first in the array in the OPPOSITE
+  // order from the one under test, so an order-dependent (unfixed) search
+  // would fail this — a fix limited to only working when things happen to
+  // already be in the right order wouldn't be a real fix.
+  it("adopts the BuyExecution fact matching its OWN execution time, not just whichever same-value fact comes first", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1034am",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        ticker: "ABUK",
+        payload: { ticker: "ABUK", shares: 49, price: 42.4, executionDate: "2026-02-01", executionTime: "10:34AM" },
+      }),
+    );
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1032am",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        ticker: "ABUK",
+        payload: { ticker: "ABUK", shares: 49, price: 42.4, executionDate: "2026-02-01", executionTime: "10:32AM" },
+      }),
+    );
+
+    // The SECOND-inserted fact (10:32AM) is the one under test here — a
+    // naive `.find()` over the array would hit "extracted-buy-1034am" first
+    // regardless of which trade is asking.
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "ABUK",
+      shares: 49,
+      entryPrice: 42.4,
+      executionDate: "2026-02-01",
+      executionTime: "10:32AM",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    // No phantom third fact minted — the trade adopted one of the two
+    // pre-existing ones instead of writing its own.
+    expect(facts.filter((f) => f.kind === "BuyExecution")).toHaveLength(2);
+    const fact1034 = facts.find((f) => f.id === "extracted-buy-1034am")!;
+    const fact1032 = facts.find((f) => f.id === "extracted-buy-1032am")!;
+    // Only the time-matching fact gets claimed for this trade's portfolio.
+    expect(resolveCurrentPortfolioId(facts, fact1032)).toBe(trade.portfolioId);
+    expect(resolveCurrentPortfolioId(facts, fact1034)).toBeUndefined();
   });
 
   it("adopts an already-existing BuyExecution fact even when it was extracted under a ticker later renamed via a Correction fact", async () => {

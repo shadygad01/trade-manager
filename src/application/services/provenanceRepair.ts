@@ -89,6 +89,7 @@ export async function dryRunProvenanceRepair(repos: CommitEngineRepos): Promise<
       executionDate: factPayload.executionDate,
       shares: factPayload.shares,
       price: factPayload.price,
+      executionTime: factPayload.executionTime,
     });
     if (!better || better.source === "manual") continue;
 
