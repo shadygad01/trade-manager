@@ -4,6 +4,8 @@ import { createFakeRepositories, createFakeRawTransactionRepository, createFakeC
 import { recordBuy, recordSell, deleteTrade } from "./TradeService";
 import { commitTicker, appendAndMaybeCommit, assignPortfolio, retractRawTransaction, type CommitEngineRepos } from "./commitEngine";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
+import { resolveLotRef } from "./ledgerProjection";
+import { createTrade } from "@domain/entities/Trade";
 
 /**
  * Phase 9.8 — legacy-ledger projection. These tests exercise the full loop
@@ -259,5 +261,67 @@ describe("ledgerProjection — the legacy ledger auto-corrects when better histo
     const cacheAllocations = await repos.committedLedger.getAllocations("p1", "COMI");
     expect(cacheAllocations).toHaveLength(1);
     expect(cacheAllocations[0].shares).toBe(100);
+  });
+});
+
+describe("resolveLotRef — real bug found via a real user's broker Excel replayed deterministically (no concurrency involved)", () => {
+  // Real, reproduced case: two genuinely distinct real Buys sharing every
+  // field except execution time (ABUK, 49 shares @ E£42.40, 01 Feb 2023,
+  // 10:32AM and 10:34AM — an order split into two same-price fills minutes
+  // apart, a routine, legitimate real-world pattern). `ensureBuyFact`
+  // ADOPTS each one's own pre-existing official-broker-excel extraction
+  // fact rather than minting a fresh one (the whole point of the Excel
+  // trust policy) — but adoption assigns the fact's portfolio WITHOUT ever
+  // renaming the fact's id to match the freshly-generated `trade.id` (see
+  // `ensureBuyFact`'s `else` branch, TradeService.ts). `resolveLotRef`'s old
+  // fast path only ever checked `t.id === trade.id`, which can never match
+  // for an adopted fact, so it fell straight through to the fully
+  // time-blind `tradeCanonicalKey` fallback — identical for both lots.
+  it("disambiguates two same-value adopted lots by execution time instead of colliding on the time-blind canonical key", () => {
+    const portfolioId = "p1";
+    const ticker = "ABUK";
+    const sharedPayload = { ticker, shares: 49, price: 42.4, executionDate: "2023-02-01" };
+
+    // The two extraction-time facts recordImportedRawTransactions wrote —
+    // real ids, distinct only by executionTime, exactly as adopted (their
+    // own id is never renamed to any Trade's id).
+    const fact1032 = createRawTransaction({
+      id: "fact-1032am", kind: "BuyExecution", source: "official-broker-excel", portfolioId, ticker,
+      payload: { ...sharedPayload, executionTime: "10:32AM" },
+    });
+    const fact1034 = createRawTransaction({
+      id: "fact-1034am", kind: "BuyExecution", source: "official-broker-excel", portfolioId, ticker,
+      payload: { ...sharedPayload, executionTime: "10:34AM" },
+    });
+    const all = [{ ...fact1032, seq: 1 }, { ...fact1034, seq: 2 }];
+
+    // Two Trades, each with their OWN freshly-generated id (recordBuy's own
+    // generateId()) — deliberately NEITHER equals either fact's id, exactly
+    // the shape adoption produces.
+    const trade1032 = createTrade({
+      id: "trade-A", portfolioId, ticker, shares: 49, entryPrice: 42.4,
+      executionDate: "2023-02-01", executionTime: "10:32AM",
+    });
+    const trade1034 = createTrade({
+      id: "trade-B", portfolioId, ticker, shares: 49, entryPrice: 42.4,
+      executionDate: "2023-02-01", executionTime: "10:34AM",
+    });
+
+    const ref1032 = resolveLotRef(all, trade1032);
+    const ref1034 = resolveLotRef(all, trade1034);
+
+    // Each Trade resolves to ITS OWN real fact id — never each other's, and
+    // never the shared, ambiguous time-blind canonical key string.
+    expect(ref1032).toBe("fact-1032am");
+    expect(ref1034).toBe("fact-1034am");
+    expect(ref1032).not.toBe(ref1034);
+  });
+
+  it("still falls back to the plain canonical key when no fact exists at all (pre-migration/legacy data — unchanged behavior)", () => {
+    const trade = createTrade({
+      id: "trade-legacy", portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 10,
+      executionDate: "2026-01-01", executionTime: "10:00AM",
+    });
+    expect(resolveLotRef([], trade)).toBe("COMI|BUY|2026-01-01|100|10");
   });
 });
