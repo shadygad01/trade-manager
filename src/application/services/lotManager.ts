@@ -12,7 +12,8 @@ import { relevantTradeTransactions, retractRawTransaction, type CommitEngineRepo
 import { generateLedgerEvents } from "./ledgerEngine";
 import { generateAllocations } from "./allocationEngine";
 import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } from "./ledgerProjection";
-import { isRetracted } from "./rawTransactionFolds";
+import { findUnclaimedSellExecutionFact, isRetracted } from "./rawTransactionFolds";
+import { authorityRank } from "./evidenceAuthority";
 
 /**
  * Lot Manager: the ticker-scoped Buy Lots / Sell Transactions / Allocation
@@ -185,6 +186,35 @@ export interface RecordSellTransactionInput {
  * attributes it to); which Buy lot(s) it closes is a separate decision made
  * afterward via `setSellAllocation`/Auto Allocate. The sell starts life
  * "Pending" and stays visible (and sellable-from) until allocated.
+ *
+ * Provenance: if a still-unclaimed, document-sourced (never another
+ * "manual") SellExecution fact already describes this exact execution
+ * (ticker/date/shares/price — the one `recordImportedRawTransactions`
+ * writes at Excel/Invoice/screenshot extraction time, before the user ever
+ * touches Import's own review flow), that candidate is RETRACTED and its
+ * `source` carried onto the fact this call writes, instead of hardcoding
+ * "manual" unconditionally. Without this, a user who allocates a sell via
+ * the Lot Manager instead of Import's own "Allocate Sell" flow would
+ * permanently orphan the correctly-sourced extraction-time fact, and
+ * `isTickerFullyOfficialBrokerExcelSourced` (reconciliation.ts) would never
+ * recognize the now-closed ticker's history as fully Excel-sourced again —
+ * the exact "Closed — needs corroborating evidence" regression this fixes
+ * (see docs/ROADMAP.md; TradeService.ensureSellFacts already does the
+ * equivalent adoption for Import's own Sell Allocation flow).
+ *
+ * Retracting (rather than reusing the candidate's id in place, the way
+ * `ensureSellFacts` does) is deliberate: `ensureSellFacts` can safely reuse
+ * an id because it claims it with a SellAllocationDecision in the very same
+ * call, so a second identical-value sell can never find it "unclaimed"
+ * again. The Lot Manager's record-then-allocate-later design has no such
+ * atomic claim — retraction consumes the candidate immediately and
+ * permanently the first time it's matched, so a second, genuinely distinct
+ * sell sharing the same value correctly falls through to its own fresh
+ * "manual" fact instead of colliding with the first. Only ever matches a
+ * fact ranked ABOVE "manual" (evidenceAuthority.ts) — a same-value PENDING
+ * Lot Manager sell (also "manual") is never a valid adoption target, since
+ * that could be a real, deliberately separate second sell the user hasn't
+ * allocated yet, not a redundant re-entry of the same one.
  */
 export async function recordSellTransaction(repos: LotManagerRepos, input: RecordSellTransactionInput): Promise<{ sellId: string }> {
   if (input.shares <= 0) throw new Error("Sell shares must be positive");
@@ -210,9 +240,23 @@ export async function recordSellTransaction(repos: LotManagerRepos, input: Recor
     notes: input.notes,
     exitReason: input.exitReason,
   };
+
+  const all = await repos.rawTransactions.getAll();
+  const adoptable = findUnclaimedSellExecutionFact(all, {
+    ticker,
+    executionDate: input.executionDate,
+    shares: input.shares,
+    price: input.price,
+    executionTime: input.executionTime,
+  });
+  const adoptedSource = adoptable && authorityRank(adoptable.source) > authorityRank("manual") ? adoptable.source : undefined;
+  if (adoptable && adoptedSource) {
+    await retractRawTransaction(repos, adoptable.id, "Superseded by the Lot Manager's own Sell record, provenance preserved");
+  }
+
   const sellId = generateId();
   await repos.rawTransactions.append(
-    createRawTransaction({ id: sellId, kind: "SellExecution", source: "manual", portfolioId: input.portfolioId, ticker, payload })
+    createRawTransaction({ id: sellId, kind: "SellExecution", source: adoptedSource ?? "manual", portfolioId: input.portfolioId, ticker, payload })
   );
 
   await repos.timeline.save(
@@ -228,8 +272,20 @@ export async function recordSellTransaction(repos: LotManagerRepos, input: Recor
     })
   );
 
-  await syncTicker(repos, input.portfolioId, ticker);
-  return { sellId };
+  const { events } = await syncTicker(repos, input.portfolioId, ticker);
+  // The Sell/BuyLot ids the rest of the Lot Manager (getLotManagerSnapshot,
+  // setSellAllocation's own by-id lookup) actually uses are LedgerEvent
+  // ids, not raw RawTransaction ids — for anything other than a
+  // manual/backfill source, generateLedgerEvents (ledgerEngine.ts) routes
+  // through canonicalizeTradeEntries, whose eventId is a VALUE-derived
+  // canonicalKey, not txn.id. Adopting a document-sourced candidate's
+  // authority above makes this fact non-manual, so the id callers must use
+  // to reference it (e.g. TickerDetailPage.RecordSellModal's `onDone`
+  // immediately opening the allocation view for the returned sellId) is
+  // whichever event's sourceTransactionIds actually includes the fact we
+  // just wrote — never the raw id itself, which no longer matches.
+  const resolvedSellId = events.find((e) => e.type === "SellRecorded" && e.sourceTransactionIds.includes(sellId))?.eventId ?? sellId;
+  return { sellId: resolvedSellId };
 }
 
 /** Buy lots dated after the sell can never be selected — displayed, never allocatable, per the Lot Manager's temporal-validation rule. */
