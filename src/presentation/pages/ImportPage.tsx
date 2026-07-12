@@ -5,7 +5,7 @@ import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2,
 import { repos, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
 import { recordBuy, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
-import { recordImportedRawTransactions } from "@application/services/importRecording";
+import { recordImportedRawTransactions, candidateSource } from "@application/services/importRecording";
 import { createPendingExecutionRecord } from "@application/services/pendingExecutions";
 import { assignPortfolio, retractRawTransaction } from "@application/services/commitEngine";
 import {
@@ -24,6 +24,8 @@ import {
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
 import { isTickerFullyOfficialBrokerExcelSourced } from "@application/services/reconciliation";
+import { findLiveExecutionFact } from "@application/services/rawTransactionFolds";
+import { higherAuthority } from "@application/services/evidenceAuthority";
 import {
   orderEvidenceContentKey,
   findOrderConfirmedKeys,
@@ -325,29 +327,61 @@ export function ImportPage() {
     if (!initialDataLoaded) return;
     const state = importSession.getState();
     const ownAllocs = state.addedAllocationIds ?? {};
-    const keysToSkip = state.pendingCandidates
+    const skipEntries = state.pendingCandidates
       .filter(
         (e) =>
           !state.addedKeys.includes(e.key) &&
           !state.skippedKeys.includes(e.key) &&
           !state.dismissedKeys.includes(e.key) &&
           !inFlightKeys.has(e.key) &&
-          e.key !== sellCandidate?.key &&
-          (() => {
-            const m = duplicateMatch(e.candidate, undefined, ownAllocs[e.key]);
-            return m !== undefined && (m.matchType === "exact" || pricesWithinOcrNoise(m.matchedPrice, e.candidate.price));
-          })(),
+          e.key !== sellCandidate?.key,
       )
-      .map((e) => e.key);
-    if (keysToSkip.length === 0) return;
+      .map((e) => ({ e, m: duplicateMatch(e.candidate, undefined, ownAllocs[e.key]) }))
+      .filter((entry): entry is { e: CandidateEntry; m: NonNullable<ReturnType<typeof duplicateMatch>> } => {
+        const m = entry.m;
+        return m !== undefined && (m.matchType === "exact" || pricesWithinOcrNoise(m.matchedPrice, entry.e.candidate.price));
+      });
+    if (skipEntries.length === 0) return;
+    const keysToSkip = skipEntries.map(({ e }) => e.key);
+    // A Buy candidate this authoritative (e.g. official-broker-excel)
+    // duplicating a trade recorded earlier via a lower-authority source
+    // (manual entry, an OCR'd screenshot) is itself stronger evidence than
+    // whatever fact already exists for that execution — retract THAT
+    // lower-authority fact instead of the new one, so the ticker's
+    // provenance upgrades to the newly-uploaded document rather than losing
+    // it. Sells are left on the original behavior (always retract the new
+    // fact): a Sell's fact may already be claimed by a live
+    // SellAllocationDecision (see rawTransactionFolds.findUnclaimedSellExecutionFact),
+    // and re-pointing that decision at a different fact is provenanceRepair.ts's
+    // dedicated dry-run/apply job, not something to do inline here. Without
+    // this, a real, reported bug: an Excel-confirmed position kept reading
+    // "Needs broker screenshot" because the auto-skip always retracted the
+    // newly-extracted, higher-authority fact and left the older,
+    // lower-authority one as the ticker's only surviving evidence.
+    const retractIds = skipEntries.map(({ e, m }) => {
+      if (e.candidate.side !== "BUY") return e.key;
+      const existingFact = findLiveExecutionFact(existingRawTransactions, {
+        kind: "BuyExecution",
+        ticker: e.candidate.ticker,
+        date: e.candidate.date,
+        shares: e.candidate.shares,
+        price: m.matchedPrice,
+      });
+      const newSource = candidateSource(e.candidate);
+      if (existingFact && higherAuthority(newSource, existingFact.source) === newSource) {
+        return existingFact.id;
+      }
+      return e.key;
+    });
     importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
-    retractRawTransactionKeys(keysToSkip);
+    retractRawTransactionKeys(retractIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     initialDataLoaded,
     pendingCandidates,
     existingTrades,
     existingAllocations,
+    existingRawTransactions,
     session.addedKeys,
     session.skippedKeys,
     session.dismissedKeys,

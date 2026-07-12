@@ -1,4 +1,11 @@
-import type { RawTransaction, RetractionPayload, CorrectionPayload, SellExecutionPayload, SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
+import type {
+  RawTransaction,
+  RetractionPayload,
+  CorrectionPayload,
+  BuyExecutionPayload,
+  SellExecutionPayload,
+  SellAllocationDecisionPayload,
+} from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 
 /**
@@ -100,5 +107,28 @@ export function findUnclaimedSellExecutionFact(
     if (claimedIds.has(t.id)) return false;
     const p = t.payload as SellExecutionPayload;
     return p.executionDate === match.executionDate && p.shares === match.shares && p.price === match.price;
+  });
+}
+
+/**
+ * Finds the live Buy/Sell execution fact already describing one real
+ * execution (ticker/date/shares/price) — no "claimed" concept, unlike
+ * findUnclaimedSellExecutionFact above (that one guards a two-step
+ * record-then-allocate flow; this is for READING which fact already exists,
+ * e.g. to compare Evidence Authority — see evidenceAuthority.ts — against a
+ * newly-extracted duplicate of the same execution).
+ */
+export function findLiveExecutionFact(
+  all: RawTransaction[],
+  match: { kind: "BuyExecution" | "SellExecution"; ticker: string; date: string; shares: number; price: number },
+): RawTransaction | undefined {
+  const ticker = normalizeTicker(match.ticker);
+  return all.find((t) => {
+    if (t.kind !== match.kind) return false;
+    if (isRetracted(all, t.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(all, t);
+    if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== ticker) return false;
+    const p = t.payload as BuyExecutionPayload | SellExecutionPayload;
+    return p.executionDate === match.date && p.shares === match.shares && p.price === match.price;
   });
 }

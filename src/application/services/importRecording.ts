@@ -65,7 +65,7 @@ export interface ImportRecordingInput {
   cancelledOrders: ParsedCancelledOrder[];
 }
 
-function candidateSource(candidate: ParsedTradeCandidate): RawTransactionSource {
+export function candidateSource(candidate: ParsedTradeCandidate): RawTransactionSource {
   // A candidate without a recorded source predates ParsedTradeCandidate.source
   // existing — "statement" is the most common/generic document shape and the
   // same fallback duplicateDetection.ts's own cross-source logic already
