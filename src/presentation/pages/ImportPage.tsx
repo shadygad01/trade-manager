@@ -1010,7 +1010,28 @@ export function ImportPage() {
   async function commitTickerGroup(ticker: string) {
     const portfolioId = resolvedPortfolioId(ticker);
     if (!portfolioId) return;
+    const normalizedTicker = normalizeTicker(ticker);
+    // Serialized against the IDENTICAL (portfolio, ticker) queue
+    // smartAllocateSell/SellAllocationForm already use (see serialize.ts) —
+    // closes the one gap that class of fix deliberately left open (see its
+    // own doc comment/ROADMAP entry): every Buy this loop commits, and the
+    // trailing assignPortfolio sweep below, reactively triggers commitEngine's
+    // own commitTicker for this ticker (via appendAndMaybeCommit), the exact
+    // same commit pathway a concurrent Smart Allocate/Allocate Sell call also
+    // triggers. Without sharing the queue, a Sell allocation started right
+    // after Confirm (a completely ordinary "confirm buys, then allocate
+    // sells" flow, not just a rapid-click edge case) could run its own
+    // commitTicker concurrently with this function's, and whichever
+    // commitTicker call's projectLegacyTicker read a transiently-incomplete
+    // decision set last would silently delete the OTHER call's just-written
+    // TradeAllocation as "stale" — reproduced live: a value-keyed phantom
+    // allocation row replaces the real one, and ensureLegacyFactsExist's own
+    // gap-backfill (racing the same window) can mint an extra decision for a
+    // sell whose real one hasn't landed yet.
+    return runSerialized(`${portfolioId}|${normalizedTicker}`, () => commitTickerGroupLocked(ticker, portfolioId));
+  }
 
+  async function commitTickerGroupLocked(ticker: string, portfolioId: string): Promise<void> {
     const state = importSession.getState();
 
     const buys = state.pendingCandidates.filter(
@@ -1101,9 +1122,21 @@ export function ImportPage() {
     // time this blanket sweep runs — it only ever has real gaps left to
     // close (dividends/verifications, which never assign themselves), never
     // a not-yet-recordBuy'd candidate to race.
-    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
+    //
+    // AWAITED (not fire-and-forget) now that this whole function runs inside
+    // commitTickerGroup's runSerialized lock for this (portfolio, ticker) —
+    // a detached promise here would keep writing/reactively committing after
+    // the lock had already released, letting a queued-up Smart Allocate call
+    // start its own commitTicker while this sweep's commit was still
+    // in flight, reopening the exact race the lock exists to close. Still
+    // non-fatal: a failure here is a shadow-write gap (dividends/
+    // verifications missing their portfolio assignment), never a reason to
+    // fail the Buy commit that already succeeded.
+    try {
+      await assignPortfolio(repos, ticker, portfolioId);
+    } catch (err) {
       console.error("assignPortfolio failed (shadow write, non-fatal):", err);
-    });
+    }
   }
 
   /**
