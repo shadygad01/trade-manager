@@ -50,8 +50,16 @@ const NON_SUBJECT_KINDS = new Set(["PortfolioAssignment", "Correction", "Retract
  * transaction currently belong to", folding in the latest (highest `seq`)
  * PortfolioAssignment targeting it, if any — falling back to the
  * transaction's own field when none exists.
+ *
+ * Exported so a caller upgrading which fact represents an execution (see
+ * ImportPage.tsx's exact-duplicate auto-skip effect) can carry the OLD
+ * fact's resolved portfolio over to the NEW one via `assignPortfolioToFact`
+ * before retracting the old one — otherwise the surviving fact stays
+ * unassigned, `relevantTradeTransactions` excludes it from the next commit,
+ * and `projectLegacyTicker` deletes the ticker's real Trade row as "stale"
+ * (a real, reproduced bug this export exists to let callers avoid).
  */
-function resolveCurrentPortfolioId(all: RawTransaction[], transaction: RawTransaction): string | undefined {
+export function resolveCurrentPortfolioId(all: RawTransaction[], transaction: RawTransaction): string | undefined {
   const assignments = all.filter(
     (t) => t.kind === "PortfolioAssignment" && (t.payload as PortfolioAssignmentPayload).targetId === transaction.id
   );

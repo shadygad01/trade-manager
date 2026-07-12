@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
-import { createPortfolio, type Portfolio } from "@domain/entities/Portfolio";
-import { createTrade, type Trade } from "@domain/entities/Trade";
-import { createRawTransaction, type RawTransaction, type RetractionPayload } from "@domain/entities/RawTransaction";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { vi } from "vitest";
+import { createPortfolio } from "@domain/entities/Portfolio";
+import { createRawTransaction, type RetractionPayload } from "@domain/entities/RawTransaction";
+import { recordBuy } from "@application/services/TradeService";
+import type { PortfolioOsDatabase } from "@infrastructure/db/db";
+import { createRepositories } from "@infrastructure/db/repositories";
 import { getTrackingStartDate, setTrackingStartDate } from "@domain/value-objects/trackingWindow";
 
 /**
@@ -23,82 +26,49 @@ import { getTrackingStartDate, setTrackingStartDate } from "@domain/value-object
  * describes the same execution, and retracts the LOWER-authority one —
  * upgrading the ticker's provenance to the newly-uploaded document instead
  * of erasing it.
+ *
+ * Uses REAL Dexie repositories backed by fake-indexeddb, not the usual
+ * hand-mocked plain-object `repos` — this ticker's card only settles to
+ * "Fully matched" once `existingRawTransactions` (a `useLiveQuery`) actually
+ * RE-READS the post-retraction fact log. Dexie's `liveQuery` only re-emits
+ * when a write touches a table it detected being read during the querier's
+ * own execution; a hand-mocked, non-Dexie `getAll()` is never detected as
+ * touching anything, so it would stay frozen at its pre-retraction snapshot
+ * forever, making the very thing this test needs to verify unobservable
+ * (see ImportPage.inFlightDuplicateRace.test.tsx's own doc comment for the
+ * same reasoning, applied there to a different race).
  */
-const state = vi.hoisted(() => ({
-  portfolios: [] as Portfolio[],
-  trades: [] as Trade[],
-  rawTransactions: [] as RawTransaction[],
-}));
 
-vi.mock("@presentation/lib/data", () => ({
-  repos: {
-    portfolios: {
-      getAll: () => Promise.resolve(state.portfolios),
-      getById: (id: string) => Promise.resolve(state.portfolios.find((p) => p.id === id)),
-      save: (p: Portfolio) => {
-        const i = state.portfolios.findIndex((existing) => existing.id === p.id);
-        if (i >= 0) state.portfolios[i] = p;
-        else state.portfolios.push(p);
-        return Promise.resolve();
-      },
+vi.mock("@presentation/lib/data", async () => {
+  const { PortfolioOsDatabase: DB } = await import("@infrastructure/db/db");
+  const { createRepositories: create } = await import("@infrastructure/db/repositories");
+  const testDb = new DB(`abuk-provenance-test-${Math.random()}`);
+  const base = create(testDb);
+  return {
+    repos: {
+      ...base,
+      allocations: base.tradeAllocations,
+      prices: { getAllPrices: () => Promise.resolve({}), getSnapshotInfo: () => Promise.resolve(undefined) },
     },
-    trades: {
-      getAll: () => Promise.resolve(state.trades),
-      getById: (id: string) => Promise.resolve(state.trades.find((t) => t.id === id)),
-      save: (t: Trade) => {
-        const i = state.trades.findIndex((existing) => existing.id === t.id);
-        if (i >= 0) state.trades[i] = t;
-        else state.trades.push(t);
-        return Promise.resolve();
-      },
-      delete: (id: string) => {
-        state.trades = state.trades.filter((t) => t.id !== id);
-        return Promise.resolve();
-      },
-    },
-    allocations: { getAll: () => Promise.resolve([]), save: () => Promise.resolve() },
-    verifications: { getAll: () => Promise.resolve([]), save: () => Promise.resolve(), delete: () => Promise.resolve() },
-    timeline: { getAll: () => Promise.resolve([]), save: () => Promise.resolve(), delete: () => Promise.resolve() },
-    rawTransactions: {
-      getAll: () => Promise.resolve(state.rawTransactions),
-      getById: (id: string) => Promise.resolve(state.rawTransactions.find((t) => t.id === id)),
-      append: (t: RawTransaction) => {
-        const withSeq = { ...t, seq: state.rawTransactions.length + 1 };
-        state.rawTransactions.push(withSeq);
-        return Promise.resolve(withSeq);
-      },
-    },
-    uploads: {
-      getAll: () => Promise.resolve([]),
-      getByHash: () => Promise.resolve(undefined),
-      save: () => Promise.resolve(),
-      delete: () => Promise.resolve(),
-    },
-    journal: { getByTrade: () => Promise.resolve(undefined) },
-    prices: { getAllPrices: () => Promise.resolve({}), getSnapshotInfo: () => Promise.resolve(undefined) },
-  },
-  getImportOrchestrator: () => Promise.reject(new Error("not used in this test")),
-}));
+    getImportOrchestrator: () => Promise.reject(new Error("not used in this test")),
+    __testDb: testDb,
+  };
+});
 
-// See ImportPage.reconciliation.test.tsx's own doc comment — importSession.ts
-// reads localStorage exactly once at import time, so the pending pool must
-// be seeded before the dynamic import below, not inside beforeEach/it.
+// The broker's official Excel export re-reading the same real buy already
+// recorded manually — an exact duplicate by ticker/date/shares/price.
 localStorage.setItem(
   "portfolio-os:import-session",
   JSON.stringify({
     pendingCandidates: [
       {
-        // The broker's official Excel export re-reading the same real buy
-        // already recorded manually — an exact duplicate by ticker/date/
-        // shares/price.
-        key: "b1",
+        key: "0-c0",
         candidate: {
           ticker: "ABUK",
           side: "BUY",
           shares: 27,
           price: 12.5,
           date: "2025-01-05",
-          time: "10:00",
           confidence: "high",
           source: "official-broker-excel",
         },
@@ -121,40 +91,78 @@ localStorage.setItem(
 );
 
 const { ImportPage } = await import("./ImportPage");
+const dataModule = (await import("@presentation/lib/data")) as unknown as {
+  repos: ReturnType<typeof createRepositories> & { allocations: ReturnType<typeof createRepositories>["tradeAllocations"] };
+  __testDb: PortfolioOsDatabase;
+};
 
 describe("ABUK regression: an exact-duplicate Excel upload must upgrade, not erase, a lower-authority existing fact", () => {
   let originalTrackingStart: string;
-  beforeEach(() => {
+
+  beforeEach(async () => {
     originalTrackingStart = getTrackingStartDate();
     setTrackingStartDate("2020-01-01");
-    state.portfolios = [createPortfolio({ id: "p1", name: "SMC", kind: "Trading", initialCash: 1_000_000 })];
-    // Still open (27 remaining), originally recorded manually — no document
-    // ever confirmed it until now.
-    state.trades = [
-      { ...createTrade({ id: "t1", portfolioId: "p1", ticker: "ABUK", shares: 27, entryPrice: 12.5, executionDate: "2025-01-05", executionTime: "10:00" }), remainingShares: 27 },
-    ];
-    state.rawTransactions = [
-      { ...createRawTransaction({ id: "rt1", portfolioId: "p1", kind: "BuyExecution", source: "manual", ticker: "ABUK", payload: { ticker: "ABUK", shares: 27, price: 12.5, executionDate: "2025-01-05" } }), seq: 1 },
-      // The pending candidate's own fact, as if recordImportedRawTransactions
-      // already wrote it at extraction time (real production ordering) —
-      // same real execution as rt1, described by the higher-authority document.
-      { ...createRawTransaction({ id: "b1", portfolioId: undefined, kind: "BuyExecution", source: "official-broker-excel", ticker: "ABUK", payload: { ticker: "ABUK", shares: 27, price: 12.5, executionDate: "2025-01-05" } }), seq: 2 },
-    ];
+    await dataModule.repos.portfolios.save(createPortfolio({ id: "p1", name: "SMC", kind: "Trading", initialCash: 1_000_000 }));
+    // Still open (27 remaining), originally recorded via the real manual
+    // Record Buy flow — no document ever confirmed it until now. This is
+    // the actual production code path (TradeService.recordBuy ->
+    // ensureBuyFact), not a hand-crafted fact, so its shape (id, source)
+    // matches exactly what a real user's manual entry produces.
+    await recordBuy(dataModule.repos, {
+      portfolioId: "p1",
+      ticker: "ABUK",
+      shares: 27,
+      entryPrice: 12.5,
+      executionDate: "2025-01-05",
+      executionTime: "00:00",
+    });
+    // The pending candidate's own fact, as if recordImportedRawTransactions
+    // already wrote it at extraction time (real production ordering) — same
+    // real execution as the manual trade above, described by the
+    // higher-authority document.
+    await dataModule.repos.rawTransactions.append(
+      createRawTransaction({
+        id: "0-c0",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        ticker: "ABUK",
+        confidence: "high",
+        payload: { ticker: "ABUK", shares: 27, price: 12.5, executionDate: "2025-01-05" },
+      }),
+    );
   });
   afterAll(() => setTrackingStartDate(originalTrackingStart));
 
   it("retracts the older manual fact (not the new Excel one) and settles to Fully matched, never 'Needs broker screenshot'", async () => {
     render(<ImportPage />);
 
-    await screen.findByText(/Fully matched \(1\)/);
+    await screen.findByText(/Fully matched \(1\)/, {}, { timeout: 8000 });
     expect(screen.queryByText("Needs broker screenshot")).toBeNull();
     expect(screen.queryByText(/Closes this gap/)).toBeNull();
 
-    await waitFor(() => {
-      const retractions = state.rawTransactions.filter((t) => t.kind === "Retraction");
-      expect(retractions.some((t) => (t.payload as RetractionPayload).targetId === "rt1")).toBe(true);
-    });
-    const retractions = state.rawTransactions.filter((t) => t.kind === "Retraction");
-    expect(retractions.some((t) => (t.payload as RetractionPayload).targetId === "b1")).toBe(false);
+    // Confirm the underlying fact log actually upgraded, not just the badge:
+    // exactly one live BuyExecution fact for ABUK, and it's the Excel one.
+    const facts = await dataModule.repos.rawTransactions.getAll();
+    const isRetracted = (id: string) => facts.some((f) => f.kind === "Retraction" && (f.payload as RetractionPayload).targetId === id);
+    const liveBuyFacts = facts.filter((f) => f.kind === "BuyExecution" && !isRetracted(f.id));
+    expect(liveBuyFacts).toHaveLength(1);
+    expect(liveBuyFacts[0].source).toBe("official-broker-excel");
+    expect(liveBuyFacts[0].id).toBe("0-c0");
+
+    const manualFact = facts.find((f) => f.kind === "BuyExecution" && f.source === "manual");
+    expect(manualFact).toBeDefined();
+    expect(isRetracted(manualFact!.id)).toBe(true);
+
+    // The real ledger row must survive the upgrade — a genuine, reproduced
+    // regression: retracting the old fact re-triggers a commit for this
+    // (portfolio, ticker), and if the surviving fact never inherited the old
+    // one's portfolio assignment, that commit sees zero relevant
+    // transactions and projectLegacyTicker (ledgerProjection.ts) deletes the
+    // Trade as "stale" — the provenance badge fixes itself while the actual
+    // Holdings row silently vanishes.
+    const trades = await dataModule.repos.trades.getByPortfolio("p1");
+    const abukTrades = trades.filter((t) => t.ticker === "ABUK");
+    expect(abukTrades).toHaveLength(1);
+    expect(abukTrades[0].remainingShares).toBe(27);
   });
 });

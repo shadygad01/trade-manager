@@ -7,7 +7,7 @@ import { recordBuy, recordSell, deleteTrade, renameTickerEverywhere } from "@app
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions, candidateSource } from "@application/services/importRecording";
 import { createPendingExecutionRecord } from "@application/services/pendingExecutions";
-import { assignPortfolio, retractRawTransaction } from "@application/services/commitEngine";
+import { assignPortfolio, assignPortfolioToFact, retractRawTransaction, resolveCurrentPortfolioId } from "@application/services/commitEngine";
 import {
   findDuplicateBuyMatch,
   findDuplicateSellMatch,
@@ -26,6 +26,7 @@ import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from 
 import { isTickerFullyOfficialBrokerExcelSourced } from "@application/services/reconciliation";
 import { findLiveExecutionFact } from "@application/services/rawTransactionFolds";
 import { higherAuthority } from "@application/services/evidenceAuthority";
+import { upgradeSellExecutionFact } from "@application/services/provenanceRepair";
 import {
   orderEvidenceContentKey,
   findOrderConfirmedKeys,
@@ -343,38 +344,72 @@ export function ImportPage() {
       });
     if (skipEntries.length === 0) return;
     const keysToSkip = skipEntries.map(({ e }) => e.key);
-    // A Buy candidate this authoritative (e.g. official-broker-excel)
+    // A candidate this authoritative (e.g. official-broker-excel)
     // duplicating a trade recorded earlier via a lower-authority source
     // (manual entry, an OCR'd screenshot) is itself stronger evidence than
     // whatever fact already exists for that execution — retract THAT
     // lower-authority fact instead of the new one, so the ticker's
     // provenance upgrades to the newly-uploaded document rather than losing
-    // it. Sells are left on the original behavior (always retract the new
-    // fact): a Sell's fact may already be claimed by a live
-    // SellAllocationDecision (see rawTransactionFolds.findUnclaimedSellExecutionFact),
-    // and re-pointing that decision at a different fact is provenanceRepair.ts's
-    // dedicated dry-run/apply job, not something to do inline here. Without
-    // this, a real, reported bug: an Excel-confirmed position kept reading
-    // "Needs broker screenshot" because the auto-skip always retracted the
-    // newly-extracted, higher-authority fact and left the older,
-    // lower-authority one as the ticker's only surviving evidence.
-    const retractIds = skipEntries.map(({ e, m }) => {
-      if (e.candidate.side !== "BUY") return e.key;
-      const existingFact = findLiveExecutionFact(existingRawTransactions, {
-        kind: "BuyExecution",
-        ticker: e.candidate.ticker,
-        date: e.candidate.date,
-        shares: e.candidate.shares,
-        price: m.matchedPrice,
-      });
+    // it. Without this, a real, reported bug: an Excel-confirmed position
+    // kept reading "Needs broker screenshot" because the auto-skip always
+    // retracted the newly-extracted, higher-authority fact and left the
+    // older, lower-authority one as the ticker's only surviving evidence.
+    const plainRetractIds: string[] = [];
+    for (const { e, m } of skipEntries) {
+      const existingFact = findLiveExecutionFact(
+        existingRawTransactions,
+        {
+          kind: e.candidate.side === "BUY" ? "BuyExecution" : "SellExecution",
+          ticker: e.candidate.ticker,
+          date: e.candidate.date,
+          shares: e.candidate.shares,
+          price: m.matchedPrice,
+        },
+        e.key,
+      );
       const newSource = candidateSource(e.candidate);
-      if (existingFact && higherAuthority(newSource, existingFact.source) === newSource) {
-        return existingFact.id;
+      const upgrade = existingFact && higherAuthority(newSource, existingFact.source) === newSource;
+      if (!upgrade) {
+        plainRetractIds.push(e.key);
+        continue;
       }
-      return e.key;
-    });
+      // The new fact must inherit the old one's CURRENT portfolio assignment
+      // before the old one is retracted — otherwise the surviving fact stays
+      // unassigned, the retraction's own triggered commit
+      // (commitEngine.appendAndMaybeCommit) computes zero relevant
+      // transactions for this (portfolio, ticker), and projectLegacyTicker
+      // deletes the ticker's real Trade/TradeAllocation row as "stale" — a
+      // real, reproduced bug (an Excel-confirmed position's provenance badge
+      // fixed itself while its actual Holdings row silently vanished).
+      const oldPortfolioId = resolveCurrentPortfolioId(existingRawTransactions, existingFact!);
+      const upgradeFact = async () => {
+        if (oldPortfolioId !== undefined) {
+          await assignPortfolioToFact(repos, e.key, oldPortfolioId);
+        }
+        if (e.candidate.side === "BUY") {
+          // A Buy fact is never referenced by another fact's id, so a plain
+          // retraction of the old one is the rest of the upgrade.
+          await retractRawTransaction(
+            repos,
+            existingFact!.id,
+            "Provenance upgrade: superseded by a higher-authority document describing the same execution.",
+          );
+        } else {
+          // A Sell's fact may already be claimed by a live
+          // SellAllocationDecision (see rawTransactionFolds.findUnclaimedSellExecutionFact)
+          // — upgradeSellExecutionFact re-points that decision at the new,
+          // higher-authority fact instead of leaving it referencing a
+          // retracted one, the same swap provenanceRepair.ts's dry-run/apply
+          // flow performs for its own (narrower, "manual"-only) historical bug.
+          await upgradeSellExecutionFact(repos, { oldFactId: existingFact!.id, newFactId: e.key });
+        }
+      };
+      upgradeFact().catch((err) => {
+        console.error("provenance upgrade failed (shadow write, non-fatal):", err);
+      });
+    }
     importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
-    retractRawTransactionKeys(retractIds);
+    retractRawTransactionKeys(plainRetractIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     initialDataLoaded,
@@ -826,6 +861,15 @@ export function ImportPage() {
       await allocateOrPendSell(entry, ticker);
       return;
     }
+    // Same reentrancy guard as commitTickerGroup's own three loops (see its
+    // doc comment) — recordSell below saves each TradeAllocation several
+    // awaits before addedKeys updates, a window in which the exact-duplicate
+    // auto-skip effect's own existingAllocations dependency can already see
+    // this call's OWN in-flight write and mark this very candidate skipped
+    // as an apparent "duplicate" of the allocation its own commit just
+    // created — the identical race already fixed for commitTickerGroup and
+    // SellAllocationForm, just never extended to this newer button.
+    inFlightKeys.add(entry.key);
     try {
       const portfolioId = portfolioForTicker(ticker);
       const normalizedTicker = normalizeTicker(ticker);
@@ -880,6 +924,8 @@ export function ImportPage() {
       clearRowError(entry.key);
     } catch (e) {
       setRowError(entry.key, e);
+    } finally {
+      inFlightKeys.delete(entry.key);
     }
   }
 

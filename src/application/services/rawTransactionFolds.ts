@@ -117,13 +117,23 @@ export function findUnclaimedSellExecutionFact(
  * record-then-allocate flow; this is for READING which fact already exists,
  * e.g. to compare Evidence Authority — see evidenceAuthority.ts — against a
  * newly-extracted duplicate of the same execution).
+ *
+ * `excludeId` must be passed whenever the caller's own new candidate has
+ * ALREADY been written as a live fact with the identical signature (e.g.
+ * Import's extraction-time write, see importRecording.ts) — repository
+ * reads are never guaranteed to come back in insertion order (Dexie's
+ * `getAll()` returns primary-key order, i.e. `id` string order, not `seq`
+ * order), so an unguarded `.find()` can match the caller's OWN fact instead
+ * of the other, genuinely pre-existing one it's trying to compare against.
  */
 export function findLiveExecutionFact(
   all: RawTransaction[],
   match: { kind: "BuyExecution" | "SellExecution"; ticker: string; date: string; shares: number; price: number },
+  excludeId?: string,
 ): RawTransaction | undefined {
   const ticker = normalizeTicker(match.ticker);
   return all.find((t) => {
+    if (t.id === excludeId) return false;
     if (t.kind !== match.kind) return false;
     if (isRetracted(all, t.id)) return false;
     const resolvedTicker = resolveCurrentTicker(all, t);
