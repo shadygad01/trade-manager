@@ -19,7 +19,7 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { generateId } from "@domain/value-objects/id";
 import { canonicalKey } from "./ledgerRebuild";
-import { isRetracted } from "./rawTransactionFolds";
+import { isRetracted, findLiveExecutionFact } from "./rawTransactionFolds";
 import { timesConflict } from "./duplicateDetection";
 import type { LedgerEvent, LotOpenedEvent } from "./ledgerEngine";
 import type { Allocation } from "./allocationEngine";
@@ -66,18 +66,47 @@ function tradeCanonicalKey(t: Trade): string {
 /**
  * Resolves the id a SellAllocationDecision should reference for this buy
  * lot: the real, always-unique RawTransaction id of the live BuyExecution
- * fact this trade already owns (`id === trade.id` — the convention every
- * fact-writing path follows, see ensureBuyFact/ensureLegacyFactsExist), so
- * the Allocation Engine can never confuse it with a different trade that
- * happens to share the same ticker/date/shares/price. Falls back to the
- * plain canonical key only when no id-linked fact exists yet (e.g. data
- * written before this fix, or a caller that hasn't run ensureLegacyFactsExist
- * for this ticker yet) — correct as long as no OTHER live trade shares that
- * exact value, exactly this module's pre-existing behavior.
+ * fact this trade already owns.
+ *
+ * `id === trade.id` (the fast path below) does NOT hold whenever
+ * `ensureBuyFact` (TradeService.ts) ADOPTED a pre-existing extraction-time
+ * fact rather than minting a fresh one — the whole point of the broker-
+ * record trust policy — since adoption assigns the fact's portfolio without
+ * ever renaming the fact's own id to match the freshly-generated `trade.id`
+ * (see `ensureBuyFact`'s `else` branch). This was a real, found bug: for
+ * every Excel-adopted lot, `resolveLotRef` fell all the way through to the
+ * TIME-BLIND `tradeCanonicalKey` fallback, so two genuinely distinct real
+ * Buys sharing every field except execution time (routine — splitting a
+ * large order into same-price fills minutes apart, e.g. a real reported
+ * case: two 49-share buys at E£42.40 on 01 Feb 2023, 10:32AM and 10:34AM)
+ * produced the IDENTICAL `lotRef` string. The Allocation Engine could then
+ * silently misattribute a Sell's allocation against the wrong lot of the
+ * pair during any later ledger rebuild/projection replay, corrupting the
+ * ticker's remaining-share count with no error, no race, and no
+ * concurrency involved — fully deterministic, reproduced from a real
+ * user's broker Excel replayed sequentially with no concurrent calls at all.
+ *
+ * Fixed by trying a value+time-disambiguated live-fact lookup (the same
+ * `findLiveExecutionFact` helper `ensureBuyFact`'s own `sameValueCandidates`
+ * tie-break and `findUnclaimedSellExecutionFact` already use for this exact
+ * problem) before falling back to the fully time-blind canonical key — the
+ * canonical-key fallback now only applies when even time can't disambiguate
+ * (e.g. two real fills at the identical minute) or no fact exists at all
+ * yet (pre-migration data, or a caller that hasn't run
+ * `ensureLegacyFactsExist` for this ticker).
  */
 export function resolveLotRef(all: RawTransaction[], trade: Trade): string {
   const ownFact = all.find((t) => t.id === trade.id && t.kind === "BuyExecution" && !isRetracted(all, t.id));
-  return ownFact ? ownFact.id : tradeCanonicalKey(trade);
+  if (ownFact) return ownFact.id;
+  const matched = findLiveExecutionFact(all, {
+    kind: "BuyExecution",
+    ticker: normalizeTicker(trade.ticker),
+    date: trade.executionDate,
+    shares: trade.shares,
+    price: trade.entryPrice,
+    time: trade.executionTime,
+  });
+  return matched ? matched.id : tradeCanonicalKey(trade);
 }
 
 /** Same grouping backfillRawTransactions uses — sellGroupId with the legacy composite fallback. */
