@@ -152,7 +152,23 @@ export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedg
   const events = generateLedgerEvents(verifiedTransactions);
   const allocations = generateAllocations(events, decisionTransactions);
 
-  await repos.committedLedger.commitTicker({ portfolioId, ticker: normalizedTicker, events, allocations });
+  // Never fatal, same isolation as ensureLegacyFactsExist/projectLegacyTicker
+  // just below: a real, reproduced bug under concurrent commits (many
+  // tickers committing at once, or two commits for the same ticker firing
+  // in close succession) is a transient Dexie write-contention error here
+  // (bulkDelete/bulkAdd on ledgerCache/allocationsCache) — before this fix,
+  // that error propagated all the way up through this function's own
+  // caller (recordBuy/recordSell/retractRawTransaction/assignPortfolioToFact
+  // etc., none of which catch it), silently aborting the CALLER's own
+  // bookkeeping (e.g. recordSell never reaching its own addedKeys update,
+  // permanently stranding a Sell row on "still pending") and skipping
+  // projectLegacyTicker below entirely — even though events/allocations
+  // were already computed and don't depend on this cache write succeeding.
+  try {
+    await repos.committedLedger.commitTicker({ portfolioId, ticker: normalizedTicker, events, allocations });
+  } catch (err) {
+    console.error("committedLedger.commitTicker failed (cache commit skipped, legacy projection still proceeds):", err);
+  }
 
   // Projection only ever runs on a TERMINAL verdict set. commitTicker is
   // also force-called on Retraction/Correction regardless of shouldCommit
