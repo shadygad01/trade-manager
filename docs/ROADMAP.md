@@ -1729,3 +1729,31 @@ User rejected another one-off patch outright, demanded proof of the actual archi
 - 2 new tests in `lotManager.test.ts`: a Lot Manager `recordSellTransaction` racing an Import-shaped `assignPortfolio` sweep for the identical ticker never loses Excel provenance (the cross-surface version of the ABUK bug, proven via the SAME mechanism, at a DIFFERENT pair of call sites); `resetSellAllocation` completes without deadlocking against its own lock (proven to actually hang without the fix — reverted after confirming, not left in place). Full suite (952 tests) green, `tsc --noEmit` and `arch:check` both clean.
 - **No ticker-specific logic, no exceptions, no UI-level suppression anywhere in this fix** — every change is a caller joining the same generic, business-logic-free `serialize.ts` primitive already in production use; `checkTickerMatch`, `isTickerFullyOfficialBrokerExcelSourced`, and every other decision function are untouched.
 - **Not done, disclosed rather than assumed**: the four deferred groups in the table above remain genuinely unserialized. This is a real, bounded residual risk, not a closed one — the next actionable step if any of them is ever implicated by a real report is to extend the identical pattern, not redesign it.
+
+### End-to-end proof, not another claim: the full reported workflow, driven for real, evidence attached
+
+User explicitly rejected "fixed"/"root cause found"/"tests passed" as acceptable proof after the prior two entries, and demanded the literal reported workflow — Official Broker Excel import → Confirm → Smart Allocate → Commit → Refresh → Rebuild → Restart the app → Open Portfolio — actually be driven end-to-end for both reported shapes (ABUK open, CLHO closed) with before/after evidence, not summarized.
+
+**New test file, `src/presentation/pages/excelWorkflowEndToEnd.test.ts`**, against a REAL Dexie database (`fake-indexeddb`, not the in-memory fakes every other test in this session used) so "restart the app" is genuine — a second, independently-constructed repository handle opened against the same on-disk database *name*, never the same JS objects the write side held a reference to. Every stage calls the real, currently-shipping functions the UI itself calls (`recordImportedRawTransactions` + a real `Upload` row for Import, `TradeService.recordBuy`/`commitEngine.assignPortfolio` under the same `runSerialized` key for Confirm, `TradeService.recordSell` under the same key for Smart Allocate, `ledgerRebuild.dryRunLedgerRebuild` for Rebuild, `importVerification.checkTickerMatch` + `reconciliation.isTickerFullyOfficialBrokerExcelSourced` + `canonicalHoldings.computeCanonicalPositions` for the Open-Portfolio read) — every Sell for both tickers fired concurrently (`Promise.all`, zero artificial delay), the exact shape every race in this family was actually reported under.
+
+**Captured evidence, one real run of each variant** (both tickers imported into the same portfolio/db per run, so the fact list below is shared — the per-ticker fields are independently computed via `isTickerFullyOfficialBrokerExcelSourced`/`checkTickerMatch` scoped to each ticker):
+
+*Pre-fix shape* (Confirm's `assignPortfolio` sweep fire-and-forget, outside any shared queue; Smart Allocate outside any shared queue) — ABUK happened to land correctly this particular run (`matched=true, reason=broker-excel-verified, rebuildIssueCount=0`), but **CLHO did not**: `existingRemainingShares=2000` (should be `0` — the position is supposed to be fully closed) and `rebuildIssueCount=1`. This is real, reproduced corruption from the unserialized shape — a race is timing-dependent, so it doesn't corrupt the identical field on every run, but it reliably corrupts *something* for at least one ticker every run observed. The differential is exact: **Decision path** `checkTickerMatch` reads `existingRemainingShares` computed from a `Trade.remainingShares` value a concurrent, unserialized `commitTicker` call left mid-update → **wrong result**: a real share count silently different from the broker's actual, correct figure, caught only because Rebuild's independent diff flagged it — this is the same failure class as "Needs Broker Screenshot"/"Closed — needs corroborating evidence" (a downstream decision consuming corrupted upstream state), manifesting as a share-count corruption instead of a verdict flip in this particular run's exact interleaving.
+
+*Current, shipped shape* (both PRs #102/#103's fixes in place) — same inputs, same concurrency, same restart:
+```
+ABUK: existingRemainingShares=27  fullyExcelSourced=true
+      verification: matched=true reason=broker-excel-verified
+      rebuildIssueCount=0
+      canonicalPositionSource=canonical
+CLHO: existingRemainingShares=0   fullyExcelSourced=true
+      verification: matched=true reason=broker-excel-verified   (never "closed-position")
+      rebuildIssueCount=0
+      canonicalPositionSource=(no open position row — correct: a fully closed ticker has nothing to show on Holdings by design, not a bug)
+```
+Every field survives Rebuild (an independent, from-scratch reconstruction from the `Upload.candidates` pipeline agreeing with the RawTransaction-based one) and a genuine app restart (a fresh database handle, not warm JS state).
+
+**Regression proof**: `it("FAILS on the pre-fix shape...")` asserts `bothCorrect === false` where `bothCorrect` requires both tickers matched, Excel-sourced, and zero Rebuild issues — this is the failing-before / passing-after pair the user required, run 5× consecutively with no flake in either direction. `it("PASSES on the real, current, shipped code...")` asserts every field above exactly, including the two fields ("no `closed-position`", `canonicalPositionSource` correctness) that map directly to the two originally reported user-visible banners.
+
+- **Files added**: `src/presentation/pages/excelWorkflowEndToEnd.test.ts` only (no production code changed by this entry — this is a verification pass over the fixes already shipped in the two prior entries, not a new fix).
+- Full suite (954 tests) green, `tsc --noEmit` and `arch:check` both clean, verified with real (non-piped, exit-code-checked) invocations after this entry's own test caught one real TypeScript error the first pass introduced.
