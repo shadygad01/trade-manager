@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser, ChevronDown } from "lucide-react";
 import { repos, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
-import { recordBuy, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
+import { recordBuy, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions } from "@application/services/importRecording";
 import { createPendingExecutionRecord } from "@application/services/pendingExecutions";
@@ -43,6 +43,7 @@ import { isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import { useTrackingStartDate, trackingStartDateStore } from "@presentation/lib/trackingStartDateStore";
 import type { ParsedTradeCandidate, ParsedOrderEvidence, Upload } from "@domain/entities/Upload";
 import type { Trade } from "@domain/entities/Trade";
+import type { RecordSellInput } from "@presentation/lib/types";
 import {
   importSession,
   useImportSession,
@@ -773,6 +774,75 @@ export function ImportPage() {
         transactionNumber: entry.candidate.transactionNumber,
       });
       importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+      clearRowError(entry.key);
+    } catch (e) {
+      setRowError(entry.key, e);
+    }
+  }
+
+  /**
+   * Strict-FIFO variant of allocateOrPendSell's manual flow: closes the
+   * oldest open lot(s) first, silently, through the exact same recordSell
+   * engine the manual "Allocate Sell" dialog uses (see SellAllocationForm's
+   * own doc comment on why manual allocation itself has no auto-FIFO
+   * suggestion — this button is the deliberate opt-in for that).
+   */
+  async function smartAllocateSell(entry: CandidateEntry, ticker: string) {
+    if (entry.candidate.needsConfirmation) {
+      await allocateOrPendSell(entry, ticker);
+      return;
+    }
+    try {
+      const portfolioId = portfolioForTicker(ticker);
+      const normalizedTicker = normalizeTicker(ticker);
+      const allTrades = await repos.trades.getByPortfolio(portfolioId);
+      const openLots = allTrades
+        .filter((t) => normalizeTicker(t.ticker) === normalizedTicker && t.remainingShares > 0)
+        .sort((a, b) => a.executionDate.localeCompare(b.executionDate) || a.executionTime.localeCompare(b.executionTime));
+
+      let remainingToSell = entry.candidate.shares;
+      const lines: { tradeId: string; shares: number }[] = [];
+      for (const lot of openLots) {
+        if (remainingToSell <= 0) break;
+        const allocatedShares = Math.min(lot.remainingShares, remainingToSell);
+        if (allocatedShares <= 0) continue;
+        lines.push({ tradeId: lot.id, shares: allocatedShares });
+        remainingToSell -= allocatedShares;
+      }
+
+      if (remainingToSell > 0) {
+        throw new Error(
+          `Not enough open shares to Smart Allocate: need ${entry.candidate.shares}, only ${entry.candidate.shares - remainingToSell} open for ${ticker}.`,
+        );
+      }
+
+      const totalFees = entry.candidate.fees ?? 0;
+      const totalTaxes = entry.candidate.taxes ?? 0;
+      const totalShares = entry.candidate.shares;
+      const allocations = lines.map((line) => ({
+        tradeId: line.tradeId,
+        shares: line.shares,
+        exitPrice: entry.candidate.price,
+        fees: (totalFees / totalShares) * line.shares,
+        taxes: (totalTaxes / totalShares) * line.shares,
+      }));
+
+      const input: RecordSellInput = {
+        portfolioId,
+        ticker,
+        allocations,
+        executionDate: entry.candidate.date,
+        executionTime: entry.candidate.time ?? "00:00",
+        transactionNumber: entry.candidate.transactionNumber,
+        source: entry.candidate.source,
+      };
+
+      const result = await recordSell(repos, input);
+      importSession.update((prev) => ({
+        ...prev,
+        addedKeys: [...prev.addedKeys, entry.key],
+        addedAllocationIds: { ...prev.addedAllocationIds, [entry.key]: result.allocations.map((a) => a.id) },
+      }));
       clearRowError(entry.key);
     } catch (e) {
       setRowError(entry.key, e);
@@ -2052,6 +2122,7 @@ export function ImportPage() {
                 onDiscardAllPending={() => discardAllPendingForTicker(ticker)}
                 onConfirmTicker={() => void confirmTicker(ticker)}
                 onAllocateSell={(entry) => void allocateOrPendSell(entry, ticker)}
+                onSmartAllocate={(entry) => smartAllocateSell(entry, ticker)}
                 onRenameTicker={(newTicker) => void renameTickerGroup(ticker, newTicker)}
                 onRestoreTicker={() => restoreTickerCandidates(ticker)}
                 onResetTicker={() => void resetTickerData(ticker)}
@@ -2240,6 +2311,7 @@ export function TickerGroupCard({
   onDiscardAllPending,
   onConfirmTicker,
   onAllocateSell,
+  onSmartAllocate,
   onRenameTicker,
   onRestoreTicker,
   onResetTicker,
@@ -2313,6 +2385,8 @@ export function TickerGroupCard({
   /** Confirms and distributes just this ticker, independent of any other ticker in the batch still stuck — see ImportPage's confirmTicker. */
   onConfirmTicker: () => void;
   onAllocateSell: (entry: CandidateEntry) => void;
+  /** Silently allocates a sell against its ticker's open lots in strict FIFO order through the same recordSell engine as onAllocateSell's manual dialog — the "Smart Allocate" button's handler. Returns its promise so the row can disable itself until the allocation finishes. Optional so call sites that construct CandidateRow/TickerGroupCard directly (tests) don't need to wire it — the button simply doesn't render without it. */
+  onSmartAllocate?: (entry: CandidateEntry) => Promise<void>;
   onRenameTicker: (newTicker: string) => void;
   /** Restores all dismissed/skipped/discarded Buy/Sell rows for this ticker back to pending state. */
   onRestoreTicker?: () => void;
@@ -2860,6 +2934,8 @@ export function TickerGroupCard({
               actionLabel={match ? t("importPage.allocateAnyway") : t("importPage.allocateSell")}
               actionClassName="bg-rose-500 hover:bg-rose-400"
               onAction={() => onAllocateSell(entry)}
+              smartActionLabel={t("importPage.smartAllocate")}
+              onSmartAction={onSmartAllocate ? () => onSmartAllocate(entry) : undefined}
               disabled={disabled}
               disabledReason={
                 !matched
@@ -3367,6 +3443,8 @@ export function CandidateRow({
   actionLabel,
   actionClassName,
   onAction,
+  smartActionLabel,
+  onSmartAction,
   disabled = false,
   disabledReason,
   suspectedDuplicate = false,
@@ -3388,6 +3466,9 @@ export function CandidateRow({
   actionLabel: string;
   actionClassName: string;
   onAction: () => void;
+  /** Label/handler for the optional "Smart Allocate" action, shown immediately before the main action button — see ImportPage's smartAllocateSell. Omitted entirely (no button rendered) when the row has no smart-allocate handler. */
+  smartActionLabel?: string;
+  onSmartAction?: () => Promise<void>;
   disabled?: boolean;
   disabledReason?: string;
   /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
@@ -3416,6 +3497,16 @@ export function CandidateRow({
   const isLowConfidence = c.confidence === "low";
   const canDiscard = suspectedDuplicate && !added && !skipped;
   const flaggedForRemoval = !added && !skipped && (suggestedRemoval || wrongTickerHint !== undefined);
+  const [smartAllocating, setSmartAllocating] = useState(false);
+  async function handleSmartAction() {
+    if (!onSmartAction) return;
+    setSmartAllocating(true);
+    try {
+      await onSmartAction();
+    } finally {
+      setSmartAllocating(false);
+    }
+  }
   return (
     <div
       className={`px-4 py-2.5 text-sm ${canDiscard || flaggedForRemoval ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}
@@ -3545,6 +3636,16 @@ export function CandidateRow({
             >
               <Trash2 size={13} />
             </button>
+            {onSmartAction ? (
+              <button
+                onClick={() => void handleSmartAction()}
+                disabled={disabled || smartAllocating}
+                title={disabled ? disabledReason : undefined}
+                className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+              >
+                {smartAllocating ? <Loader2 size={13} className="animate-spin" /> : (smartActionLabel ?? t("importPage.smartAllocate"))}
+              </button>
+            ) : null}
             <button
               onClick={onAction}
               disabled={disabled}
