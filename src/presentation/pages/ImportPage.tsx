@@ -851,20 +851,6 @@ export function ImportPage() {
     const portfolioId = resolvedPortfolioId(ticker);
     if (!portfolioId) return;
 
-    // Migration dual-write: setTickerPortfolio's own assignPortfolio call
-    // only fires when the user explicitly picks from the dropdown —
-    // resolvedPortfolioId can also resolve implicitly (a ticker already
-    // uniquely tied to one portfolio, or a single-portfolio app), in which
-    // case that call never happens and this ticker's RawTransactions would
-    // stay unassigned forever, never reaching the new architecture's commit
-    // trigger. Calling it here too, on every commit regardless of how the
-    // portfolio resolved, closes that gap; it's a harmless no-op once
-    // setTickerPortfolio already assigned everything. Isolated and
-    // non-fatal for the same reason as every other shadow write here.
-    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
-      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
-    });
-
     const state = importSession.getState();
 
     const buys = state.pendingCandidates.filter(
@@ -919,6 +905,45 @@ export function ImportPage() {
         inFlightKeys.delete(entry.key);
       }
     }
+
+    // Migration dual-write: setTickerPortfolio's own assignPortfolio call
+    // only fires when the user explicitly picks from the dropdown —
+    // resolvedPortfolioId can also resolve implicitly (a ticker already
+    // uniquely tied to one portfolio, or a single-portfolio app), in which
+    // case that call never happens and this ticker's RawTransactions would
+    // stay unassigned forever, never reaching the new architecture's commit
+    // trigger. Calling it here too, on every commit regardless of how the
+    // portfolio resolved, closes that gap; it's a harmless no-op once
+    // setTickerPortfolio already assigned everything. Isolated and
+    // non-fatal for the same reason as every other shadow write here.
+    //
+    // Deliberately run AFTER the three loops above, not before (a real,
+    // reproduced bug this ordering fixes): assignPortfolio assigns EVERY
+    // still-unassigned live fact for this ticker in one sweep, and each
+    // assignment reactively fires commitEngine's own shouldCommit/commitTicker
+    // trigger (appendAndMaybeCommit's PortfolioAssignment branch) — a
+    // SEPARATE commit pathway from this function's own recordBuy/recordSell
+    // calls. Running the sweep BEFORE the buys loop let it assign a SECOND
+    // (or later) still-unprocessed candidate the moment the FIRST one's
+    // assignment made the whole ticker's verification batch terminal —
+    // triggering commitEngine's own projectLegacyTicker to materialize a
+    // legacy Trade for that second candidate from raw facts alone, racing
+    // this function's own recordBuy call for the SAME candidate moments
+    // later and producing two Trade rows for one real execution (reproduced:
+    // a ticker with two Excel-sourced Buys in the same import batch ended up
+    // with a duplicate Trade, and the genuine candidate's own RawTransaction
+    // fact got auto-skipped/retracted as an apparent "exact duplicate" of
+    // the phantom one, permanently losing its official-broker-excel
+    // provenance the same way the single-Buy race did). Running the sweep
+    // LAST means every candidate this call itself processes already has its
+    // own Trade AND its own assignment (ensureBuyFact/ensureSellFacts assign
+    // individually, immediately after adopting/creating their fact) by the
+    // time this blanket sweep runs — it only ever has real gaps left to
+    // close (dividends/verifications, which never assign themselves), never
+    // a not-yet-recordBuy'd candidate to race.
+    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
+      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
+    });
   }
 
   /**

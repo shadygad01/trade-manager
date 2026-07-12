@@ -256,6 +256,39 @@ export async function assignPortfolio(repos: CommitEngineRepos, ticker: string, 
 }
 
 /**
+ * Assigns exactly ONE fact to `portfolioId` — the single-target counterpart
+ * to `assignPortfolio`'s ticker-wide sweep, for a caller that just
+ * adopted/created that one specific fact and has no business touching any
+ * of its ticker's OTHER still-pending siblings.
+ *
+ * Real, reproduced bug this exists to fix: `ensureBuyFact`/`ensureSellFacts`
+ * used to call the ticker-wide `assignPortfolio` here instead — harmless for
+ * a ticker with a single Buy/Sell, but for a ticker with TWO OR MORE
+ * still-pending Buys in the same commit batch (e.g. two Excel-sourced Buys
+ * imported together), assigning the FIRST one's fact swept up the SECOND
+ * one's still-unprocessed fact too (it looked "unassigned", same as any
+ * genuine gap `assignPortfolio` exists to close) — which reactively fired
+ * `appendAndMaybeCommit`'s own commit trigger for the second fact BEFORE its
+ * own `recordBuy` call had run, materializing a legacy Trade for it straight
+ * from the raw fact via `projectLegacyTicker`. That phantom Trade then raced
+ * the second candidate's own, genuine `recordBuy` call moments later,
+ * producing two Trade rows for one real execution, and the genuine
+ * candidate's own RawTransaction fact got auto-skipped/retracted as an
+ * apparent "exact duplicate" of the phantom — permanently losing its
+ * official-broker-excel provenance the same shape as the single-Buy race
+ * this same investigation found and fixed in `ImportPage.tsx`. Scoping the
+ * assignment to exactly the fact just adopted/created closes this off at
+ * the source: no other still-pending sibling is ever touched.
+ */
+export async function assignPortfolioToFact(repos: CommitEngineRepos, targetId: string, portfolioId: string): Promise<void> {
+  const all = await repos.rawTransactions.getAll();
+  const target = all.find((t) => t.id === targetId);
+  if (!target || isRetracted(all, target.id) || resolveCurrentPortfolioId(all, target) !== undefined) return;
+  const payload: PortfolioAssignmentPayload = { targetId, portfolioId };
+  await appendAndMaybeCommit(repos, createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }));
+}
+
+/**
  * Retracts one raw transaction — used when the pre-migration UI deletes or
  * voids a fact directly (e.g. TradeService.deleteTrade), so the new
  * architecture's next commit for that ticker can't resurrect something the
