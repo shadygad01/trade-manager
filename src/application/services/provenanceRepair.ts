@@ -165,3 +165,56 @@ export async function applyProvenanceRepair(
 
   return { repaired, skipped };
 }
+
+/**
+ * Live, single-swap counterpart to dryRunProvenanceRepair/applyProvenanceRepair
+ * — used where the caller has already identified exactly which fact should
+ * replace which (e.g. ImportPage.tsx's exact-duplicate auto-skip effect,
+ * comparing Evidence Authority — see evidenceAuthority.ts — between a
+ * newly-extracted duplicate and the SellExecution fact already describing
+ * the same real execution), rather than auditing the whole ledger for the
+ * one specific "always minted manual" bug the batch tool above targets.
+ * Retracts `oldFactId`; if a live SellAllocationDecision references it,
+ * retracts that too and replaces it with an identical one (same
+ * allocations, same portfolio/ticker) pointing at `newFactId` instead, so
+ * nothing is left referencing a dead fact. No-ops (returns false) if
+ * `oldFactId` is no longer live.
+ */
+export async function upgradeSellExecutionFact(
+  repos: CommitEngineRepos,
+  params: { oldFactId: string; newFactId: string },
+): Promise<boolean> {
+  const all = await repos.rawTransactions.getAll();
+  if (!all.some((t) => t.id === params.oldFactId) || isRetracted(all, params.oldFactId)) return false;
+
+  await retractRawTransaction(
+    repos,
+    params.oldFactId,
+    "Provenance upgrade: superseded by a higher-authority document describing the same execution.",
+  );
+
+  const decision = all.find(
+    (t) =>
+      t.kind === "SellAllocationDecision" &&
+      !isRetracted(all, t.id) &&
+      (t.payload as SellAllocationDecisionPayload).sellExecutionId === params.oldFactId,
+  );
+  if (!decision) return true;
+
+  await retractRawTransaction(repos, decision.id, "Provenance upgrade: re-pointed at the higher-authority SellExecution fact.");
+  const replacementPayload: SellAllocationDecisionPayload = {
+    sellExecutionId: params.newFactId,
+    allocations: (decision.payload as SellAllocationDecisionPayload).allocations,
+  };
+  await appendAndMaybeCommit(
+    repos,
+    createRawTransaction({
+      kind: "SellAllocationDecision",
+      source: "manual",
+      portfolioId: decision.portfolioId,
+      ticker: decision.ticker,
+      payload: replacementPayload,
+    }),
+  );
+  return true;
+}
