@@ -7,18 +7,27 @@ import type { PositionAggregate } from "./TradeService";
 import { checkTickerMatch } from "./importVerification";
 import { suggestRemovalsToReconcile, MAX_RECONCILE_ROWS, type ReconcilableRow } from "./mismatchResolver";
 import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
+import { authorityRank } from "./evidenceAuthority";
+
+const OFFICIAL_BROKER_EXCEL_RANK = authorityRank("official-broker-excel");
 
 /**
- * True only when every live Buy/Sell RawTransaction fact for this ticker
- * came from the broker's own official Excel export (see
- * ThndrOrdersWorkbookParser.ts) — the "My Position" screenshot verification
- * workflow no longer applies to such a ticker at all, per the broker-record
- * trust policy: the Excel-derived executed-BUY-minus-executed-SELL count
- * already IS the broker-confirmed position, regardless of whether a
- * screenshot exists, agrees, or disagrees. False for a ticker with zero
- * facts (nothing to be "fully" anything of) or any mixed provenance — a
- * ticker with even one non-Excel-sourced execution still goes through
- * ordinary reconciliation.
+ * True only when every live Buy/Sell RawTransaction fact for this ticker is
+ * at least as authoritative as the broker's own official Excel export (see
+ * ThndrOrdersWorkbookParser.ts and evidenceAuthority.ts's ranking) — the "My
+ * Position" screenshot verification workflow no longer applies to such a
+ * ticker at all, per the broker-record trust policy: the executed-BUY-minus-
+ * executed-SELL count from documents this trustworthy already IS the
+ * confirmed position, regardless of whether a screenshot exists, agrees, or
+ * disagrees. Deliberately rank-based rather than an exact `source ===
+ * "official-broker-excel"` match: a ticker whose sole surviving history is an
+ * Invoice (rank 6, strictly above the Excel export's rank 5 — see
+ * evidenceAuthority.ts) is real, found evidence of the same closed-position
+ * dead-end this function exists to fix, just one authority tier higher than
+ * the case it was originally written for. False for a ticker with zero facts
+ * (nothing to be "fully" anything of) or any fact sourced below that bar — a
+ * ticker with even one manual/screenshot/lower-tier execution still goes
+ * through ordinary reconciliation.
  *
  * Resolves each fact's CURRENT ticker via `resolveCurrentTicker` (folding
  * any live Correction) rather than reading `payload.ticker` directly — a
@@ -35,7 +44,7 @@ export function isTickerFullyOfficialBrokerExcelSourced(rawTransactions: RawTran
     const resolvedTicker = resolveCurrentTicker(rawTransactions, t);
     return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalized;
   });
-  return live.length > 0 && live.every((t) => t.source === "official-broker-excel");
+  return live.length > 0 && live.every((t) => authorityRank(t.source) >= OFFICIAL_BROKER_EXCEL_RANK);
 }
 
 export interface PositionReconciliation {

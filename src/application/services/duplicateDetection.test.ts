@@ -188,6 +188,34 @@ describe("findDuplicateBuyMatch", () => {
       matchedPrice: 50,
     });
   });
+
+  // Real, reported bug: a manually-recorded trade's executionTime comes from
+  // an `<input type="time">` field — always 24-hour "HH:MM" (e.g. "12:51").
+  // Every parser's candidate.time instead prints 12-hour with an AM/PM suffix
+  // (e.g. "12:51PM"). Same real clock time, different raw strings — before
+  // this fix, timesConflict compared them as plain strings and always
+  // reported a conflict, so a broker Excel re-import of an already
+  // manually-recorded historical trade was never recognized as a duplicate:
+  // both the old manual fact and the new authoritative one stayed live side
+  // by side, double-counting the position.
+  it("still flags a duplicate when the candidate's 12-hour AM/PM time and the trade's 24-hour time describe the same real moment", () => {
+    const trade = createTrade({
+      id: "t1",
+      portfolioId: "p1",
+      ticker: "ACAMD",
+      shares: 3000,
+      entryPrice: 0.38,
+      executionDate: "2022-11-02",
+      executionTime: "12:51", // manually entered, 24-hour
+    });
+    expect(findDuplicateBuyMatch(buyCandidate({ ticker: "ACAMD", shares: 3000, price: 0.38, date: "2022-11-02", time: "12:51PM" }), [trade])).toEqual({
+      matchType: "exact",
+      matchedId: "t1",
+      matchedPrice: 0.38,
+    });
+    // A genuinely different time still conflicts once normalized, not just as raw strings.
+    expect(findDuplicateBuyMatch(buyCandidate({ ticker: "ACAMD", shares: 3000, price: 0.38, date: "2022-11-02", time: "12:51AM" }), [trade])).toBeUndefined();
+  });
 });
 
 describe("findDuplicateSellMatch — legacy allocations without sellGroupId", () => {
