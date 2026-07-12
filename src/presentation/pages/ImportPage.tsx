@@ -27,6 +27,7 @@ import { isTickerFullyOfficialBrokerExcelSourced } from "@application/services/r
 import { findLiveExecutionFact } from "@application/services/rawTransactionFolds";
 import { higherAuthority } from "@application/services/evidenceAuthority";
 import { upgradeSellExecutionFact } from "@application/services/provenanceRepair";
+import { runSerialized } from "@application/services/serialize";
 import {
   orderEvidenceContentKey,
   findOrderConfirmedKeys,
@@ -874,55 +875,63 @@ export function ImportPage() {
     try {
       const portfolioId = portfolioForTicker(ticker);
       const normalizedTicker = normalizeTicker(ticker);
-      const allTrades = await repos.trades.getByPortfolio(portfolioId);
-      const openLots = allTrades
-        .filter((t) => normalizeTicker(t.ticker) === normalizedTicker && t.remainingShares > 0)
-        .sort((a, b) => a.executionDate.localeCompare(b.executionDate) || a.executionTime.localeCompare(b.executionTime));
+      // Serialized end-to-end (read open lots -> decide -> write -> commit)
+      // per (portfolio, ticker) — see serialize.ts's own doc comment. Without
+      // this, clicking Smart Allocate on several sell rows for the same
+      // ticker in quick succession lets a later call read open lots before
+      // an earlier one's commit has finished reducing them, misreporting a
+      // real position as "not enough open shares."
+      await runSerialized(`${portfolioId}|${normalizedTicker}`, async () => {
+        const allTrades = await repos.trades.getByPortfolio(portfolioId);
+        const openLots = allTrades
+          .filter((t) => normalizeTicker(t.ticker) === normalizedTicker && t.remainingShares > 0)
+          .sort((a, b) => a.executionDate.localeCompare(b.executionDate) || a.executionTime.localeCompare(b.executionTime));
 
-      let remainingToSell = entry.candidate.shares;
-      const lines: { tradeId: string; shares: number }[] = [];
-      for (const lot of openLots) {
-        if (remainingToSell <= 0) break;
-        const allocatedShares = Math.min(lot.remainingShares, remainingToSell);
-        if (allocatedShares <= 0) continue;
-        lines.push({ tradeId: lot.id, shares: allocatedShares });
-        remainingToSell -= allocatedShares;
-      }
+        let remainingToSell = entry.candidate.shares;
+        const lines: { tradeId: string; shares: number }[] = [];
+        for (const lot of openLots) {
+          if (remainingToSell <= 0) break;
+          const allocatedShares = Math.min(lot.remainingShares, remainingToSell);
+          if (allocatedShares <= 0) continue;
+          lines.push({ tradeId: lot.id, shares: allocatedShares });
+          remainingToSell -= allocatedShares;
+        }
 
-      if (remainingToSell > 0) {
-        throw new Error(
-          `Not enough open shares to Smart Allocate: need ${entry.candidate.shares}, only ${entry.candidate.shares - remainingToSell} open for ${ticker}.`,
-        );
-      }
+        if (remainingToSell > 0) {
+          throw new Error(
+            `Not enough open shares to Smart Allocate: need ${entry.candidate.shares}, only ${entry.candidate.shares - remainingToSell} open for ${ticker}.`,
+          );
+        }
 
-      const totalFees = entry.candidate.fees ?? 0;
-      const totalTaxes = entry.candidate.taxes ?? 0;
-      const totalShares = entry.candidate.shares;
-      const allocations = lines.map((line) => ({
-        tradeId: line.tradeId,
-        shares: line.shares,
-        exitPrice: entry.candidate.price,
-        fees: (totalFees / totalShares) * line.shares,
-        taxes: (totalTaxes / totalShares) * line.shares,
-      }));
+        const totalFees = entry.candidate.fees ?? 0;
+        const totalTaxes = entry.candidate.taxes ?? 0;
+        const totalShares = entry.candidate.shares;
+        const allocations = lines.map((line) => ({
+          tradeId: line.tradeId,
+          shares: line.shares,
+          exitPrice: entry.candidate.price,
+          fees: (totalFees / totalShares) * line.shares,
+          taxes: (totalTaxes / totalShares) * line.shares,
+        }));
 
-      const input: RecordSellInput = {
-        portfolioId,
-        ticker,
-        allocations,
-        executionDate: entry.candidate.date,
-        executionTime: entry.candidate.time ?? "00:00",
-        transactionNumber: entry.candidate.transactionNumber,
-        source: entry.candidate.source,
-      };
+        const input: RecordSellInput = {
+          portfolioId,
+          ticker,
+          allocations,
+          executionDate: entry.candidate.date,
+          executionTime: entry.candidate.time ?? "00:00",
+          transactionNumber: entry.candidate.transactionNumber,
+          source: entry.candidate.source,
+        };
 
-      const result = await recordSell(repos, input);
-      importSession.update((prev) => ({
-        ...prev,
-        addedKeys: [...prev.addedKeys, entry.key],
-        addedAllocationIds: { ...prev.addedAllocationIds, [entry.key]: result.allocations.map((a) => a.id) },
-      }));
-      clearRowError(entry.key);
+        const result = await recordSell(repos, input);
+        importSession.update((prev) => ({
+          ...prev,
+          addedKeys: [...prev.addedKeys, entry.key],
+          addedAllocationIds: { ...prev.addedAllocationIds, [entry.key]: result.allocations.map((a) => a.id) },
+        }));
+        clearRowError(entry.key);
+      });
     } catch (e) {
       setRowError(entry.key, e);
     } finally {

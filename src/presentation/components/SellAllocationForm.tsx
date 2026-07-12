@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { recordSell } from "@application/services/TradeService";
 import { completeSellAllocationForPendingExecution } from "@application/services/pendingExecutions";
+import { runSerialized } from "@application/services/serialize";
 import { repos } from "@presentation/lib/data";
 import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -191,10 +192,17 @@ export function SellAllocationForm({ portfolioId, ticker, onDone, onCancel, pend
         source: initial?.source,
       };
 
-      const result = await recordSell(repos, input);
-      if (pendingExecutionId) {
-        await completeSellAllocationForPendingExecution(repos, pendingExecutionId, result);
-      }
+      // Serialized per (portfolio, ticker) with Smart Allocate's own commit
+      // sequence (see serialize.ts) — otherwise this submission could read/
+      // write against the same open lots a concurrent Smart Allocate call
+      // for this ticker hasn't finished committing yet.
+      const result = await runSerialized(`${portfolioId}|${normalizedTicker}`, async () => {
+        const r = await recordSell(repos, input);
+        if (pendingExecutionId) {
+          await completeSellAllocationForPendingExecution(repos, pendingExecutionId, r);
+        }
+        return r;
+      });
       onDone({ allocationIds: result.allocations.map((a) => a.id) });
     } catch (e) {
       setError(e instanceof Error ? e.message : t("sellForm.recordSellFailed"));
