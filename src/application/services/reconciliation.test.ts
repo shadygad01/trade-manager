@@ -156,6 +156,23 @@ describe("isTickerFullyOfficialBrokerExcelSourced", () => {
     // The OLD ticker name no longer resolves to this fact at all.
     expect(isTickerFullyOfficialBrokerExcelSourced([fact, correction], "COMI")).toBe(false);
   });
+
+  // Real, reported bug: a closed ticker whose sole surviving history is an
+  // Invoice (evidenceAuthority.ts rank 6, strictly ABOVE official-broker-excel's
+  // rank 5) still hit the "closed-position, no corroboration" dead-end
+  // because the old check demanded the literal string "official-broker-excel"
+  // rather than comparing authority rank — even though an Invoice is
+  // objectively more trustworthy than the Excel export this function was
+  // originally written to trust.
+  it("is true when every live fact outranks official-broker-excel (e.g. invoice), not just an exact source match", () => {
+    const facts = [buyFact({ id: "b1", source: "invoice" })];
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "COMI")).toBe(true);
+  });
+
+  it("is still false for a source that ranks below official-broker-excel even if not literally 'manual'", () => {
+    const facts = [buyFact({ id: "b1", source: "screenshot" })];
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "COMI")).toBe(false);
+  });
 });
 
 describe("suggestDuplicateTradeIds", () => {

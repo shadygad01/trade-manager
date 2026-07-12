@@ -55,6 +55,33 @@ export function sameExecution(a?: string, b?: string): boolean | undefined {
 // same time" or "a conflicting time," only as "unknown."
 const UNKNOWN_TIME = "00:00";
 
+// A manually-recorded Trade/TradeAllocation's executionTime comes from an
+// `<input type="time">` field, always 24-hour "HH:MM" (e.g. "12:51"). Every
+// parser's candidate.time (ThndrParser's normalizeTime, ThndrOrdersWorkbookParser's
+// parseOrderDateTime) instead prints 12-hour with an AM/PM suffix and no
+// space (e.g. "12:51PM"). Both describe the same real-world clock time, but
+// as raw strings they never compare equal — a real, reproduced bug: a
+// manually-entered historical trade later corroborated by an authoritative
+// document (the broker's own Excel export) never got recognized as a
+// duplicate purely because of this format mismatch, leaving BOTH the
+// low-authority manual fact and the new authoritative one live side by side
+// (double-counting the position, and permanently blocking
+// isTickerFullyOfficialBrokerExcelSourced). Parsed to minutes-since-midnight
+// so either format compares correctly against the other; an unrecognized
+// format falls back to raw string equality rather than silently treating it
+// as unknown.
+function parseTimeToMinutes(raw: string): number | undefined {
+  const ampm = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(raw.trim());
+  if (ampm) {
+    let hours = parseInt(ampm[1], 10) % 12;
+    if (ampm[3].toUpperCase() === "PM") hours += 12;
+    return hours * 60 + parseInt(ampm[2], 10);
+  }
+  const plain = /^(\d{1,2}):(\d{2})$/.exec(raw.trim());
+  if (plain) return parseInt(plain[1], 10) * 60 + parseInt(plain[2], 10);
+  return undefined;
+}
+
 /**
  * Two rows that BOTH carry a real, differing execution time are provably two
  * different real orders — the same signal sameCandidateExecution already
@@ -66,7 +93,10 @@ const UNKNOWN_TIME = "00:00";
  */
 function timesConflict(a?: string, b?: string): boolean {
   if (!a || !b || a === UNKNOWN_TIME || b === UNKNOWN_TIME) return false;
-  return a !== b;
+  const minutesA = parseTimeToMinutes(a);
+  const minutesB = parseTimeToMinutes(b);
+  if (minutesA === undefined || minutesB === undefined) return a !== b;
+  return minutesA !== minutesB;
 }
 
 /**
