@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
+import { createRawTransaction } from "@domain/entities/RawTransaction";
 import { createFakeRepositories, createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import { recordBuy } from "./TradeService";
+import { isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
 import {
   recordSellTransaction,
   setSellAllocation,
@@ -191,5 +193,118 @@ describe("lotManager — Pending Sell workflow (record without allocating, then 
     // sellY/lotB completely untouched.
     expect(snap.sells.find((s) => s.id === sellY)!.status).toBe("completed");
     expect(snap.buyLots.find((l) => l.id === lotB.id)!.status).toBe("closed");
+  });
+});
+
+describe("lotManager — Sell provenance (real, reported bug: 'Closed — needs corroborating evidence' for a fully Excel-sourced ticker)", () => {
+  // Real user report (ALCN): the entire history for a ticker was extracted
+  // from a single official broker Excel export — never manual, never a
+  // screenshot — but closing the position via the Lot Manager's own "Record
+  // Sell" (rather than Import's own Sell Allocation flow) still permanently
+  // orphaned the correctly-sourced extraction-time SellExecution fact,
+  // because recordSellTransaction hardcoded source: "manual" unconditionally.
+  // isTickerFullyOfficialBrokerExcelSourced (reconciliation.ts) then saw two
+  // live facts — one Excel-sourced, one manual — and stopped recognizing the
+  // ticker as fully Excel-sourced, reproducing the exact banner.
+  it("adopts a pre-existing document-sourced SellExecution fact instead of minting a redundant 'manual' one", async () => {
+    const repos = fullRepos();
+    // Simulates recordImportedRawTransactions' extraction-time write for
+    // both the Buy and the Sell — both already live, correctly sourced,
+    // before the user ever touches the Lot Manager.
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "ALCN",
+        payload: { ticker: "ALCN", shares: 100, price: 10, executionDate: "2026-01-05", executionTime: "10:00" },
+      }),
+    );
+    await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "ALCN",
+      shares: 100,
+      entryPrice: 10,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-sell-1",
+        kind: "SellExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "ALCN",
+        payload: { ticker: "ALCN", shares: 100, price: 12, executionDate: "2026-02-01", executionTime: "11:00" },
+      }),
+    );
+
+    // The user closes the position via the Lot Manager's "Record Sell"
+    // instead of Import's own Sell Allocation flow — same real numbers.
+    const { sellId } = await recordSellTransaction(repos, {
+      portfolioId: "p1",
+      ticker: "ALCN",
+      shares: 100,
+      price: 12,
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+    // Buy/Sell lot ids the Lot Manager itself hands out (getLotManagerSnapshot,
+    // recordSellTransaction's own return) are LedgerEvent ids, which for a
+    // non-manual/backfill source are a VALUE-derived canonical key, not the
+    // underlying RawTransaction's real id (ledgerEngine.ts's
+    // canonicalizeTradeEntries path) — read the Buy lot's id from the
+    // snapshot itself rather than assuming it equals buyTrade.id (also not
+    // guaranteed to match, since ensureBuyFact adopts a pre-existing fact
+    // under its own id too).
+    const beforeAllocation = await getLotManagerSnapshot(repos, "p1", "ALCN");
+    const buyLotId = beforeAllocation.buyLots[0].id;
+    await setSellAllocation(repos, "p1", "ALCN", sellId, [{ buyLotId, shares: 100 }]);
+
+    const facts = await repos.rawTransactions.getAll();
+    const retractedIds = new Set(
+      facts.filter((r) => r.kind === "Retraction").map((r) => (r.payload as { targetId: string }).targetId),
+    );
+    const liveSellFacts = facts.filter((f) => f.kind === "SellExecution" && !retractedIds.has(f.id));
+    // Exactly one LIVE SellExecution fact — the pre-existing, Excel-sourced
+    // candidate is retracted and its provenance carried onto the fact this
+    // call writes, never left as a second, wrongly-"manual" live fact.
+    expect(liveSellFacts).toHaveLength(1);
+    expect(retractedIds.has("extracted-sell-1")).toBe(true);
+    expect(liveSellFacts[0].source).toBe("official-broker-excel");
+
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "ALCN")).toBe(true);
+
+    const snap = await getLotManagerSnapshot(repos, "p1", "ALCN");
+    expect(snap.sells).toHaveLength(1);
+    expect(snap.sells[0].status).toBe("completed");
+  });
+
+  it("never adopts another still-pending 'manual' Lot Manager sell sharing the same value — a second genuinely distinct sell gets its own fact", async () => {
+    const repos = fullRepos();
+    await buy(repos, 200, 40, "2026-01-01");
+
+    const first = await recordSellTransaction(repos, { portfolioId: "p1", ticker: "COMI", shares: 50, price: 50, executionDate: "2026-02-01" });
+    const second = await recordSellTransaction(repos, { portfolioId: "p1", ticker: "COMI", shares: 50, price: 50, executionDate: "2026-02-01" });
+
+    expect(second.sellId).not.toBe(first.sellId);
+    const facts = await repos.rawTransactions.getAll();
+    const sellFacts = facts.filter((f) => f.kind === "SellExecution");
+    expect(sellFacts).toHaveLength(2);
+    expect(sellFacts.every((f) => f.source === "manual")).toBe(true);
+
+    const snap = await getLotManagerSnapshot(repos, "p1", "COMI");
+    expect(snap.sells).toHaveLength(2);
+  });
+
+  it("still defaults to 'manual' when no document-sourced candidate exists at all — a genuinely user-typed sell", async () => {
+    const repos = fullRepos();
+    await buy(repos, 100, 40, "2026-01-01");
+    const { sellId } = await recordSellTransaction(repos, { portfolioId: "p1", ticker: "COMI", shares: 100, price: 50, executionDate: "2026-02-01" });
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFact = facts.find((f) => f.id === sellId);
+    expect(sellFact?.source).toBe("manual");
   });
 });
