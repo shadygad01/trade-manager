@@ -531,7 +531,22 @@ export function ImportPage() {
     // architecture's reactive commit trigger fire for it at all — Import
     // itself never assigns a portfolio (see importRecording.ts). Isolated
     // and non-fatal for the same reason as the dual-write in processFiles.
-    assignPortfolio(repos, ticker, portfolioId).catch((err) => {
+    //
+    // Routed through the SAME per-(portfolio, ticker) runSerialized queue as
+    // commitTickerGroup/smartAllocateSell/SellAllocationForm (see
+    // serialize.ts) — a real, reproduced gap the "forensic architectural
+    // audit" that enumerated every commitTicker-triggering write path (see
+    // ROADMAP) missed entirely: this dropdown handler is a distinct call
+    // site from commitTickerGroupLocked's own (already-serialized) trailing
+    // assignPortfolio sweep, and picking a ticker's portfolio from Import's
+    // own dropdown is an ordinary action a multi-portfolio user takes right
+    // around Confirm/Smart-Allocate time, not a contrived edge case. Left
+    // fire-and-forget (setTickerPortfolio itself isn't async, called
+    // directly from a <select>'s onChange) — joining the queue is what
+    // matters: any subsequent commitTickerGroup/smartAllocateSell/
+    // SellAllocationForm call for this ticker shares the identical key and
+    // will correctly queue behind this sweep instead of racing it.
+    void runSerialized(`${portfolioId}|${normalizeTicker(ticker)}`, () => assignPortfolio(repos, ticker, portfolioId)).catch((err) => {
       console.error("assignPortfolio failed (shadow write, non-fatal):", err);
     });
   }
