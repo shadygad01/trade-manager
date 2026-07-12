@@ -14,6 +14,7 @@ import { generateAllocations } from "./allocationEngine";
 import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } from "./ledgerProjection";
 import { findUnclaimedSellExecutionFact, isRetracted } from "./rawTransactionFolds";
 import { authorityRank } from "./evidenceAuthority";
+import { runSerialized } from "./serialize";
 
 /**
  * Lot Manager: the ticker-scoped Buy Lots / Sell Transactions / Allocation
@@ -216,7 +217,31 @@ export interface RecordSellTransactionInput {
  * that could be a real, deliberately separate second sell the user hasn't
  * allocated yet, not a redundant re-entry of the same one.
  */
+/**
+ * Serialized against the same `${portfolioId}|${ticker}` queue ImportPage's
+ * `commitTickerGroup`/`smartAllocateSell` and `SellAllocationForm` already
+ * join (see serialize.ts) — a forensic audit (docs/ROADMAP.md) found this
+ * was the one major write surface still missing from that queue: Lot
+ * Manager's three top-level actions (this one, `setSellAllocation`,
+ * `resetSellAllocation`) each independently trigger `commitEngine`'s own
+ * `commitTicker` for the ticker, exactly the same commit pathway Import's
+ * own actions trigger, with zero coordination between the two UIs. A user
+ * with Import open in one tab and the Lot Manager open in another (or
+ * simply switching between them quickly) for the SAME ticker could
+ * reproduce the identical provenance-loss corruption already fixed for
+ * Import-internal races, just via a pair of call sites that were never
+ * audited together before. Each of Lot Manager's three actions gets its OWN
+ * top-level `runSerialized` wrap (never calls into another one directly) to
+ * avoid the reentrant-deadlock `serialize.ts`'s queue is NOT safe against —
+ * see `resetSellAllocation` below, which shares `setSellAllocation`'s own
+ * un-locked core rather than calling the locked, exported version.
+ */
 export async function recordSellTransaction(repos: LotManagerRepos, input: RecordSellTransactionInput): Promise<{ sellId: string }> {
+  const key = `${input.portfolioId}|${normalizeTicker(input.ticker)}`;
+  return runSerialized(key, () => recordSellTransactionLocked(repos, input));
+}
+
+async function recordSellTransactionLocked(repos: LotManagerRepos, input: RecordSellTransactionInput): Promise<{ sellId: string }> {
   if (input.shares <= 0) throw new Error("Sell shares must be positive");
   if (input.price <= 0) throw new Error("Sell price must be positive");
   const ticker = normalizeTicker(input.ticker);
@@ -314,6 +339,11 @@ export interface SetSellAllocationLine {
  * duplicates a lot within the same call.
  */
 export async function setSellAllocation(repos: LotManagerRepos, portfolioId: string, ticker: string, sellId: string, lines: SetSellAllocationLine[]): Promise<void> {
+  const key = `${portfolioId}|${normalizeTicker(ticker)}`;
+  return runSerialized(key, () => setSellAllocationLocked(repos, portfolioId, ticker, sellId, lines));
+}
+
+async function setSellAllocationLocked(repos: LotManagerRepos, portfolioId: string, ticker: string, sellId: string, lines: SetSellAllocationLine[]): Promise<void> {
   const normalized = normalizeTicker(ticker);
   const snapshot = await getLotManagerSnapshot(repos, portfolioId, normalized);
   const sell = snapshot.sells.find((s) => s.id === sellId);
@@ -383,9 +413,20 @@ export async function setSellAllocation(repos: LotManagerRepos, portfolioId: str
   await syncTicker(repos, portfolioId, normalized);
 }
 
-/** Reset Allocation: removes ONLY this Sell's Allocation Events. Nothing else — no other Sell, no Buy lot's OTHER allocations — is touched. */
+/**
+ * Reset Allocation: removes ONLY this Sell's Allocation Events. Nothing else
+ * — no other Sell, no Buy lot's OTHER allocations — is touched. Calls
+ * `setSellAllocationLocked` directly (the un-locked core), not the exported
+ * `setSellAllocation` — going through the exported wrapper would try to
+ * acquire this same ticker's `runSerialized` lock a second time from
+ * INSIDE this function's own already-held lock, which `serialize.ts`'s
+ * plain promise-chain queue is not reentrant-safe against (it would
+ * deadlock: the inner acquisition waits on the outer's own tail, which
+ * can't settle until the outer call — this one — returns).
+ */
 export async function resetSellAllocation(repos: LotManagerRepos, portfolioId: string, ticker: string, sellId: string): Promise<void> {
-  await setSellAllocation(repos, portfolioId, ticker, sellId, []);
+  const key = `${portfolioId}|${normalizeTicker(ticker)}`;
+  return runSerialized(key, () => setSellAllocationLocked(repos, portfolioId, ticker, sellId, []));
 }
 
 export interface FifoProposalLine {

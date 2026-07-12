@@ -4,6 +4,7 @@ import { useParams, useLocation } from "wouter";
 import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink, Pencil, Check, X, Trash2 } from "lucide-react";
 import { repos } from "@presentation/lib/data";
 import { recordBuy, moveTrade, deleteTrade, correctTradeExecutionDate } from "@application/services/TradeService";
+import { runSerialized } from "@application/services/serialize";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { getTradeStatus } from "@domain/entities/Trade";
@@ -492,23 +493,30 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
     try {
       // recordBuy already debits portfolio cash and writes the Buy timeline
       // event, so there's nothing left to do here beyond resetting the form.
-      await recordBuy(repos, {
-        portfolioId,
-        ticker: normalizedTicker,
-        companyName: companyName.trim() || undefined,
-        sector: sector.trim() || undefined,
-        shares: sharesN,
-        entryPrice: priceN,
-        fees: Number.parseFloat(fees) || 0,
-        taxes: Number.parseFloat(taxes) || 0,
-        executionDate,
-        executionTime,
-        notes: notes.trim() || undefined,
-        strategyTags: strategyTags
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean),
-      });
+      // Serialized against the same `${portfolioId}|${ticker}` queue Import
+      // (commitTickerGroup/smartAllocateSell/SellAllocationForm) and the Lot
+      // Manager already join — this Record Buy modal is the same shape of
+      // top-level commitTicker-triggering write, and was the last one found
+      // missing from that queue by a full-repository audit (see ROADMAP.md).
+      await runSerialized(`${portfolioId}|${normalizedTicker}`, () =>
+        recordBuy(repos, {
+          portfolioId,
+          ticker: normalizedTicker,
+          companyName: companyName.trim() || undefined,
+          sector: sector.trim() || undefined,
+          shares: sharesN,
+          entryPrice: priceN,
+          fees: Number.parseFloat(fees) || 0,
+          taxes: Number.parseFloat(taxes) || 0,
+          executionDate,
+          executionTime,
+          notes: notes.trim() || undefined,
+          strategyTags: strategyTags
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean),
+        }),
+      );
       reset();
       onClose();
     } catch (e) {

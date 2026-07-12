@@ -4,6 +4,8 @@ import { createRawTransaction } from "@domain/entities/RawTransaction";
 import { createFakeRepositories, createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import { recordBuy } from "./TradeService";
 import { isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
+import { assignPortfolio } from "./commitEngine";
+import { runSerialized } from "./serialize";
 import {
   recordSellTransaction,
   setSellAllocation,
@@ -306,5 +308,80 @@ describe("lotManager — Sell provenance (real, reported bug: 'Closed — needs 
     const facts = await repos.rawTransactions.getAll();
     const sellFact = facts.find((f) => f.id === sellId);
     expect(sellFact?.source).toBe("manual");
+  });
+});
+
+describe("lotManager — serialized against the SAME per-(portfolio, ticker) queue Import already joins", () => {
+  // Forensic audit finding (docs/ROADMAP.md): serialize.ts's queue was
+  // retrofitted ad-hoc to only 3 of the app's ~13 commitTicker-triggering
+  // write entry points (ImportPage's commitTickerGroup/smartAllocateSell,
+  // SellAllocationForm) — the Lot Manager's own three actions were the
+  // biggest live gap, capable of racing Import's writes for the identical
+  // (portfolio, ticker) with zero coordination, reproducing the same
+  // provenance-loss corruption a different pair of call sites already
+  // exhibited earlier this session.
+  it("recordSellTransaction never loses Excel provenance when racing a concurrent Import-shaped commitTicker trigger for the same ticker", async () => {
+    const repos = fullRepos();
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "ALCN",
+        payload: { ticker: "ALCN", shares: 100, price: 10, executionDate: "2026-01-05", executionTime: "10:00" },
+      }),
+    );
+    await recordBuy(repos, { portfolioId: "p1", ticker: "ALCN", shares: 100, entryPrice: 10, executionDate: "2026-01-05", executionTime: "10:00" });
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-sell-1",
+        kind: "SellExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "ALCN",
+        payload: { ticker: "ALCN", shares: 100, price: 12, executionDate: "2026-02-01", executionTime: "11:00" },
+      }),
+    );
+
+    const key = "p1|ALCN";
+    // Mirrors ImportPage.commitTickerGroup's own trailing sweep — the exact
+    // shape that, unserialized, corrupted a different ticker's Sell
+    // provenance earlier this session. Started concurrently with the Lot
+    // Manager's own recordSellTransaction call below, no await between them.
+    const importShadowSweep = runSerialized(key, () => assignPortfolio(repos, "ALCN", "p1"));
+    const lotManagerRecord = recordSellTransaction(repos, {
+      portfolioId: "p1",
+      ticker: "ALCN",
+      shares: 100,
+      price: 12,
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+
+    await Promise.all([importShadowSweep, lotManagerRecord]);
+
+    const facts = await repos.rawTransactions.getAll();
+    const liveBuySell = facts.filter((f) => f.kind === "BuyExecution" || f.kind === "SellExecution");
+    expect(liveBuySell.every((f) => f.source === "official-broker-excel")).toBe(true);
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "ALCN")).toBe(true);
+  });
+
+  it("resetSellAllocation completes without deadlocking against its own already-held lock (shares setSellAllocation's un-locked core, never re-enters the exported wrapper)", async () => {
+    const repos = fullRepos();
+    const lotA = await buy(repos, 50, 40, "2026-01-01");
+    const { sellId } = await recordSellTransaction(repos, { portfolioId: "p1", ticker: "COMI", shares: 50, price: 50, executionDate: "2026-02-01" });
+    await setSellAllocation(repos, "p1", "COMI", sellId, [{ buyLotId: lotA.id, shares: 50 }]);
+
+    // If resetSellAllocation called the EXPORTED setSellAllocation (which
+    // itself acquires the same "p1|COMI" lock) from inside its own
+    // already-held lock, this call would hang forever — vitest's default
+    // test timeout is the only thing that would ever surface that as a
+    // failure, so this test exists to make the invariant explicit rather
+    // than relying on an incidental timeout.
+    await resetSellAllocation(repos, "p1", "COMI", sellId);
+
+    const snap = await getLotManagerSnapshot(repos, "p1", "COMI");
+    expect(snap.sells.find((s) => s.id === sellId)!.status).toBe("pending");
   });
 });
