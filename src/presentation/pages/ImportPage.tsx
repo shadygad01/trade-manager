@@ -2385,8 +2385,8 @@ export function TickerGroupCard({
   /** Confirms and distributes just this ticker, independent of any other ticker in the batch still stuck — see ImportPage's confirmTicker. */
   onConfirmTicker: () => void;
   onAllocateSell: (entry: CandidateEntry) => void;
-  /** Silently allocates a sell against its ticker's open lots in strict FIFO order through the same recordSell engine as onAllocateSell's manual dialog — the "Smart Allocate" button's handler. Returns its promise so the row can disable itself until the allocation finishes. */
-  onSmartAllocate: (entry: CandidateEntry) => Promise<void>;
+  /** Silently allocates a sell against its ticker's open lots in strict FIFO order through the same recordSell engine as onAllocateSell's manual dialog — the "Smart Allocate" button's handler. Returns its promise so the row can disable itself until the allocation finishes. Optional so call sites that construct CandidateRow/TickerGroupCard directly (tests) don't need to wire it — the button simply doesn't render without it. */
+  onSmartAllocate?: (entry: CandidateEntry) => Promise<void>;
   onRenameTicker: (newTicker: string) => void;
   /** Restores all dismissed/skipped/discarded Buy/Sell rows for this ticker back to pending state. */
   onRestoreTicker?: () => void;
@@ -2935,7 +2935,7 @@ export function TickerGroupCard({
               actionClassName="bg-rose-500 hover:bg-rose-400"
               onAction={() => onAllocateSell(entry)}
               smartActionLabel={t("importPage.smartAllocate")}
-              onSmartAction={() => onSmartAllocate(entry)}
+              onSmartAction={onSmartAllocate ? () => onSmartAllocate(entry) : undefined}
               disabled={disabled}
               disabledReason={
                 !matched
