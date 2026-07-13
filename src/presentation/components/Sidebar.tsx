@@ -12,13 +12,11 @@ import {
   Database,
   Languages,
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { repos } from "@presentation/lib/data";
 import { useT } from "@presentation/i18n/translations";
 import { useLanguage, languageStore } from "@presentation/i18n/language";
-import { toggleDeveloperModeAndReload } from "@presentation/lib/developerMode";
-
-const DEVELOPER_MODE_LONG_PRESS_MS = 1500;
+import { isDeveloperModeEnabled, toggleDeveloperModeAndReload } from "@presentation/lib/developerMode";
 
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
   const t = useT();
@@ -29,21 +27,11 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []);
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
-  // Ctrl+Alt+Shift+D (developerMode.ts) has no mobile equivalent — a
-  // long-press on the logo is the same "hidden, off by default, never
-  // leaks via a screenshot" trigger for touch devices. Deliberately no
-  // visible button/hint: same design intent as the keyboard shortcut, not a
-  // separate, more-discoverable mechanism.
-  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const startLongPress = () => {
-    longPressTimer.current = setTimeout(toggleDeveloperModeAndReload, DEVELOPER_MODE_LONG_PRESS_MS);
-  };
-  const cancelLongPress = () => {
-    if (longPressTimer.current !== null) {
-      clearTimeout(longPressTimer.current);
-      longPressTimer.current = null;
-    }
-  };
+  // Read once — same "reload required to take effect" contract as every
+  // other consumer of this flag (developerMode.ts's own doc comment), so a
+  // live in-render subscription would be misleading: the button/link below
+  // can't change state without the reload it itself triggers.
+  const developerModeOn = isDeveloperModeEnabled();
 
   const NAV_ITEMS = [
     { key: "holdings", label: t("sidebar.holdings"), icon: Briefcase, suffix: "" },
@@ -71,15 +59,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       }`}
     >
       <div className="flex items-center gap-2 border-b border-slate-800/80 px-5 py-5">
-        <div
-          className="flex h-8 w-8 select-none items-center justify-center rounded-md bg-cyan-500/10 text-cyan-400 font-bold"
-          style={{ WebkitTouchCallout: "none" }}
-          onPointerDown={startLongPress}
-          onPointerUp={cancelLongPress}
-          onPointerLeave={cancelLongPress}
-          onPointerCancel={cancelLongPress}
-          onContextMenu={(e) => e.preventDefault()}
-        >
+        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-cyan-500/10 text-cyan-400 font-bold">
           P
         </div>
         <div className="flex-1">
@@ -202,6 +182,29 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       <div className="border-t border-slate-800/80 px-5 py-3 text-[11px] text-slate-600">
         {t("sidebar.footer")}
       </div>
+
+      {/* Developer-only utility, deliberately not run through the EN/AR
+          translation layer — same precedent as DiagnosticsPage.tsx itself.
+          Visible (not hidden) by design: reliability over discoverability,
+          the opposite tradeoff of the Ctrl+Alt+Shift+D shortcut this
+          complements. Reads the flag once at render (see above) — the
+          reload this triggers is what actually changes which branch shows. */}
+      {developerModeOn ? (
+        <Link
+          href="/diagnostics"
+          onClick={onNavigate}
+          className="border-t border-slate-800/80 px-5 py-2.5 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-900 hover:text-slate-300"
+        >
+          Diagnostics
+        </Link>
+      ) : (
+        <button
+          onClick={toggleDeveloperModeAndReload}
+          className="border-t border-slate-800/80 px-5 py-2.5 text-start text-xs font-medium text-slate-500 transition-colors hover:bg-slate-900 hover:text-slate-300"
+        >
+          Developer
+        </button>
+      )}
     </aside>
   );
 }
