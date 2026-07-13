@@ -2042,3 +2042,48 @@ grounded in numbers directly measured this sprint, not estimated.
   promote it. Beyond that, per `docs/ARCHITECTURAL_DEBT.md`'s open items: PR3 (single Policy module) or
   PR1b (`EntityId` branding) are both independently startable; PR4 (Guardian) remains the highest-value,
   highest-risk item and should not be picked up casually.
+
+### Sprint 10 — Developer Diagnostics Center: architecture specification (design only, no implementation)
+
+Directed sprint: design the permanent "Black Box Flight Recorder" for Portfolio OS — a Developer-Mode-only,
+read-only diagnostics layer so a production bug in a user's private browser IndexedDB can be investigated
+without DevTools, screenshots, or manual database inspection. The instruction was explicit: do not
+implement this as one PR — design the complete architecture first, get it approved, then ship it in small,
+independently mergeable/revertible phases.
+
+**Grounded the design in the real system, not invented terms**: researched the actual fact model
+(`RawTransaction`'s 16-kind tagged union — there is no separate `ExecutionFact`/`VerificationFact`/
+`AssignmentFact` type family, contrary to how the request phrased it), the real pipeline
+(Import → Confirm/`verificationEngine` → Allocate/`allocationEngine` → Commit/`commitEngine` → Ledger/
+`ledgerEngine` → Holdings/`holdingsEngine`), and confirmed three things the request assumed exist but
+don't yet: no unified Policy module (PR3, `⬜ NOT STARTED`), no `Warning` type (the concept is scattered
+across `constraintValidation`/`completenessEngine`/`evidenceIntelligence`/`mismatchResolver`), and no
+feature-flag/Developer-Mode mechanism anywhere in the app.
+
+**Reused rather than reinvented**: the spec explicitly maps most of the requested capability onto
+infrastructure this repo already built and proved this year — `computeSystemSnapshot`'s content-keyed
+hashing/normalization (Query Inspector, Live Object Inspector), `regressionGuards.test.ts` +
+`sourceScan.ts` (Invariant Checker, and literally the mechanism used to enumerate every real write site
+the new Writer Trace needs to instrument), the non-mutating replay chain already used by
+`dryRunLedgerRebuild`/`determinism.e2e.test.ts` (Replay Inspector), and the analytics-calculator
+plugin-registry pattern (`AnalyticsEngine.ts`) as the template for a new rule/trigger registry.
+
+**Shipped**: `docs/DIAGNOSTICS_CENTER_SPEC.md` — ground rules (read-only, Developer-Mode-only, default
+off, additive instrumentation never interception), a two-table data model (`diagnosticEvents` append-only
+log + `diagnosticCases` derived/replaceable index, mirroring `rawTransactions`→`ledgerCache`'s own proven
+shape instead of one table per event subtype), Dexie v5 schema addition, a `DiagnosticsRecorder` port with
+a no-op default (zero cost when off) and a recording implementation (fire-and-forget, non-fatal, same
+discipline as every other shadow-write path in this codebase), an instrumentation map naming the exact 10
+existing writer files and 5 reader entry points to touch, a new structural regression guard
+(`diagnosticsInstrumentationIsObserveOnly`) that source-scans the diagnostics module and fails CI if it
+ever calls a business write method — the automated proof that "observe-only" holds over time instead of
+just a convention — plus retention policy, security/privacy analysis, an adversarial self-review, and a
+10-phase implementation roadmap (Phase 1 Foundation ... Phase 10 Performance Instrumentation), each phase
+scoped to compile, test, and revert independently.
+
+- **Files added**: `docs/DIAGNOSTICS_CENTER_SPEC.md`. No production code — this sprint was explicitly
+  design-only per instruction.
+- **Next recommended sprint**: Phase 1 of the new spec (domain types, Dexie v5 schema + repositories, the
+  no-op/recording `DiagnosticsRecorder` pair, the hidden Developer Mode toggle, an empty `/diagnostics`
+  route) — the only phase with zero dependencies and zero touches to any existing business file. Do not
+  jump ahead to instrumentation (Phase 2) before Phase 1 lands and is reviewed.
