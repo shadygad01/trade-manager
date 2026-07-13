@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Download, Upload, AlertTriangle, HardDriveDownload, Trash2 } from "lucide-react";
-import { repos, purgeAllData } from "@presentation/lib/data";
+import { repos, diagnostics, purgeAllData } from "@presentation/lib/data";
 import { importSession } from "@presentation/lib/importSession";
 import { exportLedger, importLedger, parseLedgerSnapshot } from "@application/services/BackupService";
 import { PageHeader } from "@presentation/components/PageHeader";
@@ -93,6 +93,7 @@ export function DataPage() {
     setResetError(null);
     setResetSuccess(null);
     try {
+      diagnostics.recordSessionEvent({ workflowStep: "Reset", label: "Reset All Data" });
       await purgeAllData();
       importSession.clear();
       setResetSuccess(t("data.resetDone"));

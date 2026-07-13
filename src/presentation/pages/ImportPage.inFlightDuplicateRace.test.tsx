@@ -41,6 +41,7 @@ vi.mock("@presentation/lib/data", async () => {
   const testDb = new DB(`import-race-test-${Math.random()}`);
   const base = create(testDb);
   return {
+    diagnostics: { recordSessionEvent() {}, recordWrite() {}, recordRead() {}, recordDecision() {}, recordRuleExecution() {}, recordPerfSample() {} },
     repos: {
       ...base,
       allocations: base.tradeAllocations,

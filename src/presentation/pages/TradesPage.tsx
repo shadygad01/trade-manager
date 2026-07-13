@@ -2,7 +2,7 @@ import { Fragment, useMemo, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useParams, useLocation } from "wouter";
 import { Plus, ArrowLeftRight, ChevronDown, ChevronRight, FolderSymlink, Pencil, Check, X, Trash2 } from "lucide-react";
-import { repos } from "@presentation/lib/data";
+import { repos, diagnostics } from "@presentation/lib/data";
 import { recordBuy, moveTrade, deleteTrade, correctTradeExecutionDate } from "@application/services/TradeService";
 import { runSerialized } from "@application/services/serialize";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -498,24 +498,29 @@ export function RecordBuyModal({ portfolioId, open, onClose }: { portfolioId: st
       // Manager already join — this Record Buy modal is the same shape of
       // top-level commitTicker-triggering write, and was the last one found
       // missing from that queue by a full-repository audit (see ROADMAP.md).
+      diagnostics.recordSessionEvent({ workflowStep: "ManualEdit", label: "Record Buy submitted", portfolioId, ticker: normalizedTicker });
       await runSerialized(`${portfolioId}|${normalizedTicker}`, () =>
-        recordBuy(repos, {
-          portfolioId,
-          ticker: normalizedTicker,
-          companyName: companyName.trim() || undefined,
-          sector: sector.trim() || undefined,
-          shares: sharesN,
-          entryPrice: priceN,
-          fees: Number.parseFloat(fees) || 0,
-          taxes: Number.parseFloat(taxes) || 0,
-          executionDate,
-          executionTime,
-          notes: notes.trim() || undefined,
-          strategyTags: strategyTags
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean),
-        }),
+        recordBuy(
+          repos,
+          {
+            portfolioId,
+            ticker: normalizedTicker,
+            companyName: companyName.trim() || undefined,
+            sector: sector.trim() || undefined,
+            shares: sharesN,
+            entryPrice: priceN,
+            fees: Number.parseFloat(fees) || 0,
+            taxes: Number.parseFloat(taxes) || 0,
+            executionDate,
+            executionTime,
+            notes: notes.trim() || undefined,
+            strategyTags: strategyTags
+              .split(",")
+              .map((t) => t.trim())
+              .filter(Boolean),
+          },
+          diagnostics,
+        ),
       );
       reset();
       onClose();

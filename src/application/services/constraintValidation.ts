@@ -1,4 +1,5 @@
 import type { TickerMatchReason } from "./importVerification";
+import type { DiagnosticsRecorder } from "@domain/repositories";
 
 /**
  * Constraint Validation Layer.
@@ -209,9 +210,42 @@ export function buildTickerConstraintReport(
   ticker: string,
   status: { existingRemainingShares?: number; pendingBuyShares?: number; pendingSellShares?: number; netShares: number; verifiedUnits?: number; reason?: TickerMatchReason },
   diagnosisInputs: DiagnosisInputs,
+  diagnostics?: DiagnosticsRecorder
 ): TickerConstraintReport {
   const facts = buildInventoryFacts(ticker, status);
   const contradictions = evaluateInventoryConstraint(facts);
+
+  diagnostics?.recordDecision({
+    decisionType: "Constraint",
+    ticker,
+    reader: "constraintValidation.ts",
+    function: "evaluateInventoryConstraint",
+    decision: contradictions.length === 0 ? "Satisfied" : `${contradictions.length} contradiction(s)`,
+    inputSummary: `opening ${facts.openingShares} + buy ${facts.buyShares} - sell ${facts.sellShares} = ${facts.calculatedRemaining}${
+      facts.holdingsRemaining !== undefined ? `, broker holdings ${facts.holdingsRemaining}` : ", no broker holdings on file"
+    }${facts.brokerExcelVerified ? " (broker-excel-verified, comparison skipped)" : ""}`,
+    outputSummary:
+      contradictions.length === 0
+        ? "Facts reconcile — no contradiction"
+        : contradictions.map((c) => `expected ${c.expected}, calculated ${c.calculated} (diff ${c.difference})`).join("; "),
+  });
+
   const diagnosis = diagnoseInventoryContradiction(contradictions, diagnosisInputs);
+
+  // Diagnosis only runs (and is only worth recording) once a contradiction
+  // exists — see this function's own doc comment. Recording a Warning
+  // decision for every satisfied constraint would be pure noise.
+  if (contradictions.length > 0) {
+    diagnostics?.recordDecision({
+      decisionType: "Warning",
+      ticker,
+      reader: "constraintValidation.ts",
+      function: "diagnoseInventoryContradiction",
+      decision: diagnosis.length === 0 ? "No hypothesis available" : `${diagnosis.length} hypothesis(es), top confidence: ${diagnosis[0].confidence}`,
+      inputSummary: `${contradictions.length} contradiction(s) to explain`,
+      outputSummary: diagnosis.length === 0 ? "No explanation available from existing evidence" : diagnosis.map((d) => `[${d.confidence}] ${d.explanation}`).join("; "),
+    });
+  }
+
   return { ticker, facts, satisfied: contradictions.length === 0, contradictions, diagnosis };
 }

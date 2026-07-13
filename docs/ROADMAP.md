@@ -2042,3 +2042,324 @@ grounded in numbers directly measured this sprint, not estimated.
   promote it. Beyond that, per `docs/ARCHITECTURAL_DEBT.md`'s open items: PR3 (single Policy module) or
   PR1b (`EntityId` branding) are both independently startable; PR4 (Guardian) remains the highest-value,
   highest-risk item and should not be picked up casually.
+
+### Sprint 10 — Developer Diagnostics Center: architecture specification (design only, no implementation)
+
+Directed sprint: design the permanent "Black Box Flight Recorder" for Portfolio OS — a Developer-Mode-only,
+read-only diagnostics layer so a production bug in a user's private browser IndexedDB can be investigated
+without DevTools, screenshots, or manual database inspection. The instruction was explicit: do not
+implement this as one PR — design the complete architecture first, get it approved, then ship it in small,
+independently mergeable/revertible phases.
+
+**Grounded the design in the real system, not invented terms**: researched the actual fact model
+(`RawTransaction`'s 16-kind tagged union — there is no separate `ExecutionFact`/`VerificationFact`/
+`AssignmentFact` type family, contrary to how the request phrased it), the real pipeline
+(Import → Confirm/`verificationEngine` → Allocate/`allocationEngine` → Commit/`commitEngine` → Ledger/
+`ledgerEngine` → Holdings/`holdingsEngine`), and confirmed three things the request assumed exist but
+don't yet: no unified Policy module (PR3, `⬜ NOT STARTED`), no `Warning` type (the concept is scattered
+across `constraintValidation`/`completenessEngine`/`evidenceIntelligence`/`mismatchResolver`), and no
+feature-flag/Developer-Mode mechanism anywhere in the app.
+
+**Reused rather than reinvented**: the spec explicitly maps most of the requested capability onto
+infrastructure this repo already built and proved this year — `computeSystemSnapshot`'s content-keyed
+hashing/normalization (Query Inspector, Live Object Inspector), `regressionGuards.test.ts` +
+`sourceScan.ts` (Invariant Checker, and literally the mechanism used to enumerate every real write site
+the new Writer Trace needs to instrument), the non-mutating replay chain already used by
+`dryRunLedgerRebuild`/`determinism.e2e.test.ts` (Replay Inspector), and the analytics-calculator
+plugin-registry pattern (`AnalyticsEngine.ts`) as the template for a new rule/trigger registry.
+
+**Shipped**: `docs/DIAGNOSTICS_CENTER_SPEC.md` — ground rules (read-only, Developer-Mode-only, default
+off, additive instrumentation never interception), a two-table data model (`diagnosticEvents` append-only
+log + `diagnosticCases` derived/replaceable index, mirroring `rawTransactions`→`ledgerCache`'s own proven
+shape instead of one table per event subtype), Dexie v5 schema addition, a `DiagnosticsRecorder` port with
+a no-op default (zero cost when off) and a recording implementation (fire-and-forget, non-fatal, same
+discipline as every other shadow-write path in this codebase), an instrumentation map naming the exact 10
+existing writer files and 5 reader entry points to touch, a new structural regression guard
+(`diagnosticsInstrumentationIsObserveOnly`) that source-scans the diagnostics module and fails CI if it
+ever calls a business write method — the automated proof that "observe-only" holds over time instead of
+just a convention — plus retention policy, security/privacy analysis, an adversarial self-review, and a
+10-phase implementation roadmap (Phase 1 Foundation ... Phase 10 Performance Instrumentation), each phase
+scoped to compile, test, and revert independently.
+
+- **Files added**: `docs/DIAGNOSTICS_CENTER_SPEC.md`. No production code — this sprint was explicitly
+  design-only per instruction.
+- **Next recommended sprint**: Phase 1 of the new spec (domain types, Dexie v5 schema + repositories, the
+  no-op/recording `DiagnosticsRecorder` pair, the hidden Developer Mode toggle, an empty `/diagnostics`
+  route) — the only phase with zero dependencies and zero touches to any existing business file. Do not
+  jump ahead to instrumentation (Phase 2) before Phase 1 lands and is reviewed.
+
+### Sprint 11 — Diagnostics Center field-provenance certification, then Phase 1 (foundation)
+
+Directed sprint: before allowing any Diagnostics Center code, certify that every field the design proposed
+storing is one of exactly four things — canonical stored data, deterministically derived data, runtime/UI
+state, or diagnostic metadata — so the new system can never become a second source of truth. Certification
+was not a rubber-stamp: it found and fixed two real defects in the Sprint 10 design before Phase 1 began
+(full reasoning in `docs/DIAGNOSTICS_CENTER_SPEC.md` Part 2.3).
+
+**Defect 1 — a mutable `status` field on `DiagnosticCase`.** Contradicted the model's own "never edited
+field-by-field" rule (acknowledging a case would have to mutate a supposedly-replaceable-only row). The
+master spec never asked for acknowledgment workflow, so the honest fix was deletion, not inventing a new
+event kind just to make the field derivable.
+
+**Defect 2 — raw value copies (`oldValue`/`newValue`/`input`/`output`) captured on every write and read.**
+Auditing where each value actually comes from split it into three cases: writes to `rawTransactions` need
+no copy at all (it's already permanent and canonical — refetch by id); writes to `trades`/
+`tradeAllocations`/`ledgerCache`/`allocationsCache` by a fact-replay-backed writer need no copy either
+(these tables are themselves materialized projections of `rawTransactions` — replay it up to a recorded
+`factSeqCursor` through the existing engines on demand, exactly what the Replay Inspector phase already
+needs); only two writers in the whole codebase (`BackupService`'s bulk restore, `ledgerRebuild`'s
+`applyLedgerRebuild`) don't derive from fact replay, so only those two are allowed to capture a real
+snapshot — frozen by a planned new regression guard. This became `WriteTraceRecord`'s three-mode
+`valueSource` discriminant (`reference`/`replayCursor`/`snapshot`), and the same reasoning dropped raw
+`input`/`output` from `ReadTraceRecord`/`DecisionTraceRecord`/`RuleExecutionRecord` entirely in favor of a
+`factSeqCursor` pointer plus small scalar decision fields.
+
+**Phase 1 (Foundation) then shipped** on top of the certified design: `DiagnosticEvent`/`DiagnosticCase`
+domain types (`src/domain/entities/diagnostics/`), `DiagnosticEventRepository`/`DiagnosticCaseRepository`/
+`DiagnosticsRecorder` interfaces (`src/domain/repositories/index.ts`), Dexie schema version 5 (two new
+tables, all prior tables re-listed verbatim per this codebase's additive-only convention),
+`DexieDiagnosticEventRepository`/`DexieDiagnosticCaseRepository`, `NoopDiagnosticsRecorder` (zero-cost
+default) and `RecordingDiagnosticsRecorder` (fire-and-forget, non-fatal — same discipline as
+`backfillRawTransactionsSilently`'s startup hook), retention pruning (`retentionPolicy.ts`, day-cap +
+count-cap, run once at boot only when Developer Mode is on), a hidden Ctrl+Alt+Shift+D Developer Mode
+toggle (`developerMode.ts` — resolves Part 13's open question #1: this app has no Settings screen to hide
+a tap-sequence behind), and an empty `/diagnostics` route registered only when Developer Mode is on,
+genuinely absent from the router (and its lazy chunk never fetched) otherwise.
+
+**A third, real defect found during implementation itself, not anticipated by the certification**:
+`src/infrastructure/db/purge.ts`'s `allTables()` — the table list "Reset" wipes in one transaction — has
+its own test asserting it matches the live Dexie schema exactly (the same discipline protecting against
+the historical `pendingExecutions`-orphaned-after-Reset bug). Naively adding the two new tables to the
+schema made that test start demanding Reset also wipe the diagnostics log. It must not: Reset is itself a
+recorded workflow step, so a Reset that erases the diagnostics log destroys the very record of the Reset
+happening. Fixed by making `diagnosticEvents`/`diagnosticCases` a deliberate, documented, tested exclusion
+from `allTables()` — generalizing "read-only" into a two-way boundary: business logic never reads
+diagnostics data, and never writes to or deletes it either, not even via its own "start over" action.
+
+- **Files added**: `src/domain/entities/diagnostics/{DiagnosticEvent,DiagnosticCase}.ts`;
+  `src/infrastructure/db/repositories/{DexieDiagnosticEventRepository,DexieDiagnosticCaseRepository}.ts` +
+  tests; `src/infrastructure/diagnostics/{Noop,Recording}DiagnosticsRecorder.ts` + tests;
+  `src/application/services/diagnostics/retentionPolicy.ts` + test; `src/presentation/lib/developerMode.ts`
+  + test; `src/presentation/pages/DiagnosticsPage.tsx` + test.
+- **Files modified**: `docs/DIAGNOSTICS_CENTER_SPEC.md` (Part 2.3 certification + Phase 1 revisions);
+  `src/domain/repositories/index.ts` (+3 interfaces); `src/infrastructure/db/db.ts` (version 5);
+  `src/infrastructure/db/repositories/index.ts` (+`createDiagnosticsRepositories`, deliberately separate
+  from `createRepositories`); `src/presentation/{App.tsx,main.tsx}`, `src/presentation/lib/data.ts`
+  (wiring); `src/architecture/regressionGuards.test.ts` (Dexie table allowlist); `src/infrastructure/db/
+  {purge.ts,purge.test.ts}` (documented Reset exclusion).
+- 1021/1022 tests passing (34 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean (caught one real violation during development —
+  `presentation/lib/data.ts` importing `@infrastructure/db/db` directly — fixed by adding
+  `createDiagnosticsRepositories()` instead of reaching for the shared `db` singleton), production build
+  verified.
+- **Next recommended sprint**: Phase 2 (Session Recorder + Writer Trace) — one-line instrumentation at the
+  10 already-enumerated writer call sites (`docs/DIAGNOSTICS_CENTER_SPEC.md` Part 5.2) plus the
+  `diagnosticsInstrumentationIsObserveOnly` regression guard (Part 5.4), which does not exist yet since no
+  diagnostics-emitting code exists yet to guard.
+
+### Sprint 12 — Diagnostics Center Phase 2: Session Recorder + Writer Trace (TradeService.ts slice)
+
+Directed continuation: instrument the writer call sites the Sprint 11 spec named. Attempting all 10 in one
+pass (5 execution-fact writers + 5 Trade/TradeAllocation writers, across 7 files) proved too large to
+review and test carefully in one sitting, so this sprint deliberately narrowed to a complete, verified
+vertical slice through `TradeService.ts`'s `recordBuy`/`recordSell` — the two most central, most-exercised
+writer functions in the app — rather than a shallow pass across all 10. The other 6 named files
+(`backfillRawTransactions.ts`, `importRecording.ts`, `ledgerProjection.ts`, `lotManager.ts`,
+`ledgerRebuild.ts`, `BackupService.ts`) are explicitly deferred to Phase 2b, not started.
+
+**What shipped**: `commitEngine.ts`'s `appendAndMaybeCommit` — the single choke point every
+`rawTransactions` append in `TradeService.ts` already routes through — gained optional `diagnostics`/
+`writerContext` parameters and now emits one `WriteTrace` event (`valueSource: "reference"`) per fact
+append, attributed to the TRUE calling function via `writerContext`, not to `commitEngine.ts` itself.
+`TradeService.recordBuy`/`recordSell` gained an optional `diagnostics` parameter, threaded through to
+`ensureBuyFact`/`ensureSellFacts` and also used to emit their own `WriteTrace` events for the `trades`/
+`tradeAllocations` writes (`valueSource: "replayCursor"`). Four presentation call sites
+(`TradesPage.tsx`, `SellAllocationForm.tsx`, `ImportPage.tsx` ×2) now pass the real `diagnostics` singleton
+through, plus a Session Recorder event at four top-level actions: AppStart (`data.ts`), ManualEdit
+(Record Buy submit), Allocate (Sell allocation submit), Confirm (Import's `commitTickerGroupLocked`), and
+Reset (`DataPage`'s purge). `DiagnosticsPage` now renders a raw "Recent Events" list under the still-empty
+Case List, so the instrumentation is actually visible somewhere, not just written to a table nothing reads.
+
+**Verified end-to-end in a real browser**, not just unit tests: launched the dev server, drove it with
+Playwright (enable Developer Mode via `localStorage`, create a portfolio, submit Record Buy, read
+`/diagnostics`). The event log showed exactly what the design predicts, in order: `[ManualEdit] Record Buy
+submitted` → `Write (reference) rawTransactions/<id> — TradeService.ts.ensureBuyFact` → `Write
+(replayCursor) trades/<id> — TradeService.ts.recordBuy` — same id on both writes, since `ensureBuyFact`
+deliberately reuses the trade's own id for its fact. Zero console errors.
+
+**A real regression found and fixed while building this**: the first working draft computed
+`WriteTraceRecord.factSeqCursor` with a fresh `rawTransactions.getAll()` query issued right after the
+Trade/TradeAllocation write. That extra `await` — present regardless of whether Developer Mode was on,
+since the query itself still ran even though its RESULT was then discarded when `diagnostics` was a
+no-op — measurably shifted async interleaving enough to fail three of this codebase's own historical
+race-condition regression suites (ImportPage's ORWE/ABUK/ADPC tests, which use real Dexie +
+`useLiveQuery` reactivity specifically to catch exactly this class of timing bug). Root-caused by
+bisecting the diff file-by-file and adding targeted `console.log` tracing rather than guessing. Fixed by
+returning the already-known seq from `appendAndMaybeCommit`'s own result (`ensureBuyFact`/
+`ensureSellFacts` now return `Promise<number | undefined>` instead of `Promise<void>`) instead of
+re-querying — zero extra reads, same result. A second, smaller issue surfaced during the same fix: Vitest
+throws (does not silently return `undefined`) when code reads a named export a `vi.mock(...)` factory
+didn't declare — so every one of the 21 existing test files that mock `@presentation/lib/data` needed a
+`diagnostics` stub added to their mock's returned object once `TradesPage.tsx`/`SellAllocationForm.tsx`/
+`ImportPage.tsx` started reading that binding.
+
+**The planned `diagnosticsInstrumentationIsObserveOnly` guard was redesigned to match how the code actually
+landed**: the spec's Part 5.4 assumed a separate `src/application/services/diagnostics/` module wrapping
+the writers; the real instrumentation is inline in the writer functions themselves via an optional
+parameter, so nothing exists at that path to scan. Shipped instead: a guard asserting
+`src/infrastructure/diagnostics/*.ts` (the recorder implementations) never calls a qualified business-repo
+write method (`.trades.save(`, `.rawTransactions.append(`, etc. — qualified by property name, not a bare
+`.append(`, since the diagnostics repository legitimately has its own `append` method) and never imports a
+business writer's module. `diagnosticsSnapshotModeIsNarrowlyScoped` (Part 2.3 §D) still doesn't exist —
+nothing uses `valueSource: "snapshot"` yet, since `ledgerRebuild.ts`/`BackupService.ts` are Phase 2b.
+
+- **Files modified**: `src/application/services/{TradeService.ts,commitEngine.ts}`;
+  `src/presentation/{pages/TradesPage.tsx,pages/ImportPage.tsx,pages/DataPage.tsx,
+  components/SellAllocationForm.tsx,lib/data.ts,pages/DiagnosticsPage.tsx,pages/DiagnosticsPage.test.tsx}`;
+  `src/architecture/regressionGuards.test.ts` (+1 guard); 21 test files' `vi.mock("@presentation/lib/data")`
+  factories (+`diagnostics` stub); `docs/DIAGNOSTICS_CENTER_SPEC.md` (Phase 2 execution log).
+- 1023/1024 tests passing (2 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean, production build verified, and a live Playwright run against the dev server
+  confirmed the actual browser behavior end-to-end (not just component tests).
+- **Next recommended sprint**: either Phase 2b (the remaining 6 writer files — `ledgerProjection.ts`'s
+  `ensureLegacyFactsExist`/`projectLegacyTicker` are the highest-value next target, since every commit runs
+  through them) or Phase 3 (Reader Trace + Decision Trace, Part 5.3) — both are independently startable;
+  pick based on whether breadth (more writers traced) or depth (why a decision was made) is more useful
+  for the next real debugging session.
+
+### Sprint 13 — Diagnostics Center Phase 3: Reader Trace + Decision Trace (decision engines, ahead of Phase 2b)
+
+Directed reprioritization: ship Phase 3 before Phase 2b. Rationale given — the diagnostics built so far can
+already explain who WROTE data (Phase 2); most real production issues investigated in this codebase's own
+history (Mismatch, Needs Broker Screenshot, Needs Corroborating Evidence) are decision problems, not write
+problems, so explaining who READ data and which engine produced the final decision is higher-value than
+tracing more writers right now.
+
+**Scope, exactly as directed**: instrument only the major decision engines — Replay, Verification, Warning,
+Allocation (decision points only), Constraint evaluation — not Policy (no unified Policy module exists yet,
+per Sprint 11's own finding) and not every function that happens to read facts.
+
+**Two real call sites cover all five decision types cleanly**, both already-existing, already-tested pure
+functions with no fan-out to a dozen callers (the same "find the real choke point" discipline that made
+Phase 2 tractable):
+- `commitEngine.ts`'s `commitTicker` — the ONLY place `verifyAll` (Verification), `generateLedgerEvents`
+  (Replay), and `generateAllocations` (Allocation, decision points) run together, once per real commit. All
+  three decisions now emit from one `commitTicker` call, sharing one `correlationId` generated at the top
+  of the function, so a developer can see "these three decisions happened as part of the same commit"
+  without guessing from timestamps. `commitTicker` gained an optional `diagnostics` parameter, forwarded
+  from `appendAndMaybeCommit`'s four existing internal call sites (which already carry `diagnostics` from
+  Phase 2) — no new call-site threading needed anywhere else.
+- `constraintValidation.ts`'s `buildTickerConstraintReport` — composes `evaluateInventoryConstraint`
+  (Constraint: does the arithmetic add up) and `diagnoseInventoryContradiction` (Warning: plain-English
+  hypotheses for why it doesn't, only computed once a contradiction exists). Both now emit a decision;
+  Warning is skipped entirely when the constraint is satisfied, matching the function's own "diagnosis only
+  after contradiction" rule — recording a Warning for every satisfied ticker would be pure noise, not
+  signal. Wired from its one real call site, `ImportPage.tsx`'s `constraintReport` `useMemo`.
+
+**`DecisionTraceRecord` revised** to match this sprint's explicit field list (Correlation ID, Reader,
+Function, Decision, Inputs/Outputs as summaries only, Timestamp): gained `reader`/`function`/`decision`/
+`inputSummary`/`outputSummary`; `correlationId` added to `DiagnosticEventBase` itself (useful beyond
+decisions); dropped `reasonCode`/`reasonText` (superseded); `factSeqCursor` made optional
+(`buildTickerConstraintReport` is a pure synchronous function with no fact-log access of its own — nothing
+to point a cursor at). Reader Trace and Decision Trace were folded into one event kind for these five
+engines rather than emitted as two separate events per call — for a pure decision function, "what it read"
+and "what it decided" are the same occurrence, and emitting both separately would have doubled the event
+count for no new information.
+
+**"No raw business objects" enforced by construction, not just instruction**: every `inputSummary`/
+`outputSummary` is a hand-built string — verdict counts (`"2 Verified, 1 Needs Review"`), ledger-event-type
+counts (`"3 LotOpened, 1 SellRecorded"`), or a contradiction's expected/calculated/difference numbers —
+never `JSON.stringify` of a `RawTransaction`/`LedgerEvent`/`Allocation`/`TickerConstraintReport`. Tests
+assert this directly (`inputSummary`/`outputSummary` never contain `"payload"`, the tell-tale substring a
+raw business-object dump would carry).
+
+**Verified end-to-end**, not just unit tests: new tests in `commitEngine.diagnostics.test.ts` (5 tests) and
+`constraintValidation.test.ts` (+2 tests) exercise the real, non-mocked engine implementations directly,
+and a live Playwright run against the dev server confirmed both that recording a Buy still works with zero
+console errors and that an Import scenario needing a broker screenshot correctly shows a Constraint
+decision ("Satisfied — Facts reconcile, no contradiction") — confirming that "Needs Broker Screenshot" is
+genuinely a Verification-level gap, not a Constraint-level contradiction (the constraint check has nothing
+to compare against until a broker holdings count exists at all), exactly matching what the unit tests
+already proved.
+
+**A real, verified finding, disclosed rather than silently patched**: the same live run showed the identical
+Constraint decision firing ~12 times for what is conceptually one ticker-card render. Root cause: the
+`useMemo` wrapping `buildTickerConstraintReport` in `ImportPage.tsx` already existed and was never broken
+by this sprint — its dependencies (`matchStatus`, `group.buys`, etc.) simply aren't referentially stable
+across that page's several sequential `useLiveQuery` resolutions, so the memo recomputes on every one of
+them even though the answer never changes. This cost nothing observable before (the function was pure,
+side-effect-free) and only became visible now that it has one. Deliberately left unfixed — repairing
+`ImportPage.tsx`'s memoization is a different, riskier piece of surgery on an already delicate, heavily
+race-condition-tested file, out of scope for "add decision instrumentation," and bounded in practice by
+Part 9's existing retention pruning. Worth a dedicated future sprint if real usage shows it matters
+(candidate fix: dedupe identical consecutive decisions per ticker+decisionType).
+
+- **Files added**: `src/application/services/commitEngine.diagnostics.test.ts`.
+- **Files modified**: `src/domain/entities/diagnostics/DiagnosticEvent.ts` (`DecisionTraceRecord` revision,
+  `correlationId` on `DiagnosticEventBase`); `src/domain/repositories/index.ts` (`RecorderInput` picks up
+  `correlationId`); `src/application/services/{commitEngine.ts,constraintValidation.ts}`;
+  `src/presentation/pages/{ImportPage.tsx,DiagnosticsPage.tsx}`;
+  `src/application/services/constraintValidation.test.ts`;
+  `src/infrastructure/diagnostics/{Noop,Recording}DiagnosticsRecorder.test.ts` (updated call shapes);
+  `docs/DIAGNOSTICS_CENTER_SPEC.md` (Phase 3 execution log).
+- 1030/1031 tests passing (7 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean, production build verified, live Playwright verification against the dev
+  server (both the write flow and the new decision-trace flow).
+- **Next recommended sprint**: Phase 2b (the remaining 6 writer files), as originally deferred in Sprint 12
+  — `ledgerProjection.ts`'s `ensureLegacyFactsExist`/`projectLegacyTicker` remain the highest-value next
+  target, since every commit already runs through them. Independently: the `ImportPage.tsx` re-render/
+  memoization finding above is a real, disclosed piece of technical debt worth a look on its own, unrelated
+  to the Diagnostics Center itself.
+
+### Sprint 14 — Diagnostics Center correction: adopt-existing-fact path was silently dropping Phase 3 diagnostics
+
+Directly asked to confirm Phase 3 was "fully wired into the production application, not just tests" and
+would genuinely record live events from a normal user workflow after merging to main. Rather than repeat
+Sprint 13's own "verified end-to-end" claim, re-audited every real caller of `commitEngine.ts`'s helpers —
+not just `commitTicker`'s own unit tests — and found a real gap Sprint 13 missed.
+
+**The gap**: `assignPortfolio`, `assignPortfolioToFact`, `retractRawTransaction`, and
+`renameRawTransactionsTicker` in `commitEngine.ts` never accepted a `diagnostics` parameter at all — they
+silently dropped it before it could reach `appendAndMaybeCommit`/`commitTicker`. This mattered because
+`TradeService.ensureBuyFact`'s "adopt an existing fact" branch calls `assignPortfolioToFact`, not
+`appendAndMaybeCommit` directly, and that branch is the common real-world Import shape: Step 1 "Extract"
+already wrote the raw fact from the parsed document, so Step 2 "Confirm" adopts the existing fact rather
+than creating a new one. Every prior verification avoided this exact path by coincidence, not by design —
+Sprint 13's unit tests called `commitTicker` directly (bypassing the writer functions entirely), and its
+one Playwright run used TradesPage manual entry, which always takes the "create a brand-new fact" branch.
+The result: Phase 3 worked in every test and in the one live scenario tried, while the single most common
+production workflow (Import → Confirm) recorded zero decisions.
+
+**The fix**: threaded `diagnostics` through all four `commitEngine.ts` helper functions (each now builds a
+`WriterContext` and forwards it, mirroring how `commitTicker` already did) and their in-scope callers —
+`TradeService.ts`'s two `assignPortfolioToFact` call sites (`ensureBuyFact`, `ensureSellFacts`), and
+`ImportPage.tsx`'s five call sites (retraction, provenance upgrade, manual per-ticker portfolio
+assignment, and the Confirm-time ticker-wide sweep that runs on every real Confirm click).
+
+**Verified two independent ways**: (1) a new permanent regression test in
+`commitEngine.diagnostics.test.ts` (describe block "diagnostics survives the REAL Import -> Confirm call
+chain, not just a direct commitTicker call") that seeds a pre-existing `official-broker-excel` fact and
+calls the real `recordBuy` — the exact adopt-path shape — asserting Verification/Replay/Allocation
+decisions are recorded; (2) a second live Playwright run against the dev server, this time seeding a real
+fact into real IndexedDB via dynamic `import()` of the app's actual bundled modules (not mocks) and
+clicking the real "Confirm — Distribute to Portfolios" button, then confirming `/diagnostics` showed
+`Decision (Verification)` / `Decision (Replay)` / `Decision (Allocation)` with zero console errors.
+
+**Disclosed, deliberately still-unfixed residual gap**: `TradeService.deleteTrade`/`renameTickerEverywhere`,
+and the `retractRawTransaction` calls inside `lotManager.ts`/`provenanceRepair.ts`/`PortfolioService.ts`,
+still don't thread `diagnostics` — these are secondary/administrative actions outside the Import→Confirm
+flow Phase 3 was justified by, left for a future phase alongside Phase 2b rather than folded in here
+under time pressure.
+
+- **Files modified**: `src/application/services/commitEngine.ts` (4 helper functions gained a
+  `diagnostics?: DiagnosticsRecorder` parameter); `src/application/services/TradeService.ts` (2 call
+  sites); `src/presentation/pages/ImportPage.tsx` (5 call sites);
+  `src/application/services/commitEngine.diagnostics.test.ts` (+1 test, new describe block);
+  `docs/DIAGNOSTICS_CENTER_SPEC.md` (Phase 3 entry addendum + top status line).
+- 1031/1032 tests passing (1 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean, production build verified, live Playwright verification against the dev
+  server using real app modules and real IndexedDB (not fakes/mocks).
+- **Next recommended sprint**: still Phase 2b (the remaining 6 writer files), plus — now explicitly
+  named rather than left implicit — closing the disclosed residual gap above (`deleteTrade`,
+  `renameTickerEverywhere`, and the three other `retractRawTransaction` call sites) as part of that same
+  pass, since it's the identical threading pattern applied to the remaining callers.

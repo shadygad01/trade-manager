@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser, ChevronDown } from "lucide-react";
-import { repos, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
+import { repos, diagnostics, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
 import { recordBuy, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions, candidateSource } from "@application/services/importRecording";
@@ -109,7 +109,7 @@ function verificationContentKey(v: { ticker: string; units: number; avgCost?: nu
  */
 function retractRawTransactionKeys(keys: Iterable<string>) {
   for (const key of keys) {
-    retractRawTransaction(repos, key).catch((err) => {
+    retractRawTransaction(repos, key, undefined, diagnostics).catch((err) => {
       console.error("retractRawTransaction failed (shadow write, non-fatal):", err);
     });
   }
@@ -386,7 +386,7 @@ export function ImportPage() {
       const oldPortfolioId = resolveCurrentPortfolioId(existingRawTransactions, existingFact!);
       const upgradeFact = async () => {
         if (oldPortfolioId !== undefined) {
-          await assignPortfolioToFact(repos, e.key, oldPortfolioId);
+          await assignPortfolioToFact(repos, e.key, oldPortfolioId, diagnostics);
         }
         if (e.candidate.side === "BUY") {
           // A Buy fact is never referenced by another fact's id, so a plain
@@ -395,6 +395,7 @@ export function ImportPage() {
             repos,
             existingFact!.id,
             "Provenance upgrade: superseded by a higher-authority document describing the same execution.",
+            diagnostics,
           );
         } else {
           // A Sell's fact may already be claimed by a live
@@ -546,7 +547,7 @@ export function ImportPage() {
     // matters: any subsequent commitTickerGroup/smartAllocateSell/
     // SellAllocationForm call for this ticker shares the identical key and
     // will correctly queue behind this sweep instead of racing it.
-    void runSerialized(`${portfolioId}|${normalizeTicker(ticker)}`, () => assignPortfolio(repos, ticker, portfolioId)).catch((err) => {
+    void runSerialized(`${portfolioId}|${normalizeTicker(ticker)}`, () => assignPortfolio(repos, ticker, portfolioId, diagnostics)).catch((err) => {
       console.error("assignPortfolio failed (shadow write, non-fatal):", err);
     });
   }
@@ -805,19 +806,23 @@ export function ImportPage() {
         return;
       }
 
-      const { trade } = await recordBuy(repos, {
-        portfolioId,
-        ticker,
-        companyName: entry.candidate.companyName,
-        shares: entry.candidate.shares,
-        entryPrice: entry.candidate.price,
-        fees: entry.candidate.fees ?? 0,
-        taxes: entry.candidate.taxes ?? 0,
-        executionDate: entry.candidate.date,
-        executionTime: entry.candidate.time ?? "00:00",
-        notes: "Imported from screenshot/PDF",
-        transactionNumber: entry.candidate.transactionNumber,
-      });
+      const { trade } = await recordBuy(
+        repos,
+        {
+          portfolioId,
+          ticker,
+          companyName: entry.candidate.companyName,
+          shares: entry.candidate.shares,
+          entryPrice: entry.candidate.price,
+          fees: entry.candidate.fees ?? 0,
+          taxes: entry.candidate.taxes ?? 0,
+          executionDate: entry.candidate.date,
+          executionTime: entry.candidate.time ?? "00:00",
+          notes: "Imported from screenshot/PDF",
+          transactionNumber: entry.candidate.transactionNumber,
+        },
+        diagnostics,
+      );
       importSession.update((prev) => ({
         ...prev,
         addedKeys: [...prev.addedKeys, entry.key],
@@ -939,7 +944,7 @@ export function ImportPage() {
           source: entry.candidate.source,
         };
 
-        const result = await recordSell(repos, input);
+        const result = await recordSell(repos, input, diagnostics);
         importSession.update((prev) => ({
           ...prev,
           addedKeys: [...prev.addedKeys, entry.key],
@@ -1047,6 +1052,7 @@ export function ImportPage() {
   }
 
   async function commitTickerGroupLocked(ticker: string, portfolioId: string): Promise<void> {
+    diagnostics.recordSessionEvent({ workflowStep: "Confirm", label: `Confirm ${ticker}`, portfolioId, ticker });
     const state = importSession.getState();
 
     const buys = state.pendingCandidates.filter(
@@ -1148,7 +1154,7 @@ export function ImportPage() {
     // verifications missing their portfolio assignment), never a reason to
     // fail the Buy commit that already succeeded.
     try {
-      await assignPortfolio(repos, ticker, portfolioId);
+      await assignPortfolio(repos, ticker, portfolioId, diagnostics);
     } catch (err) {
       console.error("assignPortfolio failed (shadow write, non-fatal):", err);
     }
@@ -2634,14 +2640,19 @@ export function TickerGroupCard({
     const stillPendingRows = [...group.buys, ...group.sells].filter(
       (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
     );
-    return buildTickerConstraintReport(ticker, matchStatus, {
-      reconcileSuggestion,
-      lastBalancedDate: lastBalanced,
-      wrongTickerHintCount: stillPendingRows.filter((e) => wrongTickerHints?.has(e.key)).length,
-      dateMisreadHintCount: stillPendingRows.filter((e) => dateMisreadHints?.has(e.key)).length,
-      orphanedOrderEvidenceCount: orphanedOrderEvidence?.length ?? 0,
-      discrepancySide: matchStatus.discrepancySide,
-    });
+    return buildTickerConstraintReport(
+      ticker,
+      matchStatus,
+      {
+        reconcileSuggestion,
+        lastBalancedDate: lastBalanced,
+        wrongTickerHintCount: stillPendingRows.filter((e) => wrongTickerHints?.has(e.key)).length,
+        dateMisreadHintCount: stillPendingRows.filter((e) => dateMisreadHints?.has(e.key)).length,
+        orphanedOrderEvidenceCount: orphanedOrderEvidence?.length ?? 0,
+        discrepancySide: matchStatus.discrepancySide,
+      },
+      diagnostics,
+    );
   }, [
     ticker,
     matchStatus,

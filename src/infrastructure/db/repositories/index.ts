@@ -9,6 +9,8 @@ import { DexieUploadRepository } from "./DexieUploadRepository";
 import { DexieRawTransactionRepository } from "./DexieRawTransactionRepository";
 import { DexieCommittedLedgerRepository } from "./DexieCommittedLedgerRepository";
 import { DexiePendingExecutionRepository } from "./DexiePendingExecutionRepository";
+import { DexieDiagnosticEventRepository } from "./DexieDiagnosticEventRepository";
+import { DexieDiagnosticCaseRepository } from "./DexieDiagnosticCaseRepository";
 
 export { DexiePortfolioRepository } from "./DexiePortfolioRepository";
 export { DexieTradeRepository } from "./DexieTradeRepository";
@@ -20,6 +22,8 @@ export { DexieUploadRepository } from "./DexieUploadRepository";
 export { DexieRawTransactionRepository } from "./DexieRawTransactionRepository";
 export { DexieCommittedLedgerRepository } from "./DexieCommittedLedgerRepository";
 export { DexiePendingExecutionRepository } from "./DexiePendingExecutionRepository";
+export { DexieDiagnosticEventRepository } from "./DexieDiagnosticEventRepository";
+export { DexieDiagnosticCaseRepository } from "./DexieDiagnosticCaseRepository";
 
 export interface Repositories {
   portfolios: DexiePortfolioRepository;
@@ -46,5 +50,23 @@ export function createRepositories(database: PortfolioOsDatabase = sharedDb): Re
     rawTransactions: new DexieRawTransactionRepository(database),
     committedLedger: new DexieCommittedLedgerRepository(database),
     pendingExecutions: new DexiePendingExecutionRepository(database),
+  };
+}
+
+/**
+ * Deliberately separate from `createRepositories()`/`Repositories` above —
+ * docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.4 requires no business-layer file
+ * ever holds a diagnostics repository, so they're never bundled into the
+ * same object business code already depends on.
+ */
+export interface DiagnosticsRepositories {
+  events: DexieDiagnosticEventRepository;
+  cases: DexieDiagnosticCaseRepository;
+}
+
+export function createDiagnosticsRepositories(database: PortfolioOsDatabase = sharedDb): DiagnosticsRepositories {
+  return {
+    events: new DexieDiagnosticEventRepository(database),
+    cases: new DexieDiagnosticCaseRepository(database),
   };
 }

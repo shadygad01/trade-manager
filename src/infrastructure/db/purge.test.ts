@@ -152,13 +152,21 @@ describe("purgeAllData", () => {
  * whichever `.stores()` call registered the latest version) and fails the
  * moment the two lists diverge in either direction, instead of waiting for
  * a user to notice leftover data after the next new table ships.
+ *
+ * `diagnosticEvents`/`diagnosticCases` are the one deliberate, named
+ * exception (docs/DIAGNOSTICS_CENTER_SPEC.md Part 3.1/purge.ts's own doc
+ * comment on `allTables`) — Reset must never erase the record of the Reset
+ * itself. A third table ever landing in the schema without either being
+ * added to `allTables` or explicitly added to this exclusion set is exactly
+ * the drift this test exists to catch.
  */
 describe("purge.ts's table list vs. the live Dexie schema", () => {
-  it("purges every table the schema actually defines — no more, no less", async () => {
+  it("purges every BUSINESS table the schema defines — no more, no less (diagnosticEvents/diagnosticCases deliberately excluded)", async () => {
     const db = new PortfolioOsDatabase(`test-db-${crypto.randomUUID()}`);
     await db.open();
 
-    const schemaTableNames = new Set(db.tables.map((t) => t.name));
+    const DELIBERATELY_NOT_PURGED = new Set(["diagnosticEvents", "diagnosticCases"]);
+    const schemaTableNames = new Set(db.tables.map((t) => t.name).filter((name) => !DELIBERATELY_NOT_PURGED.has(name)));
     const purgedTableNames = new Set(allTables(db).map((t) => t.name));
 
     expect(purgedTableNames).toEqual(schemaTableNames);

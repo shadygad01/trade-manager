@@ -1,4 +1,4 @@
-import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
+import type { RawTransactionRepository, CommittedLedgerRepository, DiagnosticsRecorder } from "@domain/repositories";
 import {
   createRawTransaction,
   type RawTransaction,
@@ -7,6 +7,7 @@ import {
   type RetractionPayload,
 } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { generateId } from "@domain/value-objects/id";
 import { verifyAll } from "./verificationEngine";
 import { generateLedgerEvents } from "./ledgerEngine";
 import { generateAllocations } from "./allocationEngine";
@@ -37,6 +38,26 @@ import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } f
 export interface CommitEngineRepos {
   rawTransactions: RawTransactionRepository;
   committedLedger: CommittedLedgerRepository;
+}
+
+/**
+ * docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.2 — `appendAndMaybeCommit` is the
+ * single choke point every real execution-fact writer already routes
+ * through, so it's also the single place a Writer Trace event is emitted
+ * for a `rawTransactions` append (valueSource "reference" — see Part 2.3
+ * §A: the row is already permanent and canonical the moment it's appended,
+ * so nothing beyond its own `id` needs capturing). `WriterContext` is how
+ * the TRUE originating caller (TradeService.ensureBuyFact, not
+ * commitEngine.ts itself) stays attributable through this shared choke
+ * point — every caller that wants accurate Writer Trace attribution passes
+ * its own identity; a caller that passes neither `diagnostics` nor
+ * `writerContext` behaves exactly as before this parameter existed.
+ */
+export interface WriterContext {
+  writer: string;
+  function: string;
+  file: string;
+  reason: string;
 }
 
 const NON_SUBJECT_KINDS = new Set(["PortfolioAssignment", "Correction", "Retraction"]);
@@ -117,8 +138,22 @@ export async function shouldCommit(repos: CommitEngineRepos, portfolioId: string
   return [...verdicts.values()].every((v) => v.verdict !== "Needs Review");
 }
 
-export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedgerRepos>, portfolioId: string, ticker: string): Promise<void> {
+/** Verdict counts as one short string, e.g. "2 Verified, 1 Needs Review" — never the verdicts/evidence themselves (docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.7/2.3: a decision record's inputSummary/outputSummary are counts and labels, never a copy of the business objects they summarize). */
+function summarizeVerdicts(verdicts: Map<string, { verdict: string }>): string {
+  const counts = new Map<string, number>();
+  for (const v of verdicts.values()) counts.set(v.verdict, (counts.get(v.verdict) ?? 0) + 1);
+  if (counts.size === 0) return "no transactions to verify";
+  return [...counts.entries()].map(([verdict, n]) => `${n} ${verdict}`).join(", ");
+}
+
+export async function commitTicker(
+  repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
+  portfolioId: string,
+  ticker: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<void> {
   const normalizedTicker = normalizeTicker(ticker);
+  const correlationId = generateId();
 
   // Phase 9.8: when the caller's repos bundle carries the legacy tables (the
   // app's real singleton always does; bare CommitEngineRepos test bundles
@@ -148,9 +183,53 @@ export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedg
   // corroboration inputs; verdicts still only ever cover Buy/Sell rows.
   const verdicts = verifyAll({ transactions: relevant, positions: NO_EXISTING_POSITIONS });
   const verifiedTransactions = tradeTransactions.filter((t) => verdicts.get(t.id)?.verdict === "Verified");
+  const factSeqCursor = relevant.reduce((max, t) => Math.max(max, t.seq), 0);
+
+  diagnostics?.recordDecision({
+    decisionType: "Verification",
+    correlationId,
+    portfolioId,
+    ticker: normalizedTicker,
+    reader: "commitEngine.ts",
+    function: "commitTicker",
+    decision: summarizeVerdicts(verdicts),
+    inputSummary: `${relevant.length} relevant facts (${tradeTransactions.length} Buy/Sell)`,
+    outputSummary: `${verdicts.size} verdicts: ${summarizeVerdicts(verdicts)}`,
+    factSeqCursor,
+  });
 
   const events = generateLedgerEvents(verifiedTransactions);
+
+  diagnostics?.recordDecision({
+    decisionType: "Replay",
+    correlationId,
+    portfolioId,
+    ticker: normalizedTicker,
+    reader: "commitEngine.ts",
+    function: "commitTicker",
+    decision: `${events.length} ledger events`,
+    inputSummary: `${verifiedTransactions.length} verified Buy/Sell transactions`,
+    outputSummary: `${events.filter((e) => e.type === "LotOpened").length} LotOpened, ${events.filter((e) => e.type === "SellRecorded").length} SellRecorded`,
+    factSeqCursor,
+  });
+
   const allocations = generateAllocations(events, decisionTransactions);
+
+  diagnostics?.recordDecision({
+    decisionType: "Allocation",
+    correlationId,
+    portfolioId,
+    ticker: normalizedTicker,
+    reader: "commitEngine.ts",
+    function: "commitTicker",
+    decision: `${allocations.length} allocations`,
+    inputSummary: `${events.length} ledger events, ${decisionTransactions.length} allocation decisions`,
+    outputSummary:
+      allocations.length === 0 && decisionTransactions.length > 0
+        ? "0 allocations produced from a nonzero number of decisions — at least one decision's referenced lot could not be resolved"
+        : `${allocations.length} allocations produced`,
+    factSeqCursor,
+  });
 
   // Never fatal, same isolation as ensureLegacyFactsExist/projectLegacyTicker
   // just below: a real, reproduced bug under concurrent commits (many
@@ -201,14 +280,31 @@ export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedg
  * everything Import writes today, before an assignment exists) or no
  * ticker has nothing to commit yet: a correct, expected no-op, not a gap.
  */
-export async function appendAndMaybeCommit(repos: CommitEngineRepos, transaction: Omit<RawTransaction, "seq">): Promise<RawTransaction> {
+export async function appendAndMaybeCommit(
+  repos: CommitEngineRepos,
+  transaction: Omit<RawTransaction, "seq">,
+  diagnostics?: DiagnosticsRecorder,
+  writerContext?: WriterContext
+): Promise<RawTransaction> {
   const appended = await repos.rawTransactions.append(transaction);
+
+  diagnostics?.recordWrite({
+    writer: writerContext?.writer ?? "commitEngine.ts",
+    function: writerContext?.function ?? "appendAndMaybeCommit",
+    file: writerContext?.file ?? "src/application/services/commitEngine.ts",
+    table: "rawTransactions",
+    objectId: appended.id,
+    valueSource: "reference",
+    reason: writerContext?.reason ?? `Appended a ${appended.kind} fact`,
+    portfolioId: appended.portfolioId,
+    ticker: appended.ticker,
+  });
 
   if (appended.kind === "PortfolioAssignment") {
     const { targetId, portfolioId } = appended.payload as PortfolioAssignmentPayload;
     const target = await repos.rawTransactions.getById(targetId);
     if (target?.ticker !== undefined && (await shouldCommit(repos, portfolioId, target.ticker))) {
-      await commitTicker(repos, portfolioId, target.ticker);
+      await commitTicker(repos, portfolioId, target.ticker, diagnostics);
     }
   } else if (appended.kind === "Correction") {
     // A ticker correction moves its target between two tickers' relevant
@@ -227,7 +323,7 @@ export async function appendAndMaybeCommit(repos: CommitEngineRepos, transaction
           const currentTicker = resolveCurrentTicker(all, target);
           const affectedTickers = new Set([priorTicker, currentTicker].filter((t): t is string => t !== undefined));
           for (const affectedTicker of affectedTickers) {
-            await commitTicker(repos, resolvedPortfolioId, affectedTicker);
+            await commitTicker(repos, resolvedPortfolioId, affectedTicker, diagnostics);
           }
         }
       }
@@ -243,12 +339,12 @@ export async function appendAndMaybeCommit(repos: CommitEngineRepos, transaction
       const resolvedPortfolioId = resolveCurrentPortfolioId(all, target);
       const resolvedTicker = resolveCurrentTicker(all, target);
       if (resolvedPortfolioId !== undefined && resolvedTicker !== undefined) {
-        await commitTicker(repos, resolvedPortfolioId, resolvedTicker);
+        await commitTicker(repos, resolvedPortfolioId, resolvedTicker, diagnostics);
       }
     }
   } else if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
     if (await shouldCommit(repos, appended.portfolioId, appended.ticker)) {
-      await commitTicker(repos, appended.portfolioId, appended.ticker);
+      await commitTicker(repos, appended.portfolioId, appended.ticker, diagnostics);
     }
   }
   return appended;
@@ -262,7 +358,12 @@ export async function appendAndMaybeCommit(repos: CommitEngineRepos, transaction
  * portfolio a ticker's extracted rows belong to; it's the only place a
  * freshly-imported (portfolioId-less) raw transaction ever gets one.
  */
-export async function assignPortfolio(repos: CommitEngineRepos, ticker: string, portfolioId: string): Promise<void> {
+export async function assignPortfolio(
+  repos: CommitEngineRepos,
+  ticker: string,
+  portfolioId: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<void> {
   const normalizedTicker = normalizeTicker(ticker);
   const all = await repos.rawTransactions.getAll();
   const unassigned = all.filter((t) => {
@@ -275,7 +376,12 @@ export async function assignPortfolio(repos: CommitEngineRepos, ticker: string, 
 
   for (const target of unassigned) {
     const payload: PortfolioAssignmentPayload = { targetId: target.id, portfolioId };
-    await appendAndMaybeCommit(repos, createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }));
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }),
+      diagnostics,
+      { writer: "commitEngine.ts", function: "assignPortfolio", file: "src/application/services/commitEngine.ts", reason: "Assigned a still-unassigned fact to a portfolio (ticker-wide sweep)" }
+    );
   }
 }
 
@@ -304,12 +410,22 @@ export async function assignPortfolio(repos: CommitEngineRepos, ticker: string, 
  * assignment to exactly the fact just adopted/created closes this off at
  * the source: no other still-pending sibling is ever touched.
  */
-export async function assignPortfolioToFact(repos: CommitEngineRepos, targetId: string, portfolioId: string): Promise<void> {
+export async function assignPortfolioToFact(
+  repos: CommitEngineRepos,
+  targetId: string,
+  portfolioId: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<void> {
   const all = await repos.rawTransactions.getAll();
   const target = all.find((t) => t.id === targetId);
   if (!target || isRetracted(all, target.id) || resolveCurrentPortfolioId(all, target) !== undefined) return;
   const payload: PortfolioAssignmentPayload = { targetId, portfolioId };
-  await appendAndMaybeCommit(repos, createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }));
+  await appendAndMaybeCommit(
+    repos,
+    createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }),
+    diagnostics,
+    { writer: "commitEngine.ts", function: "assignPortfolioToFact", file: "src/application/services/commitEngine.ts", reason: "Assigned exactly one adopted/created fact to a portfolio" }
+  );
 }
 
 /**
@@ -319,9 +435,19 @@ export async function assignPortfolioToFact(repos: CommitEngineRepos, targetId: 
  * user just removed. `targetId` must be the RawTransaction's own id, not a
  * derived LedgerEvent id.
  */
-export async function retractRawTransaction(repos: CommitEngineRepos, targetId: string, reason?: string): Promise<void> {
+export async function retractRawTransaction(
+  repos: CommitEngineRepos,
+  targetId: string,
+  reason?: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<void> {
   const payload: RetractionPayload = { targetId, reason };
-  await appendAndMaybeCommit(repos, createRawTransaction({ kind: "Retraction", source: "manual", payload }));
+  await appendAndMaybeCommit(
+    repos,
+    createRawTransaction({ kind: "Retraction", source: "manual", payload }),
+    diagnostics,
+    { writer: "commitEngine.ts", function: "retractRawTransaction", file: "src/application/services/commitEngine.ts", reason: reason ?? "Retracted a raw transaction" }
+  );
 }
 
 /**
@@ -332,7 +458,12 @@ export async function retractRawTransaction(repos: CommitEngineRepos, targetId: 
  * pre-migration UI doesn't leave this architecture's copy permanently
  * orphaned under the old, now-corrected-away ticker.
  */
-export async function renameRawTransactionsTicker(repos: CommitEngineRepos, oldTicker: string, newTicker: string): Promise<number> {
+export async function renameRawTransactionsTicker(
+  repos: CommitEngineRepos,
+  oldTicker: string,
+  newTicker: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<number> {
   const normalizedOld = normalizeTicker(oldTicker);
   const normalizedNew = normalizeTicker(newTicker);
   if (!normalizedNew || normalizedNew === normalizedOld) return 0;
@@ -347,7 +478,12 @@ export async function renameRawTransactionsTicker(repos: CommitEngineRepos, oldT
 
   for (const target of targets) {
     const payload: CorrectionPayload = { targetId: target.id, patch: { ticker: normalizedNew } };
-    await appendAndMaybeCommit(repos, createRawTransaction({ kind: "Correction", source: "manual", payload }));
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ kind: "Correction", source: "manual", payload }),
+      diagnostics,
+      { writer: "commitEngine.ts", function: "renameRawTransactionsTicker", file: "src/application/services/commitEngine.ts", reason: `Corrected ticker ${normalizedOld} -> ${normalizedNew}` }
+    );
   }
   return targets.length;
 }
