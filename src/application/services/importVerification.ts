@@ -1,3 +1,5 @@
+import type { DiagnosticsRecorder } from "@domain/repositories";
+
 export type TickerMatchReason =
   | "matched"
   | "no-shares-to-verify"
@@ -158,6 +160,35 @@ export interface TickerMatchStatus {
  * one (see the reason ordering below: closed-position is checked only after
  * the three corroboration branches, not before them).
  */
+/**
+ * The exact wording checkTickerMatch's own MatchBadge renderer (ImportPage.tsx)
+ * shows for each reason — reused here verbatim so a Diagnostics Center
+ * "Verification" decision names literally the same banner text the user sees,
+ * not a paraphrase that could drift from it.
+ */
+function describeMatchDecision(result: TickerMatchStatus): string {
+  switch (result.reason) {
+    case "no-shares-to-verify":
+      return "No shares to verify";
+    case "broker-excel-verified":
+      return result.secondaryMismatch ? "Verified (broker Excel) — secondary mismatch vs screenshot" : "Verified (broker Excel)";
+    case "invoice-verified":
+      return "Verified (invoice)";
+    case "cross-verified":
+      return "Verified (cross-source)";
+    case "orders-verified":
+      return "Verified (orders history)";
+    case "closed-position":
+      return result.matched ? "Closed — sold out (corroborated)" : "Closed — needs corroborating evidence";
+    case "no-verification":
+      return result.netShares < -1e-6 ? "Missing buy history" : "Needs broker screenshot";
+    case "matched":
+      return "Verified (matches broker holdings)";
+    case "mismatch":
+      return "Mismatch";
+  }
+}
+
 export function checkTickerMatch(params: {
   hasShares: boolean;
   pendingBuyShares: number;
@@ -169,6 +200,9 @@ export function checkTickerMatch(params: {
   allPendingFromOfficialBrokerExcel?: boolean;
   allPendingSelfVerified?: boolean;
   allPendingOrderConfirmed?: boolean;
+  /** Diagnostics tagging only — never read by the decision logic itself. */
+  ticker?: string;
+  diagnostics?: DiagnosticsRecorder;
 }): TickerMatchStatus {
   const existingRemainingShares = params.existingRemainingShares;
   const pendingBuyShares = params.pendingBuyShares;
@@ -176,15 +210,44 @@ export function checkTickerMatch(params: {
   const netShares = existingRemainingShares + pendingBuyShares - pendingSellShares;
   const common = { existingRemainingShares, pendingBuyShares, pendingSellShares };
 
+  // This is the terminal decision function behind every "Needs broker
+  // screenshot"/"Mismatch"/"Closed — needs corroborating evidence" banner in
+  // the Import UI (ImportPage.tsx's MatchBadge only maps `.reason` to text —
+  // it decides nothing). Constraint Evaluation (constraintValidation.ts)
+  // checks a DIFFERENT question — whether already-known facts arithmetically
+  // reconcile — and can report "Satisfied" for a ticker this function still
+  // blocks, because reconciling arithmetic and having independent
+  // corroboration for it are separate requirements. Every return path funnels
+  // through `decide` below so exactly one decision is recorded per call,
+  // naming the same reason/wording the UI itself renders.
+  function decide(result: TickerMatchStatus): TickerMatchStatus {
+    params.diagnostics?.recordDecision({
+      decisionType: "Verification",
+      ticker: params.ticker,
+      reader: "importVerification.ts",
+      function: "checkTickerMatch",
+      decision: describeMatchDecision(result),
+      inputSummary: `opening ${existingRemainingShares} + buy ${pendingBuyShares} - sell ${pendingSellShares} = ${netShares}${
+        params.verifiedUnits !== undefined ? `, broker holdings ${params.verifiedUnits}` : ", no broker holdings on file"
+      }`,
+      outputSummary: `${result.reason}, matched=${result.matched}${
+        result.discrepancySide ? `, discrepancy on ${result.discrepancySide} side` : ""
+      }${result.secondaryMismatch ? ", secondary mismatch vs screenshot" : ""}${
+        result.alreadyFullyRecorded ? ", already fully recorded" : ""
+      }`,
+    });
+    return result;
+  }
+
   if (!params.hasShares) {
-    return {
+    return decide({
       matched: true,
       reason: "no-shares-to-verify",
       netShares,
       ...common,
       verifiedUnits: params.verifiedUnits,
       verifiedAvgCost: params.verifiedAvgCost,
-    };
+    });
   }
   // The official broker Excel export is authoritative even against a
   // DISAGREEING secondary source — checked before the verifiedUnits/screenshot
@@ -197,7 +260,7 @@ export function checkTickerMatch(params: {
   // reason to withhold verification from the Excel-sourced transaction.
   if (params.allPendingFromOfficialBrokerExcel) {
     const secondaryMismatch = params.verifiedUnits !== undefined && Math.abs(netShares - params.verifiedUnits) >= 1e-6;
-    return {
+    return decide({
       matched: true,
       reason: "broker-excel-verified",
       netShares,
@@ -205,7 +268,7 @@ export function checkTickerMatch(params: {
       verifiedUnits: params.verifiedUnits,
       verifiedAvgCost: params.verifiedAvgCost,
       secondaryMismatch,
-    };
+    });
   }
   if (params.verifiedUnits === undefined) {
     // Corroboration checked BEFORE the closed-position shortcut, and applies
@@ -213,13 +276,13 @@ export function checkTickerMatch(params: {
     // independent, per-transaction evidence, always strictly stronger than
     // "the arithmetic happens to cancel."
     if (params.allPendingFromInvoice) {
-      return { matched: true, reason: "invoice-verified", netShares, ...common };
+      return decide({ matched: true, reason: "invoice-verified", netShares, ...common });
     }
     if (params.allPendingSelfVerified) {
-      return { matched: true, reason: "cross-verified", netShares, ...common };
+      return decide({ matched: true, reason: "cross-verified", netShares, ...common });
     }
     if (params.allPendingOrderConfirmed) {
-      return { matched: true, reason: "orders-verified", netShares, ...common };
+      return decide({ matched: true, reason: "orders-verified", netShares, ...common });
     }
     if (Math.abs(netShares) < 1e-6) {
       // Net-zero with NO independent corroboration: never auto-matched (see
@@ -228,7 +291,7 @@ export function checkTickerMatch(params: {
       // only ever lists open holdings; the caller's evidence-recommendation
       // step (completenessEngine.recoveryPlan) is what names the actual next
       // document to request.
-      return { matched: false, reason: "closed-position", netShares, ...common };
+      return decide({ matched: false, reason: "closed-position", netShares, ...common });
     }
     // No broker screenshot and no alternative verification — indicate which
     // side the surplus/shortage sits on so the user knows where to look.
@@ -237,24 +300,24 @@ export function checkTickerMatch(params: {
     // recorded position has its problem on the Buy side (an extra/duplicate
     // buy already committed), even though Sells are the only pending rows.
     const discrepancySide: "buy" | "sell" = netShares >= 0 ? "buy" : "sell";
-    return { matched: false, reason: "no-verification", netShares, ...common, discrepancySide };
+    return decide({ matched: false, reason: "no-verification", netShares, ...common, discrepancySide });
   }
   const matched = Math.abs(netShares - params.verifiedUnits) < 1e-6;
   if (matched) {
-    return {
+    return decide({
       matched: true,
       reason: "matched",
       netShares,
       ...common,
       verifiedUnits: params.verifiedUnits,
       verifiedAvgCost: params.verifiedAvgCost,
-    };
+    });
   }
   const alreadyFullyRecorded = Math.abs(existingRemainingShares - params.verifiedUnits) < 1e-6;
   // netShares > verifiedUnits → too many shares → excess likely on buy side.
   // netShares < verifiedUnits → too few shares → shortage likely on sell side (extra sell or missing buy).
   const discrepancySide: "buy" | "sell" = netShares > params.verifiedUnits ? "buy" : "sell";
-  return {
+  return decide({
     matched: false,
     reason: "mismatch",
     netShares,
@@ -263,7 +326,7 @@ export function checkTickerMatch(params: {
     verifiedAvgCost: params.verifiedAvgCost,
     alreadyFullyRecorded,
     discrepancySide,
-  };
+  });
 }
 
 /**
