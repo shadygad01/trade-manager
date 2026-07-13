@@ -13,6 +13,7 @@ import {
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { type GroupingSignature, toGroupingSignature } from "@domain/value-objects/identity";
 import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
+import { findLiveExecutionFact } from "./rawTransactionFolds";
 
 /**
  * One-time, additive conversion of everything already committed under the
@@ -103,6 +104,10 @@ function groupAllocationsBySellOrder(allocations: TradeAllocation[]): Map<Groupi
 }
 
 async function runBackfill(repos: BackfillRepos, write: FactWriter): Promise<BackfillResult> {
+  // Grows as this run writes its own facts, so a later trade/allocation in
+  // the SAME run can also see them — the identical "keep a local, growing
+  // live-fact view" pattern ensureLegacyFactsExist (ledgerProjection.ts)
+  // already uses for the same reason.
   const existing = await repos.rawTransactions.getAll();
   if (existing.some((t) => t.source === "backfill")) {
     throw new BackfillAlreadyRanError();
@@ -115,8 +120,26 @@ async function runBackfill(repos: BackfillRepos, write: FactWriter): Promise<Bac
   ]);
   const tradeById = new Map(trades.map((t) => [t.id, t]));
 
+  // Invariant: exactly one live canonical execution fact per business
+  // execution identity (ticker/date/shares/price/time). `backfill` is always
+  // the lowest-ranked source (evidenceAuthority.ts) — it can never be the
+  // "better" of two facts describing the same execution, so unlike Import's
+  // upgrade case, ANY existing live fact of the same identity fully covers
+  // this trade/sell order and no backfill fact is written for it at all
+  // (mirrors ensureLegacyFactsExist's own "already covered by an existing
+  // live fact" gap-fill rule).
+  let buysBackfilled = 0;
   for (const trade of trades) {
     const ticker = normalizeTicker(trade.ticker);
+    const alreadyCovered = findLiveExecutionFact(existing, {
+      kind: "BuyExecution",
+      ticker,
+      date: trade.executionDate,
+      shares: trade.shares,
+      price: trade.entryPrice,
+      time: trade.executionTime,
+    });
+    if (alreadyCovered) continue;
     const payload: BuyExecutionPayload = {
       ticker,
       shares: trade.shares,
@@ -128,13 +151,14 @@ async function runBackfill(repos: BackfillRepos, write: FactWriter): Promise<Bac
       companyName: trade.companyName,
       transactionNumber: trade.transactionNumber,
     };
-    await write(
-      repos,
-      createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "backfill", portfolioId: trade.portfolioId, ticker, payload })
-    );
+    const fact = createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "backfill", portfolioId: trade.portfolioId, ticker, payload });
+    await write(repos, fact);
+    existing.push({ ...fact, seq: 0 });
+    buysBackfilled += 1;
   }
 
   const sellGroups = groupAllocationsBySellOrder(allocations);
+  let sellOrdersBackfilled = 0;
   for (const group of sellGroups.values()) {
     // A sell order's price/date/time/transactionNumber are shared across
     // every allocation line it was split into — SellAllocationForm only
@@ -146,38 +170,55 @@ async function runBackfill(repos: BackfillRepos, write: FactWriter): Promise<Bac
     const totalFees = group.reduce((sum, a) => sum + a.fees, 0);
     const totalTaxes = group.reduce((sum, a) => sum + a.taxes, 0);
 
-    const sellPayload: SellExecutionPayload = {
+    const alreadyCoveredSell = findLiveExecutionFact(existing, {
+      kind: "SellExecution",
       ticker,
+      date: first.executionDate,
       shares: totalShares,
       price: first.exitPrice,
-      fees: totalFees,
-      taxes: totalTaxes,
-      executionDate: first.executionDate,
-      executionTime: first.executionTime,
-      transactionNumber: first.transactionNumber,
-    };
-    // Reuses the legacy sellGroupId as the fact's own id (when the group has
-    // one — every post-sellGroupId row does) so the SellAllocationDecision
-    // below can reference this SellExecution by its real, always-unique id
-    // instead of a recomputed value hash two distinct sells could share
-    // (see TradeService.ensureSellFacts/ledgerProjection.resolveLotRef —
-    // same real-id contract, applied here for the one-time migration).
-    const sellFact = createRawTransaction({
-      id: first.sellGroupId || undefined,
-      kind: "SellExecution",
-      source: "backfill",
-      portfolioId: first.portfolioId,
-      ticker,
-      payload: sellPayload,
+      time: first.executionTime,
     });
-    await write(repos, sellFact);
+
+    let sellFactId: string;
+    if (alreadyCoveredSell) {
+      sellFactId = alreadyCoveredSell.id;
+    } else {
+      const sellPayload: SellExecutionPayload = {
+        ticker,
+        shares: totalShares,
+        price: first.exitPrice,
+        fees: totalFees,
+        taxes: totalTaxes,
+        executionDate: first.executionDate,
+        executionTime: first.executionTime,
+        transactionNumber: first.transactionNumber,
+      };
+      // Reuses the legacy sellGroupId as the fact's own id (when the group has
+      // one — every post-sellGroupId row does) so the SellAllocationDecision
+      // below can reference this SellExecution by its real, always-unique id
+      // instead of a recomputed value hash two distinct sells could share
+      // (see TradeService.ensureSellFacts/ledgerProjection.resolveLotRef —
+      // same real-id contract, applied here for the one-time migration).
+      const sellFact = createRawTransaction({
+        id: first.sellGroupId || undefined,
+        kind: "SellExecution",
+        source: "backfill",
+        portfolioId: first.portfolioId,
+        ticker,
+        payload: sellPayload,
+      });
+      await write(repos, sellFact);
+      existing.push({ ...sellFact, seq: 0 });
+      sellFactId = sellFact.id;
+      sellOrdersBackfilled += 1;
+    }
 
     const decisionAllocations = group.map((a) => {
       const trade = tradeById.get(a.tradeId);
       if (!trade) throw new Error(`backfill: allocation ${a.id} references a trade that no longer exists (${a.tradeId})`);
       return { lotRef: trade.id, shares: a.sharesClosed };
     });
-    const decisionPayload: SellAllocationDecisionPayload = { sellExecutionId: sellFact.id, allocations: decisionAllocations };
+    const decisionPayload: SellAllocationDecisionPayload = { sellExecutionId: sellFactId, allocations: decisionAllocations };
     await write(
       repos,
       createRawTransaction({ kind: "SellAllocationDecision", source: "backfill", portfolioId: first.portfolioId, ticker, payload: decisionPayload })
@@ -227,7 +268,7 @@ async function runBackfill(repos: BackfillRepos, write: FactWriter): Promise<Bac
     }
   }
 
-  return { buysBackfilled: trades.length, sellOrdersBackfilled: sellGroups.size, verificationsBackfilled: verifications.length, cashEventsBackfilled };
+  return { buysBackfilled, sellOrdersBackfilled, verificationsBackfilled: verifications.length, cashEventsBackfilled };
 }
 
 /** Commit-triggering variant — see this file's module doc comment. Existing, tested, unchanged behavior. */

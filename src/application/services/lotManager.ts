@@ -274,6 +274,15 @@ async function recordSellTransactionLocked(repos: LotManagerRepos, input: Record
     price: input.price,
     executionTime: input.executionTime,
   });
+  // A tied-or-lower-authority `adoptable` (source rank <= "manual") is
+  // deliberately NEVER retracted here: unlike an Import/Backfill-authored
+  // fact, a "manual"/"backfill" fact carries no document evidence that it
+  // describes THIS SAME execution rather than a genuinely distinct one the
+  // user separately recorded (e.g. two same-day, same-price Lot Manager
+  // sells — see this module's own regression test, "never adopts another
+  // still-pending 'manual' Lot Manager sell sharing the same value"). Only a
+  // STRICTLY more authoritative `adoptable` (a real document) is trustworthy
+  // enough evidence that it's the same execution to retract and adopt from.
   const adoptedSource = adoptable && authorityRank(adoptable.source) > authorityRank("manual") ? adoptable.source : undefined;
   if (adoptable && adoptedSource) {
     await retractRawTransaction(repos, adoptable.id, "Superseded by the Lot Manager's own Sell record, provenance preserved");

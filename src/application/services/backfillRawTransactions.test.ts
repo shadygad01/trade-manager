@@ -14,6 +14,8 @@ import { createTradeAllocation, type TradeAllocation } from "@domain/entities/Tr
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
+import { createRawTransaction, type RawTransaction } from "@domain/entities/RawTransaction";
+import { isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
 
 const PORTFOLIO = "p1";
 
@@ -349,5 +351,132 @@ describe("backfillRawTransactionsSilently", () => {
     const cashDelta = computeCashProjection(facts, PORTFOLIO);
     // -4005 (100 * 40 + 5 fee) - 50 (adjustment) + 44.18 (dividend)
     expect(cashDelta).toBeCloseTo(-4000 - 5 - 50 + 44.18, 5);
+  });
+});
+
+/**
+ * Regression coverage for the invariant: "exactly one live canonical
+ * execution fact per business execution identity." A real, reported defect
+ * (ARCC: 42 shares, 1 Official-Broker-Excel-adopted lot) — BF-1's own loop
+ * unconditionally wrote `{id: trade.id, source: "backfill"}` for EVERY
+ * trade with no existence check, so any trade whose real fact had been
+ * "adopted" (trade.id !== fact.id, the normal case for a document-sourced
+ * Buy/Sell — see TradeService.ensureBuyFact) got a second, phantom,
+ * lowest-authority live fact. That phantom broke
+ * isTickerFullyOfficialBrokerExcelSourced (dragging the whole ticker's
+ * authority down to "backfill" rank 0), which flipped Import's "Needs
+ * broker screenshot" badge on for an already-fully-verified position, and
+ * — proven separately — corrupted a raw-fact replay's Holdings/Ledger
+ * (double-counted shares) and the real fact's own Verification verdict
+ * (Verified -> Rejected, as the "duplicate" of its own phantom). These
+ * tests fail against the pre-fix `runBackfill` (no existence check) and
+ * pass against the fixed one (skips a trade/sell-order already covered by
+ * a live fact of the same execution identity).
+ */
+describe("backfillRawTransactionsSilently — one-canonical-fact-per-execution invariant", () => {
+  const PORTFOLIO_2 = "p1";
+
+  it("ARCC regression: does not create a second fact for a Trade already covered by an adopted (differently-id'd) live BuyExecution fact", async () => {
+    const adoptedFact: RawTransaction = {
+      ...createRawTransaction({
+        id: "extracted-key-1", // the import session key — NOT trade.id, exactly like a real adopted fact.
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        portfolioId: PORTFOLIO_2,
+        ticker: "ARCC",
+        payload: { ticker: "ARCC", shares: 42, price: 10, fees: 0, taxes: 0, executionDate: "2026-01-15", executionTime: "10:00AM" },
+      }),
+      seq: 1,
+    };
+    const trade = createTrade({ id: "trade-1", portfolioId: PORTFOLIO_2, ticker: "ARCC", shares: 42, entryPrice: 10, executionDate: "2026-01-15", executionTime: "10:00AM" });
+    expect(trade.id).not.toBe(adoptedFact.id); // the exact "adoption" shape the bug depended on.
+
+    const repos: BackfillRepos = {
+      portfolios: createFakePortfolioRepository([createPortfolio({ id: PORTFOLIO_2, name: "Main", kind: "Trading" })]),
+      trades: createFakeTradeRepository([trade]),
+      allocations: createFakeTradeAllocationRepository([]),
+      verifications: createFakeVerificationRepository([]),
+      timeline: createFakeTimelineRepository([]),
+      rawTransactions: createFakeRawTransactionRepository([adoptedFact]),
+      committedLedger: createFakeCommittedLedgerRepository(),
+    };
+
+    const result = await backfillRawTransactionsSilently(repos);
+    expect(result.buysBackfilled).toBe(0); // already covered — nothing to backfill.
+
+    const facts = await repos.rawTransactions.getAll();
+    expect(facts).toHaveLength(1); // no phantom fact created.
+    expect(facts[0].id).toBe(adoptedFact.id);
+    expect(facts[0].source).toBe("official-broker-excel");
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "ARCC")).toBe(true); // the warning stays off.
+  });
+
+  it("sell side: does not create a second SellExecution fact for a sell order already covered by an adopted live fact", async () => {
+    const adoptedSellFact: RawTransaction = {
+      ...createRawTransaction({
+        id: "extracted-sell-key",
+        kind: "SellExecution",
+        source: "official-broker-excel",
+        portfolioId: PORTFOLIO_2,
+        ticker: "ARCC",
+        payload: { ticker: "ARCC", shares: 20, price: 12, fees: 0, taxes: 0, executionDate: "2026-02-01", executionTime: "11:00AM" },
+      }),
+      seq: 1,
+    };
+    const buyTrade = createTrade({ id: "t1", portfolioId: PORTFOLIO_2, ticker: "ARCC", shares: 20, entryPrice: 10, executionDate: "2026-01-15", executionTime: "10:00AM" });
+    const allocation = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "sg-does-not-match-fact-id", // legacy sellGroupId not equal to the adopted fact's real id — the exact shape that let the sell-side loop miss the existing fact before the fix.
+      portfolioId: PORTFOLIO_2,
+      tradeId: buyTrade.id,
+      ticker: "ARCC",
+      sharesClosed: 20,
+      exitPrice: 12,
+      executionDate: "2026-02-01",
+      executionTime: "11:00AM",
+    });
+
+    const repos: BackfillRepos = {
+      portfolios: createFakePortfolioRepository([createPortfolio({ id: PORTFOLIO_2, name: "Main", kind: "Trading" })]),
+      trades: createFakeTradeRepository([buyTrade]),
+      allocations: createFakeTradeAllocationRepository([allocation]),
+      verifications: createFakeVerificationRepository([]),
+      timeline: createFakeTimelineRepository([]),
+      rawTransactions: createFakeRawTransactionRepository([adoptedSellFact]),
+      committedLedger: createFakeCommittedLedgerRepository(),
+    };
+
+    const result = await backfillRawTransactionsSilently(repos);
+    expect(result.sellOrdersBackfilled).toBe(0);
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFacts = facts.filter((f) => f.kind === "SellExecution");
+    expect(sellFacts).toHaveLength(1); // no phantom SellExecution created.
+    expect(sellFacts[0].id).toBe(adoptedSellFact.id);
+
+    // The SellAllocationDecision this run DOES still write must reference
+    // the real, existing fact's id — never a stale/wrong id from the
+    // skipped write.
+    const decision = facts.find((f) => f.kind === "SellAllocationDecision")!;
+    expect((decision.payload as { sellExecutionId: string }).sellExecutionId).toBe(adoptedSellFact.id);
+  });
+
+  it("a Trade with NO existing live fact at all is still backfilled normally — the invariant fix only skips genuinely-covered executions", async () => {
+    const trade = createTrade({ id: "t1", portfolioId: PORTFOLIO_2, ticker: "COMI", shares: 50, entryPrice: 30, executionDate: "2026-01-15", executionTime: "10:00" });
+    const repos: BackfillRepos = {
+      portfolios: createFakePortfolioRepository([createPortfolio({ id: PORTFOLIO_2, name: "Main", kind: "Trading" })]),
+      trades: createFakeTradeRepository([trade]),
+      allocations: createFakeTradeAllocationRepository([]),
+      verifications: createFakeVerificationRepository([]),
+      timeline: createFakeTimelineRepository([]),
+      rawTransactions: createFakeRawTransactionRepository([]),
+      committedLedger: createFakeCommittedLedgerRepository(),
+    };
+
+    const result = await backfillRawTransactionsSilently(repos);
+    expect(result.buysBackfilled).toBe(1);
+    const facts = await repos.rawTransactions.getAll();
+    expect(facts).toHaveLength(1);
+    expect(facts[0].source).toBe("backfill");
   });
 });
