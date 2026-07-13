@@ -144,7 +144,11 @@ async function computeLedger(repos: LotManagerRepos, portfolioId: string, ticker
   const relevant = await relevantTradeTransactions(repos, portfolioId, normalized);
   const tradeTxns = relevant.filter((t) => t.kind === "BuyExecution" || t.kind === "SellExecution");
   const decisionTxns = relevant.filter((t) => t.kind === "SellAllocationDecision");
-  const events = generateLedgerEvents(tradeTxns);
+  // Policy audit finding: relevant excludes the live Correction facts
+  // themselves (see commitEngine.ts's commitTicker, same fix) — the full,
+  // unfiltered set is needed to resolve a renamed fact's CURRENT ticker.
+  const allTransactions = await repos.rawTransactions.getAll();
+  const events = generateLedgerEvents(tradeTxns, allTransactions);
   const allocations = generateAllocations(events, decisionTxns);
   return { events, allocations };
 }

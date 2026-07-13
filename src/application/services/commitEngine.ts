@@ -149,7 +149,17 @@ export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedg
   const verdicts = verifyAll({ transactions: relevant, positions: NO_EXISTING_POSITIONS });
   const verifiedTransactions = tradeTransactions.filter((t) => verdicts.get(t.id)?.verdict === "Verified");
 
-  const events = generateLedgerEvents(verifiedTransactions);
+  // Policy audit finding: relevant is already filtered down to this ticker's
+  // OWN resolved rows, which excludes the live Correction facts themselves
+  // (a Correction's own top-level ticker field is unset — it targets another
+  // row, so relevantTradeTransactions' own resolveCurrentTicker check drops
+  // it). generateLedgerEvents needs the full, unfiltered set to resolve a
+  // renamed fact's CURRENT ticker for its own LedgerEvent.ticker field (see
+  // ledgerEngine.ts's toCanonicalizationEntries doc comment) — passing
+  // `relevant` there would silently find zero Corrections and fall straight
+  // back to the same stale payload.ticker bug this fixes.
+  const allTransactions = await repos.rawTransactions.getAll();
+  const events = generateLedgerEvents(verifiedTransactions, allTransactions);
   const allocations = generateAllocations(events, decisionTransactions);
 
   // Never fatal, same isolation as ensureLegacyFactsExist/projectLegacyTicker

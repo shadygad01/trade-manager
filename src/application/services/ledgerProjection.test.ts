@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories, createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
-import { recordBuy, recordSell, deleteTrade } from "./TradeService";
+import { recordBuy, recordSell, deleteTrade, renameTickerEverywhere } from "./TradeService";
 import { commitTicker, appendAndMaybeCommit, assignPortfolio, retractRawTransaction, type CommitEngineRepos } from "./commitEngine";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
 import { resolveLotRef } from "./ledgerProjection";
@@ -93,6 +93,47 @@ describe("ledgerProjection — the legacy ledger auto-corrects when better histo
     expect(remaining).toHaveLength(1);
     expect(remaining[0].id).toBe(real.id); // surviving read keeps its identity
     expect(await repos.trades.getById(dup.id)).toBeUndefined();
+  });
+
+  // Policy audit finding: ensureLegacyFactsExist's own live-fact lookup used
+  // to key off the raw, immutable RawTransaction.ticker field, while the
+  // legacy Trade rows it compares against are correctly renamed by
+  // TradeService.renameTickerEverywhere (which mutates Trade.ticker
+  // directly). A renamed ticker's real, already-linked, Invoice-sourced fact
+  // was never found under its new name — this function concluded the legacy
+  // trade had NO backing fact at all and re-appended one under the SAME id
+  // (the trade's own id), sourced "backfill". Against the real Dexie
+  // repository (which uses `.add`, throwing on a duplicate primary key) this
+  // surfaces as a caught, logged error that skips legacy projection for that
+  // commit; this fake repository upserts by id instead, which reproduces a
+  // different but just as real symptom: the original document-sourced fact's
+  // provenance silently downgraded to "backfill" under the same id.
+  it("gap-backfill never re-derives (and never downgrades the provenance of) a ticker's already-linked fact after it's renamed via a Correction fact", async () => {
+    const repos = fullRepos();
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 45.5, executionDate: "2026-02-01", executionTime: "10:00",
+    });
+    // Overwrite recordBuy's own auto-written fact with a document-sourced
+    // one under the SAME id, so a provenance downgrade is unambiguous.
+    const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01", executionTime: "10:00" };
+    await repos.rawTransactions.append(createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "invoice", portfolioId: "p1", ticker: "COMI", payload }));
+    await commitTicker(repos, "p1", "COMI");
+    expect((await repos.trades.getByPortfolio("p1")).filter((t) => t.ticker === "COMI")).toHaveLength(1);
+
+    await renameTickerEverywhere(repos, "COMI", "HRHO");
+    // Force a full from-scratch rebuild under the new name, exactly like the
+    // other gap-backfill tests do — proves the fix holds even on a repeat
+    // commit, not just the one renameTickerEverywhere already triggered.
+    await commitTicker(repos, "p1", "HRHO");
+
+    const hrhoTrades = (await repos.trades.getByPortfolio("p1")).filter((t) => t.ticker === "HRHO");
+    expect(hrhoTrades).toHaveLength(1); // never doubled
+    expect(hrhoTrades[0].id).toBe(trade.id); // the SAME trade, not a new one alongside it
+    expect(hrhoTrades[0].shares).toBe(100);
+
+    const allBuyFacts = (await repos.rawTransactions.getAll()).filter((t) => t.kind === "BuyExecution");
+    expect(allBuyFacts).toHaveLength(1); // never a phantom duplicate under the same id
+    expect(allBuyFacts[0].source).toBe("invoice"); // never silently downgraded to "backfill"
   });
 
   it("manual Sell allocation survives a full rebuild as an immutable fact — remainingShares recomputed, same answer (ADR-002 preserved)", async () => {

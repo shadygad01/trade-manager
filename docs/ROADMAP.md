@@ -1863,4 +1863,25 @@ Explicitly scoped down from an earlier, much larger "collapse everything into on
 **Reviewed and confirmed NOT drift, left unchanged**: `lotManager.ts`'s and `evidenceIntelligence.ts`'s `authorityRank` uses (field-value/provenance authority — the rank's actual documented purpose, not the existence/trust gate); `duplicateDetection.ts`'s `isInvoiceSourced` and `evidenceCoverage.ts`'s per-upload source checks (narrower, genuinely different questions); `toCandidateSource`, duplicated verbatim between `ledgerEngine.ts` and `verificationEngine.ts` (a pure type-narrowing adapter, not a policy decision — flagged, not fixed, since it decides nothing and was out of this task's business-policy scope).
 
 - **Status**: `docs/PRODUCT_POLICY.md` §9-10 now documents this pass and a final inventory table — one canonical implementation confirmed per policy decision in the repository.
+
+### Final certification pass: the ticker-identity-drift bug class, not one function — six more instances found and fixed
+
+Requested as a certification, not another bug hunt: prove or disprove that the whole architectural bug class (policy implemented differently across modules, ticker history splitting, identity silently drifting) was eliminated — repeating the repository search after every repair until a full pass finds nothing new. Four search passes were run; the fourth found nothing.
+
+**Root cause, one bug class, six sites**: `resolveCurrentTicker` (`rawTransactionFolds.ts`) is the canonical, correction-aware ticker resolver, already used correctly in `reconciliation.ts`/`commitEngine.ts`/`TradeService.ts`/`provenanceRepair.ts`. Six OTHER modules independently grouped/filtered `RawTransaction[]` by the raw, immutable ticker field instead:
+
+1. **`verificationEngine.ts`'s `toTradeCandidateEntries`** — `commitEngine.ts`'s own live commit-decision path. A renamed ticker with a new native-name fact split into two `checkTickerMatch` buckets.
+2. **`canonicalTransaction.ts`'s `buildCanonicalTransactions`** — feeds the Evidence Intelligence panel; a renamed ticker's pre-rename execution silently vanished from it.
+3. **`ledgerEngine.ts`'s `toCanonicalizationEntries`/`toDirectEvent`** — the canonical LEDGER itself. A committed `LedgerEvent`'s own `.ticker` field stayed stale, read by `holdingsEngine.ts`'s grouping and `systemValidation.ts`'s ticker lookup.
+4. **`canonicalHoldings.ts`'s `tryComputeCanonicalByTicker`** — the production Holdings/Dashboard/PortfolioDetail read path. A wholly-renamed ticker was never enumerated under its current name at all — the legacy-fallback safety net prevented data loss, but permanently mislabeled it "not yet verified."
+5. **`evidenceGraph.ts`'s `buildEvidenceGraph`** — same as #2, one layer down (the graph node and every edge touching it).
+6. **`ledgerProjection.ts`'s `ensureLegacyFactsExist`** — the gap-backfill step inside `commitTicker`. A renamed ticker's real fact was never found under its new name, so this function re-appended one under the trade's own id sourced `"backfill"` — against the real Dexie repository (`.add`, throws on duplicate keys) this is a caught, logged, self-healing failure; confirmed via the fake test repository (which upserts by id) reproducing a silent provenance downgrade instead.
+
+Every fix follows the same shape: resolve `resolveCurrentTicker(all, txn)` before grouping/filtering/labeling by ticker. All six new regression tests use the identical scenario (a fact renamed via Correction, plus a second fact recorded natively under the new name) and were each independently confirmed fail-before/pass-after by stashing its own fix and re-running.
+
+**Reviewed and confirmed NOT this bug class**: `PortfolioService.ts` (fresh input normalization, not grouping); `systemValidation.ts`/`backfillRawTransactions.ts`/`duplicateDetection.ts` (legacy `Trade`/`TradeAllocation`/`TimelineEvent.ticker`, which `renameTickerEverywhere` mutates directly — always current); `evidenceCoverage.ts` (a narrower, per-upload question); `ledgerProjection.ts`'s sell-side backfill loop (consumes the same map fixed for the buy side, no separate fix needed); `toCandidateSource` duplication (a type adapter, not policy).
+
+**Evidence**: 6 new regression tests, full suite 977/977 green, `tsc --noEmit` clean, `arch:check` clean (2512 modules, zero violations). See `docs/PRODUCT_POLICY.md` §11 for the full certification table and the five final yes/no questions, each answered with evidence rather than assumed from passing tests.
+
+- **Status**: this is the most thorough pass this bug class has had — six real, previously-undetected instances found via a systematic raw-ticker-field grep across the entire application layer, none from a new bug report.
 - **Next recommended sprint**: `docs/EVIDENCE_ARCHITECTURE.md`'s own disclosed gap — `extractionMethod` (native-PDF vs. OCR vs. manual) is captured on every `RawTransaction` but still not wired into any verification/authority decision. Real, disclosed, not yet a reported bug.

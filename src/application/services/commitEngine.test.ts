@@ -362,6 +362,50 @@ describe("commitEngine", () => {
       expect((await rawTransactions.getAll()).filter((t) => t.kind === "Correction")).toHaveLength(0);
     });
 
+    // Policy audit finding: the two tests above only assert on getLedgerEvents'
+    // LENGTH under the new ticker key — which passes even if each individual
+    // LedgerEvent's own `.ticker` FIELD is still the stale, pre-rename name,
+    // since getLedgerEvents itself is keyed by an explicit (portfolioId,
+    // ticker) pair, not by filtering on event.ticker. That stale field is
+    // exactly what holdingsEngine.ts's computeHoldings groups its own output
+    // BY (byTicker, from lot.ticker) and what systemValidation.ts looks up
+    // via `.find(h => h.ticker === ticker)` — both would silently fail to
+    // find a renamed ticker's real holdings. This asserts on the field
+    // itself, for both the manual/backfill direct-event path (toDirectEvent)
+    // and the canonicalized (non-manual) path (toCanonicalizationEntries).
+    it("a renamed ticker's own committed LedgerEvent.ticker field reads the NEW ticker, not the stale pre-rename one — manual-sourced path", async () => {
+      // A matching PositionVerificationCapture corroborates the lone manual
+      // Buy (see importVerification.ts's checkTickerMatch) so it reaches
+      // Verified and actually gets committed through toDirectEvent — the
+      // manual/backfill direct-event path this test targets.
+      await rawTransactions.append(
+        createRawTransaction({
+          kind: "PositionVerificationCapture",
+          source: "position-verification",
+          portfolioId: PORTFOLIO,
+          ticker: "COMI",
+          payload: { ticker: "COMI", units: 100, capturedAt: "2026-01-31T00:00" },
+        }),
+      );
+      await appendBuy({ ticker: "COMI", shares: 100 }, "manual");
+      await commitTicker(repos, PORTFOLIO, "COMI");
+      await renameRawTransactionsTicker(repos, "COMI", "HRHO");
+
+      const events = await committedLedger.getLedgerEvents(PORTFOLIO, "HRHO");
+      expect(events).toHaveLength(1);
+      expect(events[0].ticker).toBe("HRHO");
+    });
+
+    it("a renamed ticker's own committed LedgerEvent.ticker field reads the NEW ticker, not the stale pre-rename one — canonicalized (invoice) path", async () => {
+      await appendBuy({ ticker: "COMI", shares: 100 }, "invoice");
+      await commitTicker(repos, PORTFOLIO, "COMI");
+      await renameRawTransactionsTicker(repos, "COMI", "HRHO");
+
+      const events = await committedLedger.getLedgerEvents(PORTFOLIO, "HRHO");
+      expect(events).toHaveLength(1);
+      expect(events[0].ticker).toBe("HRHO");
+    });
+
     it("a retracted transaction is never corrected", async () => {
       const buy = await rawTransactions.append(
         createRawTransaction({

@@ -3,6 +3,7 @@ import type { ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { LedgerEvent, LotOpenedEvent } from "@domain/entities/LedgerEvent";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { canonicalizeTradeEntries, type CanonicalTrade } from "./ledgerRebuild";
+import { resolveCurrentTicker } from "./rawTransactionFolds";
 
 export type { LedgerEvent, LotOpenedEvent, SellRecordedEvent } from "@domain/entities/LedgerEvent";
 
@@ -36,7 +37,26 @@ function toCandidateSource(source: RawTransaction["source"]): ParsedTradeCandida
   return undefined;
 }
 
-function toCanonicalizationEntries(transactions: RawTransaction[]): { key: string; candidate: ParsedTradeCandidate; uploadId: string }[] {
+/**
+ * Policy audit finding: `candidate.ticker` resolves through
+ * `resolveCurrentTicker(allTransactions, txn)`, not the raw, immutable
+ * `payload.ticker` — the same bug class already fixed in verificationEngine.ts
+ * and canonicalTransaction.ts (same session), here in the module that
+ * generates the canonical LEDGER itself. `canonicalizeTradeEntries`
+ * (ledgerRebuild.ts) derives `CanonicalTrade.ticker` straight from
+ * `candidate.ticker`, so an unresolved raw ticker here would bake a stale
+ * ticker label directly into a `LotOpened`/`SellRecorded` event — read back
+ * by `computeHoldings`'s own `byTicker` grouping (holdingsEngine.ts) and by
+ * `systemValidation.ts`'s `.find(h => h.ticker === ticker)` lookup, both of
+ * which would then fail to find a renamed ticker's real holdings. Requires
+ * `allTransactions` (not just the Buy/Sell subset generateLedgerEvents
+ * receives) since resolving a Correction chain needs the Correction facts
+ * themselves in scope.
+ */
+function toCanonicalizationEntries(
+  transactions: RawTransaction[],
+  allTransactions: RawTransaction[],
+): { key: string; candidate: ParsedTradeCandidate; uploadId: string }[] {
   const entries: { key: string; candidate: ParsedTradeCandidate; uploadId: string }[] = [];
   for (const txn of transactions) {
     if (txn.kind !== "BuyExecution" && txn.kind !== "SellExecution") continue;
@@ -49,7 +69,7 @@ function toCanonicalizationEntries(transactions: RawTransaction[]): { key: strin
       // for buildCanonicalTrades' own Upload-sourced callers.
       uploadId: txn.id,
       candidate: {
-        ticker: payload.ticker,
+        ticker: resolveCurrentTicker(allTransactions, txn) ?? payload.ticker,
         companyName: "companyName" in payload ? payload.companyName : undefined,
         side: txn.kind === "BuyExecution" ? "BUY" : "SELL",
         shares: payload.shares,
@@ -82,14 +102,14 @@ function toEvent(c: CanonicalTrade): LedgerEvent {
   return c.side === "BUY" ? { type: "LotOpened", ...base, companyName: c.companyName } : { type: "SellRecorded", ...base };
 }
 
-/** Direct 1:1 mapping for a manual/backfill fact — see this module's doc comment. */
-function toDirectEvent(txn: RawTransaction): LedgerEvent {
+/** Direct 1:1 mapping for a manual/backfill fact — see this module's doc comment and toCanonicalizationEntries' ticker-resolution doc comment above. */
+function toDirectEvent(txn: RawTransaction, allTransactions: RawTransaction[]): LedgerEvent {
   const payload = txn.payload as BuyExecutionPayload | SellExecutionPayload;
   const base: Omit<LotOpenedEvent, "type" | "companyName"> = {
     eventId: txn.id,
     executionDate: payload.executionDate,
     executionTime: payload.executionTime,
-    ticker: normalizeTicker(payload.ticker),
+    ticker: normalizeTicker(resolveCurrentTicker(allTransactions, txn) ?? payload.ticker),
     shares: payload.shares,
     price: payload.price,
     fees: payload.fees,
@@ -107,13 +127,21 @@ function chronoKey(e: LedgerEvent): string {
   return `${e.executionDate}T${e.executionTime ?? "00:00"}`;
 }
 
-export function generateLedgerEvents(verifiedTransactions: RawTransaction[]): LedgerEvent[] {
+/**
+ * `allTransactions` defaults to `verifiedTransactions` for callers with no
+ * broader context (e.g. a test constructing an already-resolved fixture) —
+ * pass the FULL relevant set (including any live Correction facts) when one
+ * is available, exactly as commitEngine.ts's commitTicker and lotManager.ts's
+ * computeLedger now do, so a renamed ticker's facts resolve correctly. See
+ * toCanonicalizationEntries' own doc comment for why this is needed.
+ */
+export function generateLedgerEvents(verifiedTransactions: RawTransaction[], allTransactions: RawTransaction[] = verifiedTransactions): LedgerEvent[] {
   const direct = verifiedTransactions.filter((t) => t.source === "manual" || t.source === "backfill");
   const dedupCandidates = verifiedTransactions.filter((t) => t.source !== "manual" && t.source !== "backfill");
 
-  const entries = toCanonicalizationEntries(dedupCandidates);
+  const entries = toCanonicalizationEntries(dedupCandidates, allTransactions);
   const { buys, sells } = canonicalizeTradeEntries(entries);
-  const directEvents = direct.filter((t) => t.kind === "BuyExecution" || t.kind === "SellExecution").map(toDirectEvent);
+  const directEvents = direct.filter((t) => t.kind === "BuyExecution" || t.kind === "SellExecution").map((t) => toDirectEvent(t, allTransactions));
 
   const events = [...buys.map(toEvent), ...sells.map(toEvent), ...directEvents];
   return events.sort((a, b) => {

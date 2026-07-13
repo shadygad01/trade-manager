@@ -4,6 +4,7 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { verifyAllDetailed, type VerifyAllParams, type EvidenceType } from "./verificationEngine";
 import { assessTickerCompleteness, type TickerCompletenessReport } from "./completenessEngine";
 import { buildCoverageClaims } from "./evidenceCoverage";
+import { resolveCurrentTicker } from "./rawTransactionFolds";
 
 /**
  * Evidence Graph: a read-only VIEW composing what verificationEngine.ts and
@@ -92,13 +93,23 @@ function tickerNodeId(ticker: string): string {
   return `${TICKER_NODE_PREFIX}${ticker}`;
 }
 
-function toTransactionNode(txn: RawTransaction, verdict: "Verified" | "Rejected" | "Needs Review"): TransactionNode | undefined {
+/**
+ * Policy audit finding: `ticker` resolves through
+ * `resolveCurrentTicker(allTransactions, txn)`, not the raw, immutable
+ * `payload.ticker` — the same bug class already fixed in
+ * verificationEngine.ts, canonicalTransaction.ts, and ledgerEngine.ts (same
+ * session). Without this, a renamed ticker's pre-rename transaction node
+ * would show its stale name in the Evidence Graph, and its
+ * corroborates/contradicts edges (built from this same node set) would
+ * never connect it to the ticker's post-rename evidence.
+ */
+function toTransactionNode(txn: RawTransaction, allTransactions: RawTransaction[], verdict: "Verified" | "Rejected" | "Needs Review"): TransactionNode | undefined {
   if (txn.kind !== "BuyExecution" && txn.kind !== "SellExecution") return undefined;
   const payload = txn.payload as BuyExecutionPayload | SellExecutionPayload;
   return {
     kind: "transaction",
     id: txn.id,
-    ticker: normalizeTicker(payload.ticker),
+    ticker: normalizeTicker(resolveCurrentTicker(allTransactions, txn) ?? payload.ticker),
     side: txn.kind === "BuyExecution" ? "BUY" : "SELL",
     shares: payload.shares,
     price: payload.price,
@@ -125,7 +136,9 @@ export function buildEvidenceGraph(ticker: string, params: VerifyAllParams, uplo
   const { transactions, tickers } = verifyAllDetailed(params);
   const tickerStatus = tickers.get(normalizedTicker);
 
-  const relevantTxns = params.transactions.filter((t) => t.ticker !== undefined && normalizeTicker(t.ticker) === normalizedTicker);
+  const relevantTxns = params.transactions.filter(
+    (t) => normalizeTicker(resolveCurrentTicker(params.transactions, t) ?? "") === normalizedTicker,
+  );
 
   const nodes: EvidenceNode[] = [];
   const edges: EvidenceEdge[] = [];
@@ -134,7 +147,7 @@ export function buildEvidenceGraph(ticker: string, params: VerifyAllParams, uplo
 
   for (const txn of relevantTxns) {
     const verdict = transactions.get(txn.id)?.verdict;
-    const node = verdict ? toTransactionNode(txn, verdict) : undefined;
+    const node = verdict ? toTransactionNode(txn, params.transactions, verdict) : undefined;
     if (!node) continue;
     nodes.push(node);
 

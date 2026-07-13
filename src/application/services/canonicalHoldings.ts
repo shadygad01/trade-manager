@@ -3,6 +3,8 @@ import { computePositions, type PositionAggregate } from "./TradeService";
 import { computeHoldings } from "./holdingsEngine";
 import type { AppRepositories } from "./types";
 import type { CommittedLedgerRepository, RawTransactionRepository } from "@domain/repositories";
+import { resolveCurrentPortfolioId } from "./commitEngine";
+import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
 
 /**
  * The production read cutover, made safe to run today instead of gated
@@ -60,8 +62,26 @@ async function tryComputeCanonicalByTicker(
 ): Promise<Map<string, PositionAggregate>> {
   const canonicalByTicker = new Map<string, PositionAggregate>();
   try {
-    const rawForPortfolio = await repos.rawTransactions.getByPortfolio(portfolioId);
-    const tickers = new Set(rawForPortfolio.filter((t) => t.ticker !== undefined).map((t) => normalizeTicker(t.ticker!)));
+    // Policy audit finding: getByPortfolio is a strict indexed-equality
+    // lookup (see DexieRawTransactionRepository), which excludes a live
+    // Correction fact — its own portfolioId field is always unset, since it
+    // targets another row rather than belonging to a portfolio itself (see
+    // commitEngine.ts's relevantTradeTransactions, which avoids getByPortfolio
+    // for the exact same reason). Enumerating tickers from the raw,
+    // unresolved t.ticker field on a getByPortfolio result meant a ticker
+    // renamed via a Correction — with no natively-recorded fact under the
+    // new name — was never queried for at all under its current name; the
+    // legacy-fallback safety net below still surfaced it (never silently
+    // dropped), but permanently mislabeled as "not yet verified" even though
+    // it was, under the wrong ticker key.
+    const all = await repos.rawTransactions.getAll();
+    const rawForPortfolio = all.filter((t) => !isRetracted(all, t.id) && resolveCurrentPortfolioId(all, t) === portfolioId);
+    const tickers = new Set(
+      rawForPortfolio
+        .map((t) => resolveCurrentTicker(all, t))
+        .filter((t): t is string => t !== undefined)
+        .map((t) => normalizeTicker(t)),
+    );
     for (const ticker of tickers) {
       const [events, allocations] = await Promise.all([
         repos.committedLedger.getLedgerEvents(portfolioId, ticker),

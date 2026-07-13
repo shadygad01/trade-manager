@@ -89,4 +89,43 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
     expect(hrho.totalShares).toBe(50); // the recorded trade's own number, never silently replaced
     expect(hrho.fallbackReason).toContain("disagrees");
   });
+
+  // Policy audit finding: a ticker renamed via a Correction fact, with NO
+  // natively-recorded fact under the new name, was enumerated by its raw,
+  // stale ticker field — a Correction fact's own portfolioId is always
+  // unset (it targets another row, not a portfolio), so it was silently
+  // excluded from getByPortfolio's indexed lookup entirely. The renamed
+  // ticker's real, correctly-committed canonical data was never queried for
+  // under its current name, so it always fell back to the legacy Trade
+  // table with a misleading "not yet verified" reason — even though it
+  // really was fully verified and committed, just under the wrong ticker
+  // key. Not a silent data loss (the legacy-fallback net still shows the
+  // real shares) but a real, false "unverified" signal.
+  it("a ticker renamed via a Correction fact (no native fact under the new name) is served as 'canonical' under its current name, not a false 'not yet verified' legacy-fallback", async () => {
+    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Investment", initialCash: 100_000 });
+    const base = createFakeRepositories({ portfolios: [portfolio] });
+    const rawTransactions = createFakeRawTransactionRepository();
+    const committedLedger = createFakeCommittedLedgerRepository();
+    const repos = { ...base, rawTransactions, committedLedger };
+
+    const { trade } = await recordBuy(repos, { portfolioId: "p1", ticker: "COMI", shares: 100, entryPrice: 45.5, executionDate: "2026-02-01", executionTime: "10:00" });
+    const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01", executionTime: "10:00" };
+    await rawTransactions.append(createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "invoice", portfolioId: "p1", ticker: "COMI", payload }));
+    const { assignPortfolio, commitTicker } = await import("./commitEngine");
+    await assignPortfolio(repos, "COMI", "p1");
+    await commitTicker(repos, "p1", "COMI");
+
+    // Rename COMI -> HRHO everywhere (legacy tables + RawTransaction
+    // Corrections + a recommit under the new name) — exactly what
+    // TradeService.renameTickerEverywhere does in production.
+    const { renameTickerEverywhere } = await import("./TradeService");
+    await renameTickerEverywhere({ ...repos, rawTransactions, committedLedger }, "COMI", "HRHO");
+
+    const positions = await computeCanonicalPositions(repos, "p1", {});
+
+    const hrho = positions.find((p) => p.ticker === "HRHO")!;
+    expect(hrho).toBeDefined();
+    expect(hrho.totalShares).toBe(100);
+    expect(hrho.source).toBe("canonical");
+  });
 });

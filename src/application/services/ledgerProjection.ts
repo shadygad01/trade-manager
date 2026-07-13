@@ -19,7 +19,7 @@ import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { generateId } from "@domain/value-objects/id";
 import { canonicalKey } from "./ledgerRebuild";
-import { isRetracted, findLiveExecutionFact } from "./rawTransactionFolds";
+import { isRetracted, findLiveExecutionFact, resolveCurrentTicker } from "./rawTransactionFolds";
 import { timesConflict } from "./duplicateDetection";
 import type { LedgerEvent, LotOpenedEvent } from "./ledgerEngine";
 import type { Allocation } from "./allocationEngine";
@@ -157,9 +157,28 @@ export async function ensureLegacyFactsExist(repos: LegacyLedgerRepos, portfolio
   // resurrect exactly what they deleted, in a loop (retract → gap-fill
   // re-facts → projection re-creates the row → retract again...). A key
   // that was never seen at all is the only genuine gap this fills.
+  // Policy audit finding: resolves each fact's CURRENT ticker via
+  // resolveCurrentTicker, not the raw, immutable t.ticker — the same bug
+  // class already fixed elsewhere this session (verificationEngine.ts,
+  // canonicalTransaction.ts, ledgerEngine.ts, canonicalHoldings.ts,
+  // evidenceGraph.ts). legacyTrades below (repos.trades.getByPortfolio)
+  // already reflects a rename correctly (TradeService.renameTickerEverywhere
+  // mutates the legacy Trade.ticker field directly) — without this fix, a
+  // renamed ticker's real, already-linked fact would never be found under
+  // its new name, so this function concluded the legacy trade had no
+  // backing fact at all and re-appended one under the trade's own id,
+  // sourced "backfill". Confirmed reachable: against the real Dexie
+  // repository (RawTransactionRepository.append uses `.add`, which throws
+  // on a duplicate primary key) this surfaces as a caught, logged error that
+  // skips legacy projection for that commit entirely (see commitTicker's own
+  // try/catch); a repository that instead upserts by id would silently
+  // downgrade the original document-sourced fact's provenance to "backfill"
+  // under the same id (see ledgerProjection.test.ts's regression test).
   const liveBuyFactsByKey = new Map<string, RawTransaction[]>();
   for (const t of all) {
-    if (t.kind !== "BuyExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== normalized) continue;
+    if (t.kind !== "BuyExecution") continue;
+    const resolvedTicker = resolveCurrentTicker(all, t);
+    if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== normalized) continue;
     if (isRetracted(all, t.id)) continue;
     const p = t.payload as BuyExecutionPayload;
     const key = canonicalKey({ side: "BUY", ticker: normalized, date: p.executionDate, shares: p.shares, price: p.price });
@@ -169,7 +188,9 @@ export async function ensureLegacyFactsExist(repos: LegacyLedgerRepos, portfolio
   }
   const liveSellFactsByKey = new Map<string, RawTransaction[]>();
   for (const t of all) {
-    if (t.kind !== "SellExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== normalized) continue;
+    if (t.kind !== "SellExecution") continue;
+    const resolvedTicker = resolveCurrentTicker(all, t);
+    if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== normalized) continue;
     if (isRetracted(all, t.id)) continue;
     const p = t.payload as SellExecutionPayload;
     const key = canonicalKey({ side: "SELL", ticker: normalized, date: p.executionDate, shares: p.shares, price: p.price });

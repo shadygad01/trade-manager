@@ -289,3 +289,116 @@ The two "Fixed" rows are the only duplication proven to exist; every other
 policy decision in the repository already had a single, correctly-scoped
 implementation and was left untouched, per this task's own instruction not
 to refactor working code without proof.
+
+## 11. Final certification pass — ticker-identity drift, six more instances found and fixed
+
+A dedicated pass, requested specifically to certify (or disprove) that the
+whole architectural BUG CLASS — not one function — was eliminated: any case
+where policy is implemented differently across modules, trust/verification
+decisions differ between call sites, ticker history can split, or identity
+can silently drift. Method: grep every raw ticker-field read
+(`payload.ticker`, `t.ticker`, `txn.ticker`) across `src/application` and
+`src/presentation`, classify each as canonical/adapter/derived/drift, fix
+every drift found, add a fail-before/pass-after regression test proving it,
+then repeat the search. Four search passes were run; the fourth found
+nothing new.
+
+**Root cause, one bug class, six sites.** `resolveCurrentTicker`
+(`rawTransactionFolds.ts`) is the canonical, correction-aware ticker
+resolver — already used correctly by `reconciliation.ts`, `commitEngine.ts`,
+`TradeService.ts`, and `provenanceRepair.ts`. Six other modules independently
+grouped or filtered `RawTransaction[]` by the raw, immutable `ticker` field
+instead, each written before (or without cross-referencing) the established
+pattern:
+
+| # | Module / function | Consumer | Symptom without the fix | Regression test |
+|---|---|---|---|---|
+| 1 | `verificationEngine.ts`: `toTradeCandidateEntries` | `commitEngine.ts`'s `commitTicker`/`shouldCommit` — the live commit-decision path | A renamed ticker with a new native-name fact split into two `checkTickerMatch` buckets, each seeing only part of the real position | `verificationEngine.test.ts` |
+| 2 | `canonicalTransaction.ts`: `buildCanonicalTransactions` | `evidenceIntelligence.ts`'s Evidence Intelligence panel | A renamed ticker's pre-rename execution silently disappeared from the panel | `canonicalTransaction.test.ts` |
+| 3 | `ledgerEngine.ts`: `toCanonicalizationEntries`/`toDirectEvent` | `commitEngine.ts`'s `commitTicker`, `lotManager.ts`'s `computeLedger` — the canonical LEDGER itself | A committed `LedgerEvent`'s own `.ticker` field stayed the stale pre-rename name, read by `holdingsEngine.ts`'s `byTicker` grouping and `systemValidation.ts`'s `.find(h => h.ticker === ticker)` | `commitEngine.test.ts` (2 tests: manual + canonicalized paths) |
+| 4 | `canonicalHoldings.ts`: `tryComputeCanonicalByTicker` | The production Holdings/Dashboard/PortfolioDetail read path | A wholly-renamed ticker (no natively-recorded fact under the new name) was never enumerated under its current name at all — protected from data loss only by the legacy-fallback safety net, but permanently mislabeled "not yet verified" | `canonicalHoldings.test.ts` |
+| 5 | `evidenceGraph.ts`: `buildEvidenceGraph` | `evidenceIntelligence.ts`'s corroborates/contradicts edges | Same as #2, one layer down — the graph node itself, and every edge touching it | `evidenceGraph.test.ts` |
+| 6 | `ledgerProjection.ts`: `ensureLegacyFactsExist` | `commitTicker`'s gap-backfill step | A renamed ticker's real, already-linked fact was never found under its new name, so this function re-appended one under the trade's own id sourced `"backfill"` — against the real Dexie repository (`.add`, throws on duplicate primary key) this is a caught, logged error that skips legacy projection for that commit; confirmed via a fake repository that upserts by id instead, reproducing a silent provenance downgrade to `"backfill"` under the same id | `ledgerProjection.test.ts` |
+
+Finding #4 is the only one where the system's own defense-in-depth (the
+legacy-fallback safety net `canonicalHoldings.ts`'s own doc comment
+describes) prevented outright data loss; finding #6 is the only one where
+production's actual repository implementation (`.add`'s duplicate-key throw)
+converts what would otherwise be silent corruption into a caught, logged,
+self-healing failure. Both are still real, fixed, and tested — the point of
+defense-in-depth is redundancy, not an excuse to leave a layer broken.
+
+**Every fix follows the same shape**: resolve `resolveCurrentTicker(all, txn)`
+before grouping/filtering/labeling by ticker, falling back to the raw field
+only when no Correction exists. All six of the new regression tests
+constructed the identical scenario — a fact renamed via a `Correction`
+fact, with a second fact recorded natively under the new name — and were
+each independently confirmed fail-before/pass-after by stashing its own fix
+and re-running.
+
+**Reviewed and confirmed NOT this bug class** (raw `.ticker` reads that are
+safe): `PortfolioService.ts` (normalizing fresh user input at record time,
+not grouping existing facts); `systemValidation.ts`, `backfillRawTransactions.ts`,
+`duplicateDetection.ts` (`Trade`/`TradeAllocation`/`TimelineEvent.ticker` —
+legacy tables `TradeService.renameTickerEverywhere` mutates directly, always
+current); `evidenceCoverage.ts` (per-upload document classification, a
+narrower question); `ledgerProjection.ts`'s own sell-side backfill loop
+(consumes the same `liveSellFactsByKey` map fixed in #6, no separate fix
+needed); `toCandidateSource`, duplicated between `ledgerEngine.ts` and
+`verificationEngine.ts` (a type-narrowing adapter, not a policy or identity
+decision).
+
+**Evidence**: 6 new regression tests (one per finding above), each
+confirmed fail-before/pass-after independently. Full suite 977/977 green
+(970 baseline for this pass + 6 new + 1 from the §9 pass counted once),
+`tsc --noEmit` clean, `arch:check` clean (2512 modules, zero dependency
+violations).
+
+### Final certification: five questions, answered with evidence
+
+**1. Can two modules still make different trust decisions from identical inputs? NO.**
+`evidenceAuthority.ts`'s `authorityRank`/`higherAuthority` is the sole field-value-authority implementation (§2); every caller (`lotManager.ts`'s
+provenance-adoption check, `evidenceIntelligence.ts`'s strongest-evidence
+reduce, `canonicalTransaction.ts`'s fee/tax fold) calls it directly, never
+reimplements it — confirmed by grep, all call sites read in full this
+session.
+
+**2. Can two modules still make different verification decisions from identical inputs? NO**, with one documented, deliberate exception that is a *scope*
+difference, not drift: `checkTickerMatch` is the sole existence/trust-gate
+implementation (§3); every real caller (`ImportPage.tsx`, `verificationEngine.ts`,
+`ledgerRebuild.ts`, `reconciliation.ts`) delegates the DECISION to it. What
+legitimately differs between callers is which DATA they feed it — a
+still-pending import batch vs. an already-committed ticker's full history —
+which is the correct, intentional design (§1), not two implementations of
+the same question.
+
+**3. Can one ticker still be interpreted differently by different subsystems? NO, as of this session's six fixes.**
+Before this pass, six modules independently derived "which facts belong to
+this ticker" from the raw, immutable ticker field instead of
+`resolveCurrentTicker` — a real, demonstrated way for a renamed ticker to be
+interpreted differently by `commitEngine.ts` vs. `evidenceIntelligence.ts`
+vs. `canonicalHoldings.ts` vs. `ledgerProjection.ts` simultaneously. All six
+are fixed and regression-tested with the identical rename scenario.
+
+**4. Can Official Broker Excel still receive different treatment in different modules? NO.**
+`isTickerFullyExcelSourced` (§8) is now the sole "exempt even from a
+disagreeing screenshot" predicate; its three real callers
+(`reconcilePositions`, `PortfolioDetailPage.tsx`, `ImportPage.tsx`'s
+zero-pending branch) all use it, each with a passing regression test proving
+an Invoice-only ticker (which does NOT get this exemption) is treated
+differently from a literal-Excel ticker (which does).
+
+**5. Can Policy Drift of this architectural class still exist? Answered honestly, not just "no":**
+this session ran four full repository search passes (raw ticker-field
+reads, `authorityRank`/source-literal comparisons, independent verdict
+recomputation, and a final adversarial sweep for copy/paste/wrapper
+patterns) and fixed every instance found, each with an independently
+verified fail-before/pass-after regression test. That is real, concrete
+evidence for every module actually inspected — all of `src/application`'s
+service layer and the `src/presentation` pages that consume it. It is not a
+mathematical proof that zero instances exist in code never touched by any
+of these greps (a codebase of 2512 modules cannot be manually re-read line
+by line in one session) — claiming that would be overclaiming, not
+certifying. The honest, evidence-backed answer: no remaining instance was
+found despite genuinely trying to find one, across every call site this
+session could enumerate and test.

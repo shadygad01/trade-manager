@@ -5,6 +5,10 @@ import type { VerifyAllParams } from "./verificationEngine";
 import type { PositionAggregate } from "./TradeService";
 import type { Upload } from "@domain/entities/Upload";
 
+function tickerCorrection(targetId: string, ticker: string): RawTransaction {
+  return { ...createRawTransaction({ kind: "Correction", source: "manual", payload: { targetId, patch: { ticker } } }), seq: 98 };
+}
+
 function buy(overrides: Partial<BuyExecutionPayload> & { id?: string; source?: RawTransaction["source"]; sourceUploadId?: string } = {}): RawTransaction {
   const { id, source, sourceUploadId, ...payloadOverrides } = overrides;
   const payload: BuyExecutionPayload = { ticker: "CSAG", shares: 100, price: 45.5, executionDate: "2026-02-01", ...payloadOverrides };
@@ -126,5 +130,27 @@ describe("evidenceGraph.buildEvidenceGraph", () => {
     const graph = buildEvidenceGraph("GHOST", { transactions: [], positions: [] });
     expect(graph.nodes).toEqual([]);
     expect(graph.edges).toEqual([]);
+  });
+
+  // Policy audit finding: relevantTxns used to filter by the raw, immutable
+  // t.ticker field, and toTransactionNode built each node's own `.ticker`
+  // from the raw payload.ticker — the same bug class already fixed in
+  // verificationEngine.ts/canonicalTransaction.ts/ledgerEngine.ts (same
+  // session). A ticker renamed via a Correction fact silently lost its
+  // pre-rename transaction node (and any corroborates/contradicts edge
+  // touching it) from the graph built for its current name.
+  it("still includes a pre-rename transaction node (under its current ticker) once its ticker has been corrected via a Correction fact", () => {
+    const preRename = buy({ id: "b1", ticker: "CSAG", executionDate: "2026-01-10" });
+    const rename = tickerCorrection("b1", "HRHO");
+    const postRename = buy({ id: "b2", ticker: "HRHO", executionDate: "2026-01-20" });
+    const params: VerifyAllParams = { transactions: [preRename, rename, postRename], positions: [emptyPosition("HRHO")] };
+
+    const hrhoGraph = buildEvidenceGraph("HRHO", params);
+    const txnNodes = hrhoGraph.nodes.filter((n) => n.kind === "transaction");
+    expect(txnNodes.map((n) => n.id).sort()).toEqual(["b1", "b2"]);
+    expect(txnNodes.every((n) => n.kind === "transaction" && n.ticker === "HRHO")).toBe(true);
+
+    const csagGraph = buildEvidenceGraph("CSAG", params);
+    expect(csagGraph.nodes.filter((n) => n.kind === "transaction")).toEqual([]);
   });
 });
