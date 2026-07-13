@@ -1,5 +1,6 @@
 import type { ParsedOrderEvidence, ParsedTradeCandidate } from "@domain/entities/Upload";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { parseTimeToMinutes } from "./duplicateDetection";
 
 /**
  * An account-wide "Orders" timeline screenshot (see ParsedOrderEvidence) is
@@ -31,17 +32,30 @@ function pricesClose(a: number, b: number, tolerance: number): boolean {
  * Both `ParsedOrderEvidence.time` (the dated "Transactions" shape) and
  * `ParsedTradeCandidate.time` are only ever set when OCR actually read a
  * real timestamp — unlike Trade.executionTime, there's no "00:00" unknown
- * placeholder at this layer, so a plain defined-and-differing check is
- * enough. Two rows that both carry a real, differing time are provably two
- * different real orders, the same signal duplicateDetection's
+ * placeholder at this layer. Two rows that both carry a real, differing time
+ * are provably two different real orders, the same signal duplicateDetection's
  * sameCandidateExecution/timesConflict already apply elsewhere — without it,
  * two same-day same-side same-total orders could cross-confirm/misfile
  * against each other via the wrong pairing (orderEvidenceContentKey already
  * folds time into its own cross-file dedup key, so this brings the matching
  * logic in line with what the dedup key already treats as meaningful).
+ *
+ * Reuses duplicateDetection's own `parseTimeToMinutes` normalization rather
+ * than comparing raw strings — the exact fix already applied there for the
+ * ACAMD 12h/24h format-mismatch bug ("12:51PM" vs "12:51" describe the same
+ * clock time but never compare equal as strings). This module's two sources
+ * happen to print a consistent format today, so the raw-string comparison
+ * was never observed to misfire here — but it's the identical risk shape
+ * ROADMAP.md's own "Next recommended sprint" note flagged this file for, and
+ * normalizing before comparing is strictly safer with no behavior change for
+ * any input that was already comparing correctly.
  */
 function timesConflict(a?: string, b?: string): boolean {
-  return a !== undefined && b !== undefined && a !== b;
+  if (a === undefined || b === undefined) return false;
+  const minutesA = parseTimeToMinutes(a);
+  const minutesB = parseTimeToMinutes(b);
+  if (minutesA === undefined || minutesB === undefined) return a !== b;
+  return minutesA !== minutesB;
 }
 
 /**

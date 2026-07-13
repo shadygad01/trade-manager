@@ -12,7 +12,16 @@ import { Money } from "@domain/value-objects/Money";
  * append-only contract every application service codes against stays intact.
  */
 
-const allTables = (db: PortfolioOsDatabase) => [
+/**
+ * Exported (only) so `purge.test.ts` can assert this list never silently
+ * drifts from the live Dexie schema — see that test's own doc comment. A
+ * table added to db.ts's schema and forgotten here previously shipped as a
+ * real bug (`pendingExecutions` was missing for a time, leaving orphaned
+ * rows behind after a "Reset" — see docs/ROADMAP.md's "Reset All Data
+ * audit" entry). No other file should import this — every other caller
+ * goes through purgeTickerData/purgeAllData.
+ */
+export const allTables = (db: PortfolioOsDatabase) => [
   db.portfolios,
   db.trades,
   db.tradeAllocations,

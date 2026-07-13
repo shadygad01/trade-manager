@@ -71,7 +71,7 @@ const UNKNOWN_TIME = "00:00";
 // so either format compares correctly against the other; an unrecognized
 // format falls back to raw string equality rather than silently treating it
 // as unknown.
-function parseTimeToMinutes(raw: string): number | undefined {
+export function parseTimeToMinutes(raw: string): number | undefined {
   const ampm = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(raw.trim());
   if (ampm) {
     let hours = parseInt(ampm[1], 10) % 12;

@@ -88,6 +88,11 @@ describe("findOrderConfirmedKeys", () => {
     const keys = findOrderConfirmedKeys([{ key: "a", candidate: candidate({ time: "2:15PM" }) }], [evidence()]);
     expect(keys.has("a")).toBe(true);
   });
+
+  it("confirms when the two sides print the SAME clock time in different formats — 12h/24h format alone is never a real conflict (the ACAMD bug class, ported to this module's own timesConflict)", () => {
+    const keys = findOrderConfirmedKeys([{ key: "a", candidate: candidate({ time: "12:51" }) }], [evidence({ time: "12:51PM" })]);
+    expect(keys.has("a")).toBe(true);
+  });
 });
 
 describe("findOrderConfirmedKeys — dated Transactions-list evidence", () => {
