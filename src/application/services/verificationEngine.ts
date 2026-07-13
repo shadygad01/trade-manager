@@ -24,7 +24,7 @@ import { latestByTicker } from "./reconciliation";
 import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "./mismatchResolver";
 import { findLastBalancedDate, type LastBalancedPoint } from "./netShareTimeline";
 import { buildTickerConstraintReport, type TickerConstraintReport } from "./constraintValidation";
-import { isRetracted } from "./rawTransactionFolds";
+import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
 import type { PositionAggregate } from "./TradeService";
 
 /**
@@ -81,6 +81,21 @@ function toCandidateSource(source: RawTransaction["source"]): ParsedTradeCandida
   return undefined;
 }
 
+/**
+ * Policy audit finding: groups by resolveCurrentTicker(transactions, txn),
+ * not the raw, immutable payload.ticker — the same "reading ticker directly
+ * silently stops recognizing a renamed fact" bug class already found and
+ * fixed repeatedly elsewhere in this codebase (reconciliation.ts's
+ * isTickerFullyOfficialBrokerExcelSourced, rawTransactionFolds.ts's
+ * findLiveExecutionFact, TradeService.ts's ensureBuyFact, ledgerProjection.ts's
+ * resolveExistingTradeForLot) but missed here. Without this, a ticker renamed
+ * via TradeService.renameTickerEverywhere that later accumulates NEW,
+ * natively-recorded facts under its corrected name would have its
+ * pre-rename and post-rename facts silently split into two separate
+ * checkTickerMatch buckets by computeVerification's own per-ticker grouping —
+ * this module's only internal grouping step, feeding the live commitEngine.ts
+ * commit-decision path, not just a display view.
+ */
 function toTradeCandidateEntries(transactions: RawTransaction[]): TradeCandidateEntry[] {
   const entries: TradeCandidateEntry[] = [];
   for (const txn of transactions) {
@@ -90,7 +105,7 @@ function toTradeCandidateEntries(transactions: RawTransaction[]): TradeCandidate
       key: txn.id,
       txn,
       candidate: {
-        ticker: payload.ticker,
+        ticker: resolveCurrentTicker(transactions, txn) ?? payload.ticker,
         companyName: "companyName" in payload ? payload.companyName : undefined,
         side: txn.kind === "BuyExecution" ? "BUY" : "SELL",
         shares: payload.shares,

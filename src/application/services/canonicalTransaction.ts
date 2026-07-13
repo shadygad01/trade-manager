@@ -6,6 +6,7 @@ import { timesConflict } from "./duplicateDetection";
 import { verifyAllDetailed, type VerifyAllParams, type VerificationVerdict } from "./verificationEngine";
 import { buildEvidenceGraph, type EvidenceEdge } from "./evidenceGraph";
 import { higherAuthority } from "./evidenceAuthority";
+import { resolveCurrentTicker } from "./rawTransactionFolds";
 
 /**
  * Canonical Transaction Identity: every execution as exactly ONE object,
@@ -124,12 +125,23 @@ function clusterByTimeCompatibility(rows: RawTransaction[]): RawTransaction[][] 
  * business reasoning needs (fees/taxes/evidence sources/missing/
  * conflicting/status), rather than requiring a caller to reconstruct all of
  * that from the graph and verification result by hand every time.
+ *
+ * Policy audit finding: `relevant` used to filter by the raw, immutable
+ * `t.ticker` field instead of folding through `resolveCurrentTicker` — the
+ * same bug class already fixed elsewhere in this codebase (see
+ * verificationEngine.ts's own toTradeCandidateEntries fix, same session). A
+ * ticker renamed via a Correction fact would silently lose its pre-rename
+ * executions from this ticker's Evidence Intelligence view (getEvidenceIntelligence),
+ * even though verifyTicker (called just above via verifyAllDetailed, and
+ * directly by getEvidenceIntelligence) already correctly folds them in.
  */
 export function buildCanonicalTransactions(ticker: string, params: VerifyAllParams, uploads: Upload[] = []): CanonicalTransaction[] {
   const normalizedTicker = normalizeTicker(ticker);
   const { transactions: verdicts } = verifyAllDetailed(params);
   const graph = buildEvidenceGraph(normalizedTicker, params, uploads);
-  const relevant = params.transactions.filter((t) => t.ticker !== undefined && normalizeTicker(t.ticker) === normalizedTicker);
+  const relevant = params.transactions.filter(
+    (t) => normalizeTicker(resolveCurrentTicker(params.transactions, t) ?? "") === normalizedTicker,
+  );
 
   const groups = new Map<string, RawTransaction[]>();
   for (const txn of relevant) {

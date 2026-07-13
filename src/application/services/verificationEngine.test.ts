@@ -67,6 +67,10 @@ function retraction(targetId: string): RawTransaction {
   return { ...createRawTransaction({ kind: "Retraction", source: "manual", payload }), seq: 99 };
 }
 
+function tickerCorrection(targetId: string, ticker: string): RawTransaction {
+  return { ...createRawTransaction({ kind: "Correction", source: "manual", payload: { targetId, patch: { ticker } } }), seq: 98 };
+}
+
 function run(transactions: RawTransaction[], positions: PositionAggregate[] = [emptyPosition()]) {
   const params: VerifyAllParams = { transactions, positions };
   return verifyAll(params);
@@ -230,6 +234,33 @@ describe("verificationEngine — verifyAllDetailed/verifyTicker (additive contra
   it("verifyTicker returns undefined for a ticker with no Buy/Sell rows in scope", () => {
     const params: VerifyAllParams = { transactions: [buy({ ticker: "COMI" })], positions: [emptyPosition()] };
     expect(verifyTicker("HRHO", params)).toBeUndefined();
+  });
+
+  // Policy audit finding: computeVerification's own internal per-ticker
+  // grouping (toTradeCandidateEntries) used to key off the raw, immutable
+  // payload.ticker instead of folding through resolveCurrentTicker — the
+  // same bug class already fixed elsewhere (reconciliation.ts's
+  // isTickerFullyOfficialBrokerExcelSourced, rawTransactionFolds.ts's
+  // findLiveExecutionFact, TradeService.ts's ensureBuyFact) but missed here.
+  // A ticker renamed via a Correction fact, which later accumulates a NEW
+  // fact recorded natively under the corrected name, would have its
+  // pre-rename and post-rename facts silently split into two separate
+  // checkTickerMatch buckets — each seeing only part of the real position —
+  // inside commitEngine.ts's own live commit-decision path (verifyAll is
+  // its only verification call).
+  it("folds a renamed ticker's pre-rename fact together with its post-rename facts into one checkTickerMatch bucket, not two", () => {
+    const preRename = buy({ id: "b1", ticker: "COMI", shares: 100 });
+    const rename = tickerCorrection("b1", "HRHO");
+    const postRename = buy({ id: "b2", ticker: "HRHO", shares: 50 });
+    const params: VerifyAllParams = { transactions: [preRename, rename, postRename], positions: [emptyPosition("HRHO")] };
+
+    const hrho = verifyTicker("HRHO", params);
+    expect(hrho?.netShares).toBe(150); // both facts, not just the native 50
+    expect(hrho?.pendingBuyShares).toBe(150);
+
+    // The old, pre-rename ticker name must have nothing live left under it —
+    // its sole fact was renamed away, not duplicated.
+    expect(verifyTicker("COMI", params)).toBeUndefined();
   });
 
   it("a ticker whose entries all came from the official broker Excel export is broker-excel-verified, needing no My Position screenshot", () => {

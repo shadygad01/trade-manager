@@ -203,7 +203,89 @@ neither.
 - Full suite 970/970 green (964 baseline + 6 new), `tsc --noEmit` clean,
   `arch:check` clean (zero dependency violations, 2512 modules).
 
-**No other inconsistency of this class was found.** The remaining trust-policy
-call sites (`constraintValidation.ts`, `completenessEngine.ts`,
-`checkTickerMatch` itself) already draw the Excel/Invoice distinction
-correctly and were left unchanged.
+## 9. Follow-up consolidation pass — two more instances of an established bug class, found and fixed
+
+A second pass, requested specifically to search the repository for
+duplicated/drifted policy logic (not to re-audit already-settled ground),
+grepped every `authorityRank(`/`=== "official-broker-excel"`/`=== "invoice"`
+call site outside the files already covered above. Two real findings, both
+the exact "reads the raw, immutable ticker field instead of folding through
+`resolveCurrentTicker`" bug class this codebase has already found and fixed
+repeatedly (`reconciliation.ts`'s `isTickerFullyOfficialBrokerExcelSourced`,
+`rawTransactionFolds.ts`'s `findLiveExecutionFact`, `TradeService.ts`'s
+`ensureBuyFact`, `ledgerProjection.ts`'s `resolveExistingTradeForLot`) — but
+missed in two modules that group Buy/Sell facts by ticker independently of
+those established helpers.
+
+**Finding A — `verificationEngine.ts`'s `toTradeCandidateEntries`** grouped
+by the raw `payload.ticker` instead of `resolveCurrentTicker(transactions,
+txn)`. This is `computeVerification`'s only internal per-ticker grouping
+step, and `computeVerification` (via `verifyAll`) is `commitEngine.ts`'s only
+verification call — i.e. this feeds the live commit-decision path, not a
+display view. A ticker renamed via a Correction fact that later accumulates
+a new fact recorded natively under the corrected name would have its
+pre-rename and post-rename facts silently split into two separate
+`checkTickerMatch` buckets, each seeing only part of the real position.
+Fixed by resolving each fact's current ticker before grouping.
+
+**Finding B — `canonicalTransaction.ts`'s `buildCanonicalTransactions`**
+filtered `params.transactions` by the raw `t.ticker` field for the same
+reason. This feeds `evidenceIntelligence.ts`'s `getEvidenceIntelligence` —
+the "Evidence Intelligence" panel's confirmed/needs-review/rejected view for
+a ticker. A renamed ticker's pre-rename execution would silently disappear
+from that view, even though `verifyTicker` (called by the same function,
+one line above, and now fixed via Finding A) already correctly includes it.
+Fixed the same way.
+
+**Evidence**:
+- `src/application/services/verificationEngine.test.ts` — new test: a Buy
+  fact renamed COMI→HRHO via Correction, plus a second Buy fact recorded
+  natively under HRHO, must fold into one 150-share HRHO verdict, not a
+  50-share HRHO verdict plus an orphaned 100-share COMI one. Confirmed
+  fail-before (`netShares` was 50, not 150) / pass-after by stashing the fix.
+- `src/application/services/canonicalTransaction.test.ts` — analogous test:
+  both the pre- and post-rename executions must appear under the ticker's
+  current name (2 canonical transactions, not 1) and none under the old
+  name. Confirmed fail-before (1, not 2) / pass-after the same way.
+- Full suite 972/972 green (970 + 2 new), `tsc --noEmit` clean, `arch:check`
+  clean (2512 modules, zero violations).
+
+**Reviewed and confirmed NOT drift** (same repo-wide sweep, no code changed):
+- `lotManager.ts`'s `authorityRank(adoptable.source) > authorityRank("manual")`
+  and `evidenceIntelligence.ts`'s `strongestEvidenceSource` reduce — both use
+  the rank for exactly its documented purpose (field-value/provenance
+  authority, §2), not the existence/trust gate (§3). Not the same question,
+  not drift.
+- `duplicateDetection.ts`'s `isInvoiceSourced` (a narrower "prefer Invoice
+  when discarding one of two exact-duplicate candidates" heuristic) and
+  `evidenceCoverage.ts`'s per-upload `source === "invoice"/"official-broker-excel"`
+  branches (classifying what a whole uploaded *document* proves, for the
+  Minimal Document recommendation only) — both answer different, narrower
+  questions than §2 or §3 and don't share their failure mode.
+- `toCandidateSource` is duplicated verbatim between `ledgerEngine.ts` and
+  `verificationEngine.ts` — a pure type-narrowing adapter (`RawTransactionSource`
+  → `ParsedTradeCandidate["source"]`), not a policy decision. Flagged for
+  awareness, not fixed here: it decides nothing about trust or evidence, so
+  it's out of this task's scope (business-policy duplication), and touching
+  two already-tested modules for a cosmetic, non-behavioral reason wasn't
+  worth the risk.
+
+## 10. Final inventory — one canonical implementation per policy decision
+
+| Policy decision | Canonical implementation | Duplicated/drifted callers found | Status |
+|---|---|---|---|
+| Field-value authority (which source's price/fees/shares/date wins) | `evidenceAuthority.ts`: `authorityRank`, `higherAuthority` | None — every caller (`lotManager.ts`, `evidenceIntelligence.ts`, `canonicalTransaction.ts`'s fee/tax fold) calls these directly | Canonical, single implementation |
+| Existence/trustworthiness gate (does this ticker need a screenshot) | `importVerification.ts`: `checkTickerMatch` | None — every caller (`ImportPage.tsx`, `verificationEngine.ts`, `ledgerRebuild.ts`, `reconciliation.ts`) delegates the decision itself to this one function | Canonical, single implementation |
+| "Exempt even from a disagreeing screenshot" (Excel-only carve-out) | `reconciliation.ts`: `isTickerFullyExcelSourced` (new) | `reconcilePositions`, `PortfolioDetailPage.tsx`, `ImportPage.tsx` previously used the broader rank-based `isTickerFullyOfficialBrokerExcelSourced` for this | **Fixed** (§8) |
+| "Rank ≥ Excel, for closed-position/coverage purposes" | `reconciliation.ts`: `isTickerFullyOfficialBrokerExcelSourced` (unchanged) | None once §8's fix landed | Canonical, single implementation |
+| Historical completeness classification | `completenessEngine.ts`: `classify`/`assessTickerCompleteness` | None | Canonical, single implementation |
+| Arithmetic contradiction vs. diagnosis | `constraintValidation.ts`: `evaluateInventoryConstraint`/`diagnoseInventoryContradiction` | None | Canonical, single implementation |
+| Per-ticker grouping of Buy/Sell facts (correction-aware) | `rawTransactionFolds.ts`: `resolveCurrentTicker` | `verificationEngine.ts`, `canonicalTransaction.ts` previously grouped by the raw ticker field instead | **Fixed** (§9) |
+| Cross-source/order/aggregate corroboration | `duplicateDetection.ts` (`findCrossSourceVerifiedKeys`, `findAggregateStatementMatches`), `orderEvidence.ts` (`findOrderConfirmedKeys`) | None | Canonical, single implementation |
+| What a document (upload) proves coverage for | `evidenceCoverage.ts`: `buildCoverageClaims` | None | Canonical, single implementation |
+
+Every row above has exactly one canonical implementation as of this audit.
+The two "Fixed" rows are the only duplication proven to exist; every other
+policy decision in the repository already had a single, correctly-scoped
+implementation and was left untouched, per this task's own instruction not
+to refactor working code without proof.

@@ -14,6 +14,10 @@ function emptyPosition(ticker = "SKPC"): PositionAggregate {
   return { ticker, totalShares: 0, costBasis: 0, avgCost: 0, openTrades: [] };
 }
 
+function tickerCorrection(targetId: string, ticker: string): RawTransaction {
+  return { ...createRawTransaction({ kind: "Correction", source: "manual", payload: { targetId, patch: { ticker } } }), seq: 98 };
+}
+
 describe("canonicalTransaction.buildCanonicalTransactions", () => {
   it("merges two documents describing the same execution into ONE canonical transaction, never two", () => {
     const statementRead = buy({ id: "stmt-1", source: "statement", fees: 2 });
@@ -92,5 +96,25 @@ describe("canonicalTransaction.buildCanonicalTransactions", () => {
 
     expect(transactions).toHaveLength(1);
     expect(transactions[0].evidenceSources.sort()).toEqual(["invoice-1", "stmt-1"]);
+  });
+
+  // Policy audit finding: `relevant` used to filter by the raw, immutable
+  // t.ticker field instead of folding through resolveCurrentTicker (the
+  // same bug class already fixed in verificationEngine.ts's own
+  // toTradeCandidateEntries, same session). A ticker renamed via a
+  // Correction fact silently lost its pre-rename execution from this
+  // ticker's Evidence Intelligence view.
+  it("still includes a pre-rename execution once its ticker has been corrected, and drops it from the old ticker's view", () => {
+    const preRename = buy({ id: "b1", ticker: "SKPC", shares: 20, executionDate: "2026-01-10" });
+    const rename = tickerCorrection("b1", "HRHO");
+    const postRename = buy({ id: "b2", ticker: "HRHO", shares: 30, executionDate: "2026-01-20" });
+    const params: VerifyAllParams = { transactions: [preRename, rename, postRename], positions: [emptyPosition("HRHO")] };
+
+    const hrho = buildCanonicalTransactions("HRHO", params);
+    expect(hrho).toHaveLength(2); // both executions, not just the natively-recorded one
+    const allEvidenceSources = hrho.flatMap((t) => t.evidenceSources);
+    expect(allEvidenceSources.sort()).toEqual(["b1", "b2"]);
+
+    expect(buildCanonicalTransactions("SKPC", params)).toHaveLength(0);
   });
 });
