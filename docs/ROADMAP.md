@@ -2420,3 +2420,91 @@ same `decision`/`inputSummary`/`outputSummary` values landed in storage.
   `diagnoseInventoryContradiction`'s inputs are sourced from — should get the same treatment, since their
   outputs also reach the user directly (the reconcile-suggestion and recovery-plan panels) without a
   Diagnostics Center decision record of their own today.
+
+### Sprint 16 — Real data-integrity defect found via the Diagnostics Center: converging duplicate-authority live facts
+
+A live investigation session using the shipped Diagnostics Center (`TickerAuthorityPanel`,
+`FactLifecyclePanel`) on real ABUK data traced a specific `source: "backfill"` `BuyExecution` fact
+(`d8c82604-...`) back to `ensureLegacyFactsExist` (`ledgerProjection.ts`) and proved it coexists, live,
+alongside an already-existing `source: "official-broker-excel"` fact for the exact same execution
+(canonicalKey `ABUK|BUY|2023-02-01|49|42.4`) — the real root cause of the "Needs broker screenshot"
+verdict Sprint 15 had only diagnosed, not fixed.
+
+**Root cause**: `duplicateMatch`/`upgradeFact` (`ImportPage.tsx`) — the only mechanism in the codebase that
+ever reconciles two live facts of the same execution by authority — only ever fires as a side effect of a
+NEW candidate being extracted in an active Import session. A fact created by any other writer (most
+notably `ensureLegacyFactsExist`'s reactive per-commit gap-fill) never passes through that check at all,
+so two live facts of the same execution can coexist indefinitely with nothing to converge them — a
+structural gap in the convergence step itself, not (as originally scoped) in Constraint Evaluation,
+Verification, or Authority Ranking, which this investigation left untouched by direct instruction. Gap
+Filling itself is a partial exception — see finding 3 below, surfaced as a side effect of hardening this
+fix, not by re-auditing `ensureLegacyFactsExist`'s own logic.
+
+**The fix**: `reconcileDuplicateAuthority` (`commitEngine.ts`), a new, fully generic (no
+ticker/portfolio/source hardcoding) convergence pass — whenever more than one live fact shares a
+canonicalKey, only the highest-`authorityRank` one survives; a genuine tie (equal rank) is never resolved
+automatically, mirroring `higherAuthority`'s own rule. Wired into `commitTicker` immediately after
+`ensureLegacyFactsExist`, scoped to one ticker per call — never a database-wide sweep, the same safety
+boundary BF-1's Validation Design already established for this codebase.
+
+**Three real regressions caught building this, not shipped** — none discovered by a single test run; all
+three surfaced only by repeatedly re-running the full suite (this class of bug being timing/ordering
+sensitive is itself the reason a single green run was never treated as sufficient):
+1. First attempt called the existing `retractRawTransaction`/`appendAndMaybeCommit` from inside
+   `reconcileDuplicateAuthority` — which itself runs inside `commitTicker`. `appendAndMaybeCommit`
+   reactively re-triggers `commitTicker` on every append, so this created uncontrolled recursive
+   re-entrant commits — exactly the hazard `ensureLegacyFactsExist`'s own doc comment already warns about
+   avoiding. Caught by the full regression suite: `crossTransactionIsolation.test.ts`'s twin-lot test
+   started throwing "Trade not found" — a still-open Trade transiently deleted by the recursive commit's
+   own `projectLegacyTicker` run racing the outer call's. Fixed by writing every fact directly via
+   `repos.rawTransactions.append`, matching `ensureLegacyFactsExist`'s established discipline for code
+   that runs at this recursion depth.
+2. Second, deeper issue, caught by the same test after the recursion fix: canonicalKey
+   (ticker/date/shares/price) alone is not proof two facts describe the same execution —
+   `crossTransactionIsolation.test.ts`'s entire "twin lot" suite exists because two genuinely distinct
+   real executions routinely share that exact value (two same-price same-day orders). The first version
+   of this fix ignored `executionTime` entirely and wrongly merged a twin-lot pair sharing that test's
+   canonicalKey. Fixed by reusing `duplicateDetection.timesConflict` (the same already-tested primitive
+   `findLiveExecutionFact` uses for this exact distinction): if any pair within a canonicalKey group has a
+   genuinely conflicting `executionTime`, the whole group is left untouched — conservative by design.
+3. Third, the deepest: re-running the same twin-lot test 5-8 times in a row (not just once) still showed
+   intermittent failures even after fix 2 — not flaky, reproducible with debug tracing. Root cause:
+   `ensureLegacyFactsExist` itself can nondeterministically mint a redundant gap-fill `BuyExecution` fact
+   for one twin lot even while that lot's own already-adopted extraction-time fact is still live —
+   apparently order-dependent on `legacyTrades.sort((a,b) => a.id.localeCompare(b.id))` sorting by random
+   UUID when 2+ trades share one time-blind canonicalKey. The redundant fact's `executionTime` can
+   coincidentally match its sibling's, defeating the `timesConflict` guard from finding 2. This is a real,
+   pre-existing Gap Filling defect, independent of this session's own fix — but fixing `ensureLegacyFactsExist`
+   itself was explicitly out of scope for this investigation. Worked around at the `reconcileDuplicateAuthority`
+   level instead: when trades access is available (always true from `commitTicker`'s real call site), a
+   canonicalKey legitimately claimed by 2+ live `Trade` rows is twin-lot-eligible by definition and the
+   whole group is skipped unconditionally, regardless of what `timesConflict` finds — this generic pass
+   only ever converges the unambiguous single-trade, two-fact case it was built for. Confirmed stable
+   across 8 consecutive runs of the previously-intermittent test after this guard, plus 3 consecutive full
+   suite runs.
+
+**Verified**: a new test file (`commitEngine.reconcileDuplicateAuthority.test.ts`, 8 tests, entirely
+synthetic fixtures — `SYNTH1`–`SYNTH7`, never the real ABUK numbers) covering: Buy-side retraction across
+multiple arbitrary source pairs and tickers/portfolios (proving genericity, not an ABUK-specific fix);
+the tie-safety rule; the twin-lot safety rule (the exact regression caught above, now a permanent
+guard); Sell-side re-pointing of a live `SellAllocationDecision`; and an integration-level test calling
+the real `commitTicker` choke point directly, not just the isolated function. Every test in this file was
+run against the pre-fix code first and confirmed to fail (`TypeError: ... is not a function` for 7 of them,
+a real assertion failure for the `commitTicker` integration test), then confirmed to pass after — true
+TDD discipline, not just tests written to match the implementation. Full suite: 1043/1044 passing (8 new;
+1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean, `npm run arch:check` clean (confirmed
+no circular dependency introduced), production build clean.
+
+- **Files modified**: `src/application/services/commitEngine.ts` (new `reconcileDuplicateAuthority`
+  export, wired into `commitTicker`); `src/application/services/commitEngine.reconcileDuplicateAuthority.test.ts`
+  (new, 8 tests).
+- **Next recommended sprint**: still Phase 2b and the Sprint 14/15 disclosed diagnostics-coverage gaps.
+  Two new items from this sprint: (1) finding 3 above is a real, reproducible `ensureLegacyFactsExist`
+  defect (nondeterministic redundant fact creation when 2+ trades share a time-blind canonicalKey),
+  disclosed but deliberately not fixed here — worth a dedicated Gap Filling session with the
+  investigation's own directive lifted. (2) `reconcileDuplicateAuthority` only ever compares facts already
+  sharing an identical canonicalKey — it does not (and structurally cannot, without real corroboration
+  data) catch a duplicate-authority pair whose values differ slightly (e.g. a rounding difference between
+  two documents' price fields) the way `duplicateMatch`'s OCR-noise tolerance does for an active Import
+  session. Worth a future look at whether that tolerance should extend to this generic pass too, once real
+  usage shows whether stale near-duplicate facts of this shape actually occur.

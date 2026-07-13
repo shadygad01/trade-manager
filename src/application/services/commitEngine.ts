@@ -5,6 +5,9 @@ import {
   type PortfolioAssignmentPayload,
   type CorrectionPayload,
   type RetractionPayload,
+  type BuyExecutionPayload,
+  type SellExecutionPayload,
+  type SellAllocationDecisionPayload,
 } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { generateId } from "@domain/value-objects/id";
@@ -13,6 +16,9 @@ import { generateLedgerEvents } from "./ledgerEngine";
 import { generateAllocations } from "./allocationEngine";
 import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
 import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } from "./ledgerProjection";
+import { canonicalKey } from "./ledgerRebuild";
+import { authorityRank } from "./evidenceAuthority";
+import { timesConflict } from "./duplicateDetection";
 
 /**
  * Commit Engine: the only code path that ever writes to ledgerCache /
@@ -173,6 +179,19 @@ export async function commitTicker(
       console.error("ensureLegacyFactsExist failed — skipping legacy projection for this commit:", err);
       projection = undefined;
     }
+  }
+
+  // Converges any live facts of this ticker left duplicated by a writer
+  // other than Import's own duplicateMatch/upgradeFact path — most notably
+  // ensureLegacyFactsExist just above, which has no reconciliation step of
+  // its own. Runs before verification reads the fact set, so a converged
+  // ticker's Verification/Replay/Allocation decisions this same commit never
+  // see the now-retracted loser. Never fatal, same isolation as
+  // ensureLegacyFactsExist/projectLegacyTicker.
+  try {
+    await reconcileDuplicateAuthority(projection ?? repos, normalizedTicker);
+  } catch (err) {
+    console.error("reconcileDuplicateAuthority failed — continuing commit with facts as-is:", err);
   }
 
   const relevant = await relevantTradeTransactions(repos, portfolioId, normalizedTicker);
@@ -448,6 +467,180 @@ export async function retractRawTransaction(
     diagnostics,
     { writer: "commitEngine.ts", function: "retractRawTransaction", file: "src/application/services/commitEngine.ts", reason: reason ?? "Retracted a raw transaction" }
   );
+}
+
+/**
+ * Closes a structural gap `duplicateMatch`/`upgradeFact` (ImportPage.tsx)
+ * never covers: those only ever reconcile a fact against a NEW candidate
+ * actively being extracted in an Import session, comparing it against the
+ * legacy Trade/TradeAllocation projection. Any OTHER writer that appends a
+ * live execution fact outside that flow — e.g. `ensureLegacyFactsExist`
+ * (ledgerProjection.ts) reactively gap-filling a legacy Trade — never passes
+ * through that check at all, so two live facts describing the identical
+ * execution (same canonicalKey) can coexist indefinitely with nothing to
+ * converge them, regardless of which one was appended first, which ticker,
+ * or which portfolio. This is that missing convergence step, generic across
+ * every ticker/portfolio/execution: whenever more than one live fact shares
+ * a canonicalKey, only the highest-`authorityRank` one survives.
+ *
+ * Deliberately scoped to one (already-resolved) ticker per call, run from
+ * `commitTicker` right after `ensureLegacyFactsExist`, never a
+ * database-wide sweep — the same "no unattended full-portfolio rewrite"
+ * safety boundary this codebase's BF-1 Validation Design established. A
+ * genuine tie (`authorityRank` equal — e.g. two "manual" facts) is never
+ * resolved automatically, mirroring `higherAuthority`'s own "ties favor
+ * neither" rule; only a STRICTLY higher-ranked survivor triggers anything.
+ *
+ * canonicalKey alone (ticker/date/shares/price) is NOT sufficient proof two
+ * facts describe the SAME execution — crossTransactionIsolation.test.ts's
+ * whole "twin lot" suite exists because two genuinely DISTINCT real
+ * executions routinely share that exact value (e.g. two same-price
+ * same-day orders). A first version of this function ignored that and
+ * wrongly merged a twin-lot pair in exactly that test, caught by the
+ * regression suite before shipping. `findLiveExecutionFact`'s own
+ * `timesConflict` tie-break is the established, already-tested primitive
+ * for this distinction, reused first: if ANY pair within a canonicalKey
+ * group has a genuinely conflicting `executionTime` (proving they're
+ * different real orders, not one execution described twice), the WHOLE
+ * group is left untouched.
+ *
+ * That alone still isn't enough: a SECOND real, reproduced defect (same
+ * test, same investigation) showed `ensureLegacyFactsExist` can itself
+ * nondeterministically mint a redundant gap-fill fact for one twin lot even
+ * while its own already-adopted extraction-time fact is still live — a
+ * pre-existing Gap Filling behavior, out of this fix's scope to correct
+ * (see docs/ROADMAP.md Sprint 16). When that happens, the redundant fact's
+ * `executionTime` can coincidentally match its sibling's, defeating the
+ * `timesConflict` check alone. The second, decisive guard: when trades
+ * access is available (it always is from `commitTicker`'s own real call
+ * site), a canonicalKey legitimately claimed by TWO OR MORE live `Trade`
+ * rows is a twin-lot-eligible key by definition — skip the whole group
+ * unconditionally, regardless of what `timesConflict` found, since this
+ * generic pass has no way to safely disambiguate which fact belongs to
+ * which trade in that shape. Only ever converges the unambiguous case this
+ * was built for: exactly one real trade, two facts describing it.
+ *
+ * Buy-side: a Buy fact is never referenced by another fact's id, so a plain
+ * retraction is the whole fix (mirrors `upgradeFact`'s own BUY branch).
+ * Sell-side: also re-points a live SellAllocationDecision referencing the
+ * losing fact at the survivor instead of leaving it dangling — the same
+ * swap provenanceRepair.ts's own `upgradeSellExecutionFact` performs for
+ * its narrower ("manual"-only) historical case, inlined here rather than
+ * imported to avoid a circular dependency (provenanceRepair.ts already
+ * imports this file for `retractRawTransaction`/`appendAndMaybeCommit`).
+ *
+ * Every write below goes straight to `repos.rawTransactions.append` —
+ * never `retractRawTransaction`/`appendAndMaybeCommit` — for the exact
+ * reason `ensureLegacyFactsExist`'s own doc comment states: this runs
+ * INSIDE `commitTicker`, and `appendAndMaybeCommit` reactively re-triggers
+ * `commitTicker` on every append. A real, reproduced regression caught this
+ * the hard way (the same twin-lot suite above, on a first attempt at this
+ * fix): the recursive re-entrant commit interleaved with the outer call's
+ * own `projectLegacyTicker` run and transiently deleted a still-open Trade
+ * row before its own Sell could reference it. Diagnostics tracing is
+ * intentionally skipped here for the same reason `ensureLegacyFactsExist`
+ * has none — there is no `WriterContext`-carrying choke point available at
+ * this recursion depth that doesn't reintroduce the same hazard.
+ */
+export async function reconcileDuplicateAuthority(
+  repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
+  ticker: string
+): Promise<number> {
+  const normalized = normalizeTicker(ticker);
+  let convergedCount = 0;
+
+  // A canonicalKey legitimately claimed by 2+ live Trades is twin-lot-
+  // eligible by definition — see this function's own doc comment for why
+  // that alone rules out automatic reconciliation for the whole key,
+  // independent of what the timesConflict check below finds.
+  let buyKeysWithMultipleTrades: Set<string> | undefined;
+  if (repos.trades) {
+    const allTrades = await repos.trades.getAll();
+    const countByKey = new Map<string, number>();
+    for (const t of allTrades) {
+      if (normalizeTicker(t.ticker) !== normalized) continue;
+      const key = canonicalKey({ side: "BUY", ticker: normalized, date: t.executionDate, shares: t.shares, price: t.entryPrice });
+      countByKey.set(key, (countByKey.get(key) ?? 0) + 1);
+    }
+    buyKeysWithMultipleTrades = new Set([...countByKey.entries()].filter(([, count]) => count >= 2).map(([key]) => key));
+  }
+
+  for (const kind of ["BuyExecution", "SellExecution"] as const) {
+    const all = await repos.rawTransactions.getAll();
+    const live = all.filter((t) => {
+      if (t.kind !== kind) return false;
+      if (isRetracted(all, t.id)) return false;
+      const resolved = resolveCurrentTicker(all, t);
+      return resolved !== undefined && normalizeTicker(resolved) === normalized;
+    });
+
+    const byKey = new Map<string, RawTransaction[]>();
+    for (const t of live) {
+      const p = t.payload as BuyExecutionPayload | SellExecutionPayload;
+      const key = canonicalKey({
+        side: kind === "BuyExecution" ? "BUY" : "SELL",
+        ticker: normalized,
+        date: p.executionDate,
+        shares: p.shares,
+        price: p.price,
+      });
+      const list = byKey.get(key) ?? [];
+      list.push(t);
+      byKey.set(key, list);
+    }
+
+    for (const [key, facts] of byKey.entries()) {
+      if (facts.length <= 1) continue;
+      if (kind === "BuyExecution" && buyKeysWithMultipleTrades?.has(key)) continue;
+
+      const timeOf = (t: RawTransaction) => (t.payload as BuyExecutionPayload | SellExecutionPayload).executionTime;
+      const hasConflictingTwin = facts.some((a, i) => facts.some((b, j) => i < j && timesConflict(timeOf(a), timeOf(b))));
+      if (hasConflictingTwin) continue; // at least one pair is provably a distinct real execution — never merge this group.
+
+      const best = facts.reduce((a, b) => (authorityRank(b.source) > authorityRank(a.source) ? b : a));
+      for (const loser of facts) {
+        if (loser.id === best.id) continue;
+        if (authorityRank(loser.source) >= authorityRank(best.source)) continue; // tie — never auto-resolved.
+
+        await repos.rawTransactions.append(
+          createRawTransaction({
+            kind: "Retraction",
+            source: "manual",
+            payload: { targetId: loser.id, reason: "Provenance upgrade: superseded by a higher-authority document describing the same execution." },
+          })
+        );
+
+        if (kind === "SellExecution") {
+          const freshAll = await repos.rawTransactions.getAll();
+          const decision = freshAll.find(
+            (t) =>
+              t.kind === "SellAllocationDecision" &&
+              !isRetracted(freshAll, t.id) &&
+              (t.payload as SellAllocationDecisionPayload).sellExecutionId === loser.id
+          );
+          if (decision) {
+            await repos.rawTransactions.append(
+              createRawTransaction({
+                kind: "Retraction",
+                source: "manual",
+                payload: { targetId: decision.id, reason: "Provenance upgrade: re-pointed at the higher-authority SellExecution fact." },
+              })
+            );
+            const replacementPayload: SellAllocationDecisionPayload = {
+              sellExecutionId: best.id,
+              allocations: (decision.payload as SellAllocationDecisionPayload).allocations,
+            };
+            await repos.rawTransactions.append(
+              createRawTransaction({ kind: "SellAllocationDecision", source: "manual", portfolioId: decision.portfolioId, ticker: decision.ticker, payload: replacementPayload })
+            );
+          }
+        }
+        convergedCount += 1;
+      }
+    }
+  }
+
+  return convergedCount;
 }
 
 /**
