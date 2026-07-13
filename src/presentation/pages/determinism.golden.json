@@ -1,0 +1,6 @@
+{
+  "approved": false,
+  "approvedNote": null,
+  "snapshot": null,
+  "_readme": "This is NOT yet an approved golden reference. `snapshot` stays null and `approved` stays false until a human has (1) run `npm run determinism:regenerate-golden` to compute a candidate from the current implementation, (2) independently verified the underlying business values are actually correct (holdings shares/cost basis, ledger events, verification verdicts, policy ranking — not just 'the test passes'), and (3) deliberately promoted the candidate by copying its `snapshot` into this file and setting `approved: true` plus a short `approvedNote` explaining what was verified. Auto-generating this file from the implementation under test would bake any undiscovered defect in that implementation into the baseline permanently — see docs/PORTFOLIO_OS_V2_SPEC.md's determinism-test section for why this gate exists. Until approved, the golden-reference comparison test in determinism.e2e.test.ts fails LOUDLY and explains why, rather than silently comparing against nothing."
+}

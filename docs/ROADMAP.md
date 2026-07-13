@@ -1963,3 +1963,82 @@ Full validation design, investigation, test plan, and verdict: `docs/PORTFOLIO_O
   treat BF-1 landing as authorization to wire a live cash read. Independently: the duplicate-decision-fact
   defect in `backfillRawTransactions` (not the silent variant) is a small, well-scoped, disclosed fix
   worth its own short session before that function is ever exposed to a human-facing action.
+
+### Migration foundation closure: System Snapshot exporter, end-to-end Determinism Test, CI regression guards, and two dashboards
+
+Directed sprint, explicitly NOT about implementing new architecture: leave the repository in a measurable,
+observable, deterministic, and regression-resistant state before any further migration work. Explicitly
+out of scope by instruction: PR2 (cash cutover), Guardian, Policy Engine, and any legacy code removal —
+none of those were touched.
+
+**System Snapshot exporter** (`src/application/services/systemSnapshot.ts`): deterministic SHA-256 hashes
+for 7 categories (Facts, Ledger, Holdings, Allocation, Verification, Portfolio, Policy) plus one combined
+hash. The real engineering problem here was normalization, not hashing: every row's own `id`/`seq`/
+`recordedAt` is a random UUID/timestamp that MUST differ between two independently-seeded but
+structurally-identical scenarios, so every cross-reference (a `SellAllocationDecision`'s
+`sellExecutionId`/`lotRef`, a `LedgerEvent`'s `eventId`, an `Allocation`'s `lotEventId`) had to be
+re-expressed as a content-derived key of whatever it points to before hashing, resolved to a fixed point
+(mirroring `purge.ts`'s own supersedes-chain approach) so even chained references resolve correctly.
+
+**A real bug found and fixed while building this, not a hypothetical**: the first working version scoped
+"which facts belong to this portfolio" via `RawTransactionRepository.getByPortfolio(portfolioId)` — which
+silently excludes any fact whose OWN `portfolioId` field is still unset because it was only ever assigned
+via a separate `PortfolioAssignment` fact (adoption never rewrites the original fact — see
+`commitEngine.ts`'s own `relevantTradeTransactions`, which documents exactly this and already avoids
+`getByPortfolio` for the same reason). This silently starved both the Facts category AND the cross-reference
+resolution map, and was caught immediately by the snapshot's own determinism proof (two runs of the
+identical scenario produced DIFFERENT `facts`/`combined` hashes) rather than by inspection — fixed by
+reusing `commitEngine.resolveCurrentPortfolioId` the same way `relevantTradeTransactions` does.
+
+**End-to-end Determinism Test** (`determinism.e2e.test.ts` + shared `determinismScenario.ts`): the exact
+flow this sprint specified — `Reset → Import Official Broker Excel → Confirm → Smart Allocate → Commit →
+Refresh → Rebuild → Restart → Snapshot` — against real Dexie, reusing `excelWorkflowEndToEnd.test.ts`'s own
+proven ABUK-shaped scenario (3 Buys/1 Sell, net 27 open shares — the exact shape this codebase's own
+incident history proved hardest to keep deterministic). Two independent proofs: (1) two independently-run
+instances of the full flow produce byte-identical snapshots — **enforced, passing, on every run**; (2) the
+snapshot matches a committed golden reference — **built, but deliberately not yet enforced**.
+
+**Mid-sprint correction, from direct user feedback, applied immediately**: the first version of this test
+auto-generated `determinism.golden.json` from the current implementation's own output. This is exactly the
+anti-pattern golden/snapshot testing is supposed to avoid — if the implementation under test has an
+undiscovered defect (and this session had ALREADY found one, see above), that defect becomes the permanent
+"expected" baseline, and both future regressions matching it AND future fixes correcting it produce
+confusing results. Corrected before committing: `determinism.golden.json` now starts `{approved: false,
+snapshot: null}` and stays that way until a human explicitly promotes a candidate; the regeneration script
+(`scripts/regenerate-determinism-golden.ts`, `npm run determinism:regenerate-golden`) only ever writes a
+separate, reviewable `determinism.golden.candidate.json` plus a diff — it never touches the golden file
+itself. The golden-comparison test uses `it.skipIf` (not a hard failure) when unapproved, with a loud
+console warning — failing the whole suite/CI/deploy pipeline for "a new tool hasn't been configured yet"
+would be a disproportionate consequence for a by-design pending-approval state, distinct from an actual
+regression.
+
+**CI regression-prevention guards** (`src/architecture/regressionGuards.test.ts`, new
+`src/architecture/` directory): 7 tests, source-text-scanning rather than import-graph-based (the same
+technique this repo's own "repo-wide architectural audit" used by hand, made permanent) — freeze the
+CURRENT, already-known counts as explicit allowlists and fail the moment a new one appears: direct writers
+of `Trade`/`TradeAllocation` (5 files), position-computation implementations (3), Ledger/Allocation Engine
+singularity, `dryRunLedgerRebuild` singularity, canonical trust/authority/verification function locations
+(8 functions/4 files), authority-ranking-table singularity, and the full Dexie schema table list (11,
+categorized by write discipline). Every guard was sanity-verified by deliberately introducing a throwaway
+fake violation, confirming the guard fails with a clear, specific message, then reverting — not just
+assumed to work because the code compiled.
+
+**Two dashboards**: `docs/ARCHITECTURAL_DEBT.md` (qualitative catalog — every debt item's status, which
+guard freezes it, and its closure path) and `docs/MIGRATION_STATUS.md` (quantitative — PR completion
+table, the same frozen counts the CI guards enforce, test suite numbers, reproduction commands). Both
+grounded in numbers directly measured this sprint, not estimated.
+
+- **Files added**: `src/application/services/systemSnapshot.ts` + `.test.ts`,
+  `src/presentation/pages/determinism.e2e.test.ts`, `determinismScenario.ts`, `determinism.golden.json`,
+  `determinism.golden.candidate.json`, `scripts/regenerate-determinism-golden.ts`,
+  `src/architecture/sourceScan.ts` + `regressionGuards.test.ts`, `docs/ARCHITECTURAL_DEBT.md`,
+  `docs/MIGRATION_STATUS.md`. `.dependency-cruiser.cjs` gained one narrow, explicitly-named exemption
+  (`determinismScenario.ts` — test/tooling infrastructure needing a real Dexie "Restart," zero production
+  callers). `package.json` gained the `determinism:regenerate-golden` script.
+- 986/987 tests passing (1 intentionally skipped, pending human golden-reference approval — see above),
+  `tsc --noEmit` clean, `arch:check` clean.
+- **Next recommended sprint**: the deliberate human step this sprint built but did not perform —
+  independently verify a `determinism:regenerate-golden` candidate's business values are correct, then
+  promote it. Beyond that, per `docs/ARCHITECTURAL_DEBT.md`'s open items: PR3 (single Policy module) or
+  PR1b (`EntityId` branding) are both independently startable; PR4 (Guardian) remains the highest-value,
+  highest-risk item and should not be picked up casually.
