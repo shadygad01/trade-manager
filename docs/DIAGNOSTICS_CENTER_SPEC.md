@@ -1,10 +1,13 @@
 # Developer Diagnostics Center — Architecture Specification
 
-**Status: DESIGN ONLY. NOT IMPLEMENTED.** Per the program's own instruction ("DO NOT IMPLEMENT AS A
-SINGLE PR... First: Design the complete architecture... Only after the architecture is approved, divide
-implementation into small independent phases"), this document is the complete architecture. Part 12 is
-the phase breakdown that ships it. No production code should be written against this spec until Part 12
-Phase 1 is explicitly greenlit.
+**Status: APPROVED. Source-of-truth field certification complete (Part 2.3). Phase 1 underway.** Before
+Phase 1 began, every field in the data model was certified against a strict four-category provenance
+test (Part 2.3) — two real design defects were found and fixed during that certification, not merely
+categorized around: a mutable `status` field on `DiagnosticCase` that contradicted the "never edited
+field-by-field" rule (removed), and a duplication risk in `oldValue`/`newValue`/`input`/`output` capture
+that would have silently copied canonical/derived business data into the diagnostics store (replaced with
+a three-mode `valueSource` design — reference / replayCursor / narrowly-scoped snapshot — detailed in
+Part 2.3). No production code exists against a Part 2 shape that predates this certification.
 
 **Mission**: Portfolio OS runs entirely in the browser with no backend and no server-side database.
 Every user's IndexedDB is private to their machine — a developer or an AI assistant investigating a
@@ -94,17 +97,27 @@ interface DiagnosticEventBase {
 }
 ```
 
-- `SessionEventRecord { kind: "SessionEvent"; step: WorkflowStep; label: string; metadata?: Record<string, unknown> }`
-- `WriteTraceRecord { kind: "WriteTrace"; writer: string; function: string; file: string; table: string; objectId: string; oldValue: unknown; newValue: unknown; reason: string }`
-- `ReadTraceRecord { kind: "ReadTrace"; reader: string; function: string; file: string; input: unknown; output: unknown; decision?: string }`
-- `DecisionTraceRecord { kind: "DecisionTrace"; decisionType: "Replay"|"Verification"|"Allocation"|"Warning"|"Constraint"|"Policy"; input: unknown; output: unknown; reasonCode: string; reasonText: string }`
-- `RuleExecutionRecord { kind: "RuleExecution"; ruleName: string; passed: boolean; input: unknown; output: unknown; reason: string; durationMs: number }`
+- `SessionEventRecord { kind: "SessionEvent"; label: string; metadata?: Record<string, unknown> }`
+  (`workflowStep` on the base record already names the step — the first draft's separate `step` field was
+  a straight redundancy, removed).
+- `WriteTraceRecord { kind: "WriteTrace"; writer: string; function: string; file: string; table: string;
+  objectId: string; valueSource: "reference"|"replayCursor"|"snapshot"; factSeqCursor?: number;
+  oldValue?: unknown; newValue?: unknown; reason: string }`
+- `ReadTraceRecord { kind: "ReadTrace"; reader: string; function: string; file: string; factSeqCursor: number; decision?: string }`
+- `DecisionTraceRecord { kind: "DecisionTrace"; decisionType: "Replay"|"Verification"|"Allocation"|"Warning"|"Constraint"|"Policy"; factSeqCursor: number; reasonCode: string; reasonText: string }`
+- `RuleExecutionRecord { kind: "RuleExecution"; ruleName: string; passed: boolean; factSeqCursor: number; reason: string; durationMs: number }`
 - `PerfSampleRecord { kind: "PerfSample"; operation: "Import"|"Replay"|"Verification"|"Allocation"|"Commit"|"Render"; durationMs: number; meta?: Record<string, unknown> }`
 
-`oldValue`/`newValue`/`input`/`output` are stored as the same normalized, content-keyed shape
-`systemSnapshot.ts`'s `stableStringify`/`buildContentKeyMap` already produce — reusing that code means
-diagnostic values never leak a random `id`/`seq` that would make two structurally-identical states look
-different in a diff (directly serves Part 13 State Difference).
+**Revision from the first draft, produced by the Part 2.3 certification**: `ReadTraceRecord`/
+`DecisionTraceRecord`/`RuleExecutionRecord` no longer store raw `input`/`output` value blobs, and
+`WriteTraceRecord`'s `oldValue`/`newValue` are now conditional on a `valueSource` discriminant rather than
+always captured. See Part 2.3 for the full reasoning — the short version: most of what the original draft
+proposed to store as a value copy is deterministically re-derivable from `rawTransactions` at a recorded
+`factSeqCursor` by re-running the existing, unmodified engines (exactly what Part 20's Replay Inspector
+already needs to do), so storing the copy would have been avoidable duplication of derived data. Where
+values are still stored as-is (`snapshot` mode, oldValue/newValue), they're normalized via
+`systemSnapshot.ts`'s `stableStringify`/`buildContentKeyMap` so a diff never flags a random `id`/`seq` as
+a false change (Part 13 State Difference).
 
 ### 2.2 `DiagnosticCase` — the derived, replaceable index (one row per detected anomaly)
 
@@ -127,15 +140,168 @@ interface DiagnosticCase {
     browser: string; browserVersion: string; appVersion: string; schemaVersion: number;
     featureFlags: string[]; importSessionId?: string; commitId?: string;
   };
-  status: "OPEN"|"ACKNOWLEDGED";       // no "resolved" — this is an observer, not a bug tracker
 }
 ```
 
-`DiagnosticCase` rows are never edited field-by-field. They are produced by a pure reducer,
-`detectDiagnosticCases(events: DiagnosticEvent[]): DiagnosticCase[]` (Part 6), and the diagnostics
-repository's "commit" step is a full delete-and-regenerate for the affected `groupKey`s only — the same
-"full delete-and-regenerate, never partial mutation" discipline `commitEngine.commitTicker` already uses
-for `ledgerCache`.
+`DiagnosticCase` rows are never edited field-by-field, with no exception. They are produced by a pure
+reducer, `detectDiagnosticCases(events: DiagnosticEvent[]): DiagnosticCase[]` (Part 6), and the
+diagnostics repository's "commit" step is a full delete-and-regenerate for the affected `groupKey`s only —
+the same "full delete-and-regenerate, never partial mutation" discipline `commitEngine.commitTicker`
+already uses for `ledgerCache`.
+
+**Revision from the first draft, produced by the Part 2.3 certification**: the original draft included a
+mutable `status: "OPEN"|"ACKNOWLEDGED"` field. That field directly contradicted the paragraph above (and
+Part 2.2's own original prose, "no resolved status — this is an observer, not a bug tracker") the moment
+anything tried to acknowledge a case, since acknowledging it would have to mutate a `DiagnosticCase` row
+in place — the one operation this whole model is built to never need. The master spec never asked for
+acknowledgment workflow (only Severity, Part 18), so the honest fix was deletion, not inventing a new
+event kind just to make the field derivable. If a future sprint genuinely needs acknowledgment tracking,
+it must be modeled as its own append-only `DiagnosticEvent` kind, with `status` recomputed by folding that
+event stream — never as a field mutated in place on the case row.
+
+---
+
+## Part 2.3 — Source-of-truth field certification
+
+**Purpose**: prove that every field in the data model above is one of exactly four things — canonical
+stored data, deterministically derived data, runtime/UI state, or diagnostic metadata — and that none of
+them can ever compete with, contradict, or silently replace a canonical business value. Two fields failed
+this test in the first draft and were redesigned above (Part 2.1's `valueSource` split, Part 2.2's removed
+`status`), not merely reclassified.
+
+### §A — Why `valueSource` exists (the central finding)
+
+The first draft captured `oldValue`/`newValue`/`input`/`output` as raw copies of business-shaped data on
+every write and every "important" read. Auditing where that data actually comes from split it cleanly
+into three cases, which became the three `valueSource` modes:
+
+1. **`reference`** — the write is to `rawTransactions`. This table is *already* the canonical, permanent,
+   append-only fact store (`supersedes`-chained, never overwritten). Storing a copy of a row that will
+   forever exist, unchanged, at `rawTransactions` by `id` would be pure duplication with zero benefit — so
+   `WriteTraceRecord` stores only `objectId` and re-fetches from the canonical table on demand.
+2. **`replayCursor`** — the write is to `trades`, `tradeAllocations`, `ledgerCache`, or `allocationsCache`
+   by one of the writers whose value is fully determined by fact-replay (`TradeService`, `ledgerProjection`,
+   `lotManager`, `commitEngine`'s cache regeneration). Per `docs/PORTFOLIO_OS_V2_SPEC.md` Part 0.2/5,
+   these tables are themselves "legacy-projection"/"replay-cache" — materialized views of
+   `rawTransactions`, not a second canonical source. Their value at any past instant is recoverable by
+   fetching `rawTransactions` where `seq <= factSeqCursor` and calling the existing, unmodified
+   `ledgerEngine`/`allocationEngine`/`holdingsEngine`/`ledgerProjection` functions — exactly the mechanism
+   Part 20's Replay Inspector already needs. Storing only a `factSeqCursor` (one integer, a cheap indexed
+   `Math.max` query at capture time) instead of a full value copy costs nothing at write time and nothing
+   at read time worse than an on-demand replay — the same cost Part 20 already accepted.
+3. **`snapshot`** — exactly two writers do **not** derive their write from fact replay:
+   `BackupService.ts` (bulk restore from an exported blob) and `ledgerRebuild.ts`'s
+   `applyLedgerRebuild` (metadata corrections derived from `Upload[]`, a separate reconstruction source —
+   Part 1's table). For these two, and only these two, the prior/new value is genuinely unrecoverable any
+   other way once the row is overwritten, so a direct, normalized snapshot is captured. This is the one
+   deliberate exception, and it is frozen: a new regression guard (Part 5.4) source-scans every
+   `valueSource: "snapshot"` call site and fails CI if a third writer ever uses it without the allowlist
+   being explicitly, reviewedly widened — the same discipline `regressionGuards.test.ts` already applies
+   to every other allowlist in this codebase.
+
+The same reasoning applies to `ReadTraceRecord`/`DecisionTraceRecord`/`RuleExecutionRecord`'s `input`/
+`output`: `verifyAll`, `generateAllocations`, `computeHoldings`, and `buildTickerConstraintReport` are all
+pure functions of `rawTransactions` (Part 1's table), so their input and output are always
+`replayCursor`-mode derivable — never stored as value copies at all, only the small scalar decision
+fields (`reasonCode`, `reasonText`, `passed`) are kept inline, purely as a rendering convenience.
+
+### §B — Field-by-field classification
+
+Legend: **1** = Canonical stored data, **2** = Deterministically derived data, **3** = Runtime/UI state
+(non-reconstructible by nature), **4** = Diagnostic metadata. "Participates in business logic" is **No**
+for every single field below, with no exceptions — structurally enforced by the Part 5.4 regression guard
+(diagnostics code may never call a business write method, and separately, no `src/application/**` file
+outside `diagnostics/` may import a diagnostics repository at all).
+
+**`DiagnosticEventBase`** (shared by every event kind):
+
+| Field | Cat. | Source | Persisted | Replayable | Survives restart |
+|---|---|---|---|---|---|
+| `id` | 4 | uuid generated by the diagnostics repo at capture | Yes | No — arbitrary identifier | Yes |
+| `seq` | 4 | diagnostics repo, atomic monotonic counter (same discipline as `RawTransaction.seq`) | Yes | No — an ordering counter, not derived from content | Yes |
+| `recordedAt` | 4 | wall-clock timestamp at capture | Yes | No — unique to that moment | Yes |
+| `sessionId` | 4 | generated once per app load (Part 4.2), copied into every event of that session | Yes | No | Yes (the recorded copy persists; a new id is generated next load) |
+| `portfolioId` | 4 | copied by reference from the live `portfolios` id in scope — pointer only, never the portfolio's fields | Yes | n/a (opaque pointer) | Yes |
+| `ticker` | 4 | same shape as `portfolioId` | Yes | n/a | Yes |
+| `workflowStep` | 4 | known at the instrumented call site | Yes | No | Yes |
+
+**`SessionEventRecord`**: `label`, `metadata?` — both **4**, free text/small object chosen at the call
+site, not derived from or duplicating anything else. Persisted / not replayable / survives restart, same
+as the base fields.
+
+**`WriteTraceRecord`**:
+
+| Field | Cat. | Source | Persisted | Replayable | Survives restart |
+|---|---|---|---|---|---|
+| `writer`/`function`/`file` | 4 | static string literals at the instrumented call site | Yes | No — describes code, not data | Yes |
+| `table`/`objectId` | 4 | the table name and row id the write call itself targeted — pointer only | Yes | n/a (pointer) | Yes |
+| `valueSource` | 4 | statically determined by which of §A's three modes applies to this call site | Yes | n/a | Yes |
+| `factSeqCursor` (replayCursor mode) | 4 | `Math.max` over `rawTransactions.seq` at capture time — a plain indexed read | Yes | n/a (it *is* the pointer that makes other fields replayable) | Yes |
+| `oldValue`/`newValue` (reference mode) | — | **not stored** — reconstructed by fetching `rawTransactions` by `objectId` | No | Yes — the row is immutable and permanent | n/a |
+| `oldValue`/`newValue` (replayCursor mode) | — | **not stored** — reconstructed by replaying `rawTransactions ≤ factSeqCursor` through the unmodified engines | No | Yes | n/a |
+| `oldValue`/`newValue` (snapshot mode, `BackupService`/`applyLedgerRebuild` only) | 4 | read directly off the business row immediately before/after the write, normalized via `systemSnapshot.ts`'s `stableStringify` | Yes | **No** — this is precisely the value that becomes unrecoverable once the row is overwritten again; that irreproducibility is the entire reason it's captured | Yes |
+| `reason` | 4 | string supplied by the calling code | Yes | No | Yes |
+
+**`ReadTraceRecord`**: `reader`/`function`/`file` — **4**, same shape as `writer`/`function`/`file` above.
+`factSeqCursor` — **4**, same as above. `decision?` — **2**, the short label the read function's own
+deterministic return value already carries; recomputable by replaying at `factSeqCursor`; persisted as a
+rendering convenience only.
+
+**`DecisionTraceRecord`**: `decisionType` — **4** (identifies which engine/decision kind). `factSeqCursor`
+— **4**. `reasonCode`/`reasonText` — **2**, the deterministic engine's own output, kept inline for fast
+Case List/report rendering without a replay round-trip on every list render; always re-derivable and thus
+never a competing source — if a stored value and a fresh replay ever disagree, that disagreement is
+itself surfaced as a `ReplayConflict` Diagnostic Case (Part 6), not silently trusted.
+
+**`RuleExecutionRecord`**: `ruleName` — **4**. `passed` — **2**, the rule function's own boolean, rerunnable
+at `factSeqCursor`. `factSeqCursor` — **4**. `reason` — **2**, same shape as `reasonText`. `durationMs` —
+**3**: a `performance.now()` delta measured around that specific execution. This is the one field in the
+entire model that is irreproducible *by nature*, not merely inconvenient to reproduce — re-running the
+rule later measures a new duration reflecting the current machine/JIT state, never a reproduction of the
+original. Safe precisely because nothing else in the app claims to be the source of truth for "how long
+did that specific past execution take" — there is no second value it could contradict.
+
+**`PerfSampleRecord`**: `operation` — **4**. `durationMs` — **3**, identical reasoning to
+`RuleExecutionRecord.durationMs`. `meta?` — **4**.
+
+**`DiagnosticCase`**:
+
+| Field | Cat. | Source | Replayable |
+|---|---|---|---|
+| `id` | 4 | generated | No |
+| `groupKey` | 2 | `hash(triggerType, ticker, portfolioId, reasonCode)`, a pure function | Yes — recomputable from the same fields |
+| `severity` | 2 | pure classification function of `triggerType`, defined once per trigger in the registry (Part 6) | Yes |
+| `triggerType` | 2 | identity of whichever trigger function matched | Yes — rerunning `detectDiagnosticCases` over the same events reproduces it |
+| `firstOccurrenceEventSeq`/`latestOccurrenceEventSeq` | 2 | min/max `seq` among matching events, computed by the reducer | Yes |
+| `occurrenceCount` | 2 | count of matching events | Yes |
+| `ticker`/`portfolioId`/`workflowStep` | 4 | copied from the triggering event(s) — correlation only | n/a |
+| `context.browser`/`browserVersion` | 3 | `navigator.userAgent` parsed at capture time | No — describes a specific past session, not recomputable |
+| `context.appVersion` | 4 | a build-time constant baked into the bundle | n/a |
+| `context.schemaVersion` | 4 | read live from `db.verno` (the running Dexie instance itself), never copied into a second mutable field | n/a |
+| `context.featureFlags` | 4 | read live from the Developer Mode flag mechanism (Part 4.1) at capture time — a snapshot list of names, not the flags' authoritative storage | n/a |
+| `context.importSessionId`/`commitId` | 4 | correlation references to existing, non-diagnostic runtime state (the import-session pool, a specific `commitTicker` invocation) — pointer only | n/a |
+
+All rows above: **Persisted = Yes**, **Survives restart = Yes**, **Participates in business logic = No**
+(Part 5.4 guard), unless a cell says otherwise.
+
+### §C — Certification result
+
+Every field in the (revised) data model is one of the four permitted categories. No field is a live
+mirror of mutable canonical state that could disagree with the canonical value while both claim to be
+current — Category 1/2 fields are pointers or on-demand recomputations of the same canonical fact log
+business logic itself reads; Category 3 fields are one-shot measurements with no canonical counterpart to
+conflict with; Category 4 fields are identifiers, static context, or (in the two named `snapshot`-mode
+exceptions) immutable historical captures that are never read back into business logic and never claim to
+describe the *current* state of anything — the live business table remains, in every case, the sole
+answer to "what is X now."
+
+### §D — New regression guard from this certification
+
+`diagnosticsSnapshotModeIsNarrowlyScoped` (added to `src/architecture/regressionGuards.test.ts`'s plan for
+Part 5.4): source-scans every `valueSource: "snapshot"` call site and asserts the writer file is exactly
+`BackupService.ts` or `ledgerRebuild.ts` — nothing else. A third file constructing a `snapshot`-mode
+`WriteTraceRecord` fails CI immediately, the same allowlist-freezing discipline every other guard in that
+file already applies.
 
 ---
 
@@ -237,15 +403,21 @@ additive, not a wrapper: the existing handler code is unchanged except for one n
 `src/architecture/regressionGuards.test.ts` already enumerates, by construction, every file that writes a
 business table. This spec instruments exactly those, and no others:
 
-- **Execution-fact writers** (5, frozen): `TradeService.ts` (`ensureBuyFact`/`ensureSellFacts`),
-  `backfillRawTransactions.ts` (`runBackfill`), `importRecording.ts` (`recordImportedRawTransactions`),
-  `ledgerProjection.ts` (`ensureLegacyFactsExist`), `lotManager.ts` (`recordSellTransactionLocked`).
+- **Execution-fact writers** (5, frozen), all `table: "rawTransactions"`, `valueSource: "reference"`:
+  `TradeService.ts` (`ensureBuyFact`/`ensureSellFacts`), `backfillRawTransactions.ts` (`runBackfill`),
+  `importRecording.ts` (`recordImportedRawTransactions`), `ledgerProjection.ts`
+  (`ensureLegacyFactsExist`), `lotManager.ts` (`recordSellTransactionLocked`).
 - **`Trade`/`TradeAllocation` writers** (5, frozen): `TradeService.ts`, `ledgerProjection.ts`,
-  `ledgerRebuild.ts` (`applyLedgerRebuild`), `lotManager.ts`, `BackupService.ts`.
+  `lotManager.ts` use `valueSource: "replayCursor"` (their writes are fully determined by
+  `rawTransactions` replay — Part 2.3 §A). `ledgerRebuild.ts` (`applyLedgerRebuild`) and
+  `BackupService.ts` use `valueSource: "snapshot"` — the two named, frozen exceptions (Part 2.3 §A/§D)
+  whose writes derive from `Upload[]`/an export blob rather than fact replay.
 
 Each write call site gains one `diagnostics.recordWrite({ writer, function, file, table, objectId,
-oldValue, newValue, reason })` immediately after the real write succeeds (not before — a diagnostics call
-must never run for a write that didn't happen, and must never be able to prevent one that did).
+valueSource, factSeqCursor?, oldValue?, newValue?, reason })` immediately after the real write succeeds
+(not before — a diagnostics call must never run for a write that didn't happen, and must never be able to
+prevent one that did). `factSeqCursor`/`oldValue`/`newValue` are populated per §A's rule for the call
+site's mode — `reference`-mode writers pass neither (just the four required fields plus `reason`).
 
 **This spec adding diagnostics calls to these 10 files is a deliberate, one-time, disclosed exception to
 "read-only."** The ground rule in Part 0.1 is about *tables and repositories* — diagnostics never gets a
@@ -257,7 +429,10 @@ writer, and Part 5.4 defines the structural check that keeps that distinction re
 
 "Important" reads are exactly the six named in the master spec: Replay, Verification, Allocation,
 Holdings, Warning, Policy. These map to five existing function entry points, each gaining one
-`diagnostics.recordRead(...)` call around its existing return statement:
+`diagnostics.recordRead({ reader, function, file, factSeqCursor, decision })` call around its existing
+return statement — `factSeqCursor` is the same "highest `rawTransactions.seq` seen" pointer as Part 2.3
+§A, `decision` is a short label copied from the function's own deterministic output, and no full
+input/output value is captured (Part 2.3 §A):
 
 `verifyAll`/`verifyTicker` (`verificationEngine.ts`), `generateAllocations` (`allocationEngine.ts`),
 `computeHoldings` (`holdingsEngine.ts`), `buildTickerConstraintReport` (`constraintValidation.ts`, stands
@@ -274,6 +449,11 @@ it contains **zero** calls into any business repository's write methods (`.save(
 `.append(`, `.saveRemainingShares(`) and zero imports of `commitEngine`, `TradeService`, or
 `ledgerProjection`'s writing functions. This is the automated proof that Part 0.1 ("read-only") holds,
 not just a comment asserting it.
+
+A second guard, `diagnosticsSnapshotModeIsNarrowlyScoped` (Part 2.3 §D), source-scans every
+`valueSource: "snapshot"` call site across the whole codebase and asserts the writer file is exactly
+`BackupService.ts` or `ledgerRebuild.ts` — freezing the one deliberate exception to "no raw value copies"
+the same way every other allowlist in this file is frozen.
 
 ---
 
