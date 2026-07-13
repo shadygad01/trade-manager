@@ -16,6 +16,7 @@ import {
   findDateMisreadDuplicateHints,
   suggestDuplicatePendingCandidateKeysToDelete,
   pendingCandidateSignature,
+  timesConflict,
 } from "./duplicateDetection";
 import { findOrderConfirmedKeys, findWrongTickerHintsFromOrders, findOrphanedFulfilledEvidence } from "./orderEvidence";
 import { checkTickerMatch, type TickerMatchStatus } from "./importVerification";
@@ -147,11 +148,26 @@ function tickerRowSignature(tickerEntries: TradeCandidateEntry[]): string {
  * logic. Returns the donor's own key alongside the label so the caller can
  * record a real transaction-to-transaction edge (EvidenceItem.
  * matchedTransactionId), not just a description of the corroboration.
+ *
+ * pendingCandidateSignature alone is deliberately time-blind — gated by
+ * timesConflict here (the same discriminator findCrossSourceVerifiedKeys'
+ * own sameCandidateExecution already applies to this identical signature),
+ * so two genuinely distinct real executions sharing a signature but reading
+ * different times (or different sources by coincidence) never get labeled as
+ * corroborating each other. Without this, a false "Independently
+ * corroborated" evidence badge could attach to two unrelated real trades,
+ * and — since that evidence type isn't excluded from hasDirectMatch below —
+ * could even suppress a genuine wrong-ticker rejection for one of them.
  */
 function corroboratingSource(entry: TradeCandidateEntry, allEntries: TradeCandidateEntry[]): { type: EvidenceType; donorKey: string } | undefined {
   const sig = pendingCandidateSignature(entry.candidate);
   const donor = allEntries.find(
-    (o) => o.key !== entry.key && pendingCandidateSignature(o.candidate) === sig && o.candidate.source !== undefined && o.candidate.source !== entry.candidate.source
+    (o) =>
+      o.key !== entry.key &&
+      pendingCandidateSignature(o.candidate) === sig &&
+      o.candidate.source !== undefined &&
+      o.candidate.source !== entry.candidate.source &&
+      !timesConflict(entry.candidate.time, o.candidate.time)
   );
   if (!donor?.candidate.source) return undefined;
   return { type: `matched-${donor.candidate.source}` as EvidenceType, donorKey: donor.key };

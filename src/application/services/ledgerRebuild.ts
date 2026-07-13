@@ -12,6 +12,7 @@ import {
   findDuplicateSellMatch,
   groupSellAllocationsByOrder,
   pricesWithinOcrNoise,
+  timesConflict,
   type SellOrderGroup,
 } from "./duplicateDetection";
 import { latestByTicker } from "./reconciliation";
@@ -139,13 +140,31 @@ export function canonicalizeTradeEntries(
   const deleteKeys = new Set(suggestDuplicatePendingCandidateKeysToDelete(enrichedEntries));
 
   // Every upload that corroborates the same real execution (its signature
-  // siblings), regardless of which one survived as the canonical row.
-  const uploadIdsBySignature = new Map<string, Set<string>>();
+  // siblings) — but pendingCandidateSignature is deliberately time-blind
+  // (ticker|side|date|shares only), so two genuinely distinct real
+  // executions sharing that signature (e.g. two same-price fills minutes
+  // apart — a real, reported case: two 49-share ABUK buys at E£42.40,
+  // 10:32AM and 10:34AM) used to be unioned into the SAME sourceUploadIds
+  // set regardless of time. That shared set became each lot's
+  // LedgerEvent.sourceTransactionIds (ledgerEngine.ts), which
+  // allocationEngine.indexEventsByReference then indexes as an alias map
+  // from "any corroborating real id" to "this one lot" — the union meant
+  // BOTH lots' real ids resolved to whichever lot was indexed first,
+  // silently misattributing a Sell's allocation to the wrong lot of the
+  // pair even though resolveLotRef (ledgerProjection.ts) had already
+  // written the CORRECT real id into the decision. Time-gated the same way
+  // sameCandidateExecution/suggestDuplicatePendingCandidateKeysToDelete
+  // already gate this exact signature elsewhere: a sibling only corroborates
+  // this entry when neither side's time conflicts with the other's (an
+  // absent time on either side is "unknown," never treated as a conflict —
+  // preserving the routine statement+invoice/orders-screen corroboration
+  // case, where one side often carries no time at all).
+  const entriesBySignature = new Map<string, { uploadId: string; time?: string }[]>();
   for (const e of enrichedEntries) {
     const sig = pendingCandidateSignature(e.candidate);
-    const set = uploadIdsBySignature.get(sig) ?? new Set<string>();
-    set.add(e.uploadId);
-    uploadIdsBySignature.set(sig, set);
+    const list = entriesBySignature.get(sig) ?? [];
+    list.push({ uploadId: e.uploadId, time: e.candidate.time });
+    entriesBySignature.set(sig, list);
   }
 
   const buys: CanonicalTrade[] = [];
@@ -153,7 +172,10 @@ export function canonicalizeTradeEntries(
   for (const e of enrichedEntries) {
     if (deleteKeys.has(e.key)) continue;
     const sig = pendingCandidateSignature(e.candidate);
-    const sourceUploadIds = new Set(uploadIdsBySignature.get(sig) ?? [e.uploadId]);
+    const signatureSiblings = entriesBySignature.get(sig) ?? [{ uploadId: e.uploadId, time: e.candidate.time }];
+    const sourceUploadIds = new Set(
+      signatureSiblings.filter((s) => !timesConflict(e.candidate.time, s.time)).map((s) => s.uploadId)
+    );
     for (const uploadId of aggregatingUploadIdByExecutionKey.get(e.key) ?? []) sourceUploadIds.add(uploadId);
     const canonical: CanonicalTrade = {
       key: canonicalKey({ side: e.candidate.side, ticker: e.candidate.ticker, date: e.candidate.date, shares: e.candidate.shares, price: e.candidate.price }),

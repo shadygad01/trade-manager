@@ -4,7 +4,9 @@ import { createFakeRepositories, createFakeRawTransactionRepository, createFakeC
 import { recordBuy, recordSell, type RecordSellInput } from "./TradeService";
 import { commitTicker, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 import { resetSellAllocation, getLotManagerSnapshot } from "./lotManager";
+import { recordImportedRawTransactions } from "./importRecording";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
+import type { ParsedTradeCandidate } from "@domain/entities/Upload";
 
 /**
  * Phase 1 regression suite for the production bug reported against the
@@ -174,5 +176,97 @@ describe("cross-transaction isolation — the identity-collision bug is fixed", 
     const rebuiltB = trades.find((t) => t.id === lotB.id)!;
     expect(rebuiltA.remainingShares).toBe(70); // 100 - 30
     expect(rebuiltB.remainingShares).toBe(100); // untouched — no allocation ever referenced it
+  });
+});
+
+/**
+ * Phase 2 regression suite for a DIFFERENT identity-collision code path than
+ * Phase 1 above: Phase 1's tests all use recordBuy/backfillBuy with no
+ * pre-existing extraction-time fact, which makes ensureBuyFact mint a fresh
+ * "manual"/"backfill" sourced fact — routed by generateLedgerEvents straight
+ * to toDirectEvent (eventId = txn.id, sourceTransactionIds = [txn.id]),
+ * never through canonicalizeTradeEntries at all. That path was never
+ * vulnerable to this bug.
+ *
+ * Real, reported bug (ABUK, with before/after screenshots): a ticker
+ * imported from an official broker Excel export — extraction-time facts
+ * already exist (source "official-broker-excel"), so Confirm's recordBuy
+ * ADOPTS them via ensureBuyFact rather than minting manual ones. Every
+ * adopted fact routes through canonicalizeTradeEntries (ledgerRebuild.ts),
+ * whose sourceUploadIds construction grouped strictly by
+ * pendingCandidateSignature (ticker|side|date|shares — time-blind). Two
+ * genuinely distinct real buys sharing that signature (two 49-share ABUK
+ * buys at E£42.40 on 2023-02-01, 10:32AM and 10:34AM — an ordinary pattern,
+ * splitting an order into same-price fills minutes apart) had their real
+ * fact ids unioned into ONE shared sourceUploadIds/sourceTransactionIds set.
+ * allocationEngine.indexEventsByReference then indexed that shared set as an
+ * alias map from "either real id" to "whichever lot is processed first" —
+ * so a Sell allocation whose `lotRef` resolveLotRef had correctly resolved
+ * to the SECOND lot's own real fact id still misattributed against the
+ * FIRST lot, corrupting the ticker's Smart-Allocate share count exactly as
+ * reported ("Calculated 27" before Smart Allocate, "Calculated 76" — Needs
+ * broker screenshot — immediately after). Fixed by making
+ * canonicalizeTradeEntries' sourceUploadIds construction time-aware (via the
+ * same timesConflict helper sameCandidateExecution/
+ * suggestDuplicatePendingCandidateKeysToDelete already use for this exact
+ * signature elsewhere), without touching indexEventsByReference or
+ * resolveLotRef at all — see docs/ROADMAP.md.
+ */
+describe("cross-transaction isolation, phase 2 — two document-sourced (official-broker-excel) buys sharing a time-blind signature", () => {
+  async function importedCandidate(repos: FullRepos, key: string, candidate: ParsedTradeCandidate) {
+    await recordImportedRawTransactions(repos as CommitEngineRepos, {
+      sourceUploadId: "upload-1",
+      candidates: [{ key, candidate }],
+      verifications: [],
+      dividends: [],
+      orderEvidences: [],
+      cancelledOrders: [],
+    });
+  }
+
+  it("Smart Allocate closes each twin lot against its OWN sell — remaining shares stay correct for both, matching the real reported numbers", async () => {
+    const repos = fullRepos();
+    const twin1032: ParsedTradeCandidate = { ticker: "ABUK", side: "BUY", shares: 49, price: 42.4, date: "2026-02-01", time: "10:32AM", source: "official-broker-excel" };
+    const twin1034: ParsedTradeCandidate = { ticker: "ABUK", side: "BUY", shares: 49, price: 42.4, date: "2026-02-01", time: "10:34AM", source: "official-broker-excel" };
+    await importedCandidate(repos, "cand-1032", twin1032);
+    await importedCandidate(repos, "cand-1034", twin1034);
+
+    // Confirm: recordBuy ADOPTS the pre-existing extraction-time facts (via
+    // ensureBuyFact's time tie-break), exactly like commitTickerGroupLocked.
+    const { trade: trade1032 } = await recordBuy(repos, { portfolioId: "p1", ticker: "ABUK", shares: 49, entryPrice: 42.4, executionDate: "2026-02-01", executionTime: "10:32AM" });
+    const { trade: trade1034 } = await recordBuy(repos, { portfolioId: "p1", ticker: "ABUK", shares: 49, entryPrice: 42.4, executionDate: "2026-02-01", executionTime: "10:34AM" });
+
+    // Smart Allocate, oldest-lot-first: a 49-share sell exactly closes the
+    // 10:32 lot, then a second 49-share sell exactly closes the 10:34 lot —
+    // mirroring smartAllocateSell's own FIFO-by-(date,time) selection.
+    await recordSell(repos, {
+      portfolioId: "p1", ticker: "ABUK",
+      allocations: [{ tradeId: trade1032.id, shares: 49, exitPrice: 45 }],
+      executionDate: "2026-03-01", executionTime: "09:00", source: "official-broker-excel",
+    });
+    await recordSell(repos, {
+      portfolioId: "p1", ticker: "ABUK",
+      allocations: [{ tradeId: trade1034.id, shares: 49, exitPrice: 46 }],
+      executionDate: "2026-03-02", executionTime: "09:00", source: "official-broker-excel",
+    });
+
+    await commitTicker(repos, "p1", "ABUK");
+
+    const trades = await tradesFor(repos, "ABUK");
+    expect(trades).toHaveLength(2);
+    const rebuilt1032 = trades.find((t) => t.executionTime === "10:32AM")!;
+    const rebuilt1034 = trades.find((t) => t.executionTime === "10:34AM")!;
+    // BEFORE the fix: both allocations resolved to the SAME lot (whichever
+    // was indexed first) — one lot ended up double-closed (negative/zero
+    // remaining beyond its own sell) and the other stayed fully open despite
+    // its own sell existing, inflating the ticker's calculated remaining
+    // shares exactly like the real ABUK report (27 -> 76 after Smart Allocate).
+    expect(rebuilt1032.remainingShares).toBe(0); // closed by its OWN sell
+    expect(rebuilt1034.remainingShares).toBe(0); // closed by its OWN sell — not left untouched
+
+    const allocations = await allocationsFor(repos, "ABUK");
+    expect(allocations).toHaveLength(2);
+    expect(allocations.find((a) => a.tradeId === trade1032.id)?.sharesClosed).toBe(49);
+    expect(allocations.find((a) => a.tradeId === trade1034.id)?.sharesClosed).toBe(49);
   });
 });

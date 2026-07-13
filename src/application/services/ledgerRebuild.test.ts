@@ -69,6 +69,41 @@ describe("buildCanonicalTrades", () => {
   it("returns nothing for an empty upload set", () => {
     expect(buildCanonicalTrades([])).toEqual({ buys: [], sells: [] });
   });
+
+  it("real bug (ABUK, reported with before/after screenshots): two genuinely distinct same-day/same-price buys keep DISJOINT sourceUploadIds, never unioned by their shared time-blind signature", () => {
+    // Exact real-world shape: two 49-share ABUK buys at E£42.40 on 2023-02-01,
+    // 10:32AM and 10:34AM. pendingCandidateSignature (ticker|side|date|shares)
+    // is identical for both — before the fix, canonicalizeTradeEntries unioned
+    // both uploads' ids into ONE shared sourceUploadIds set for both entries,
+    // which allocationEngine.indexEventsByReference then indexed as a shared
+    // alias, letting a Sell allocation correctly `lotRef`'d to the SECOND
+    // lot's own real fact id resolve to the FIRST lot instead (see
+    // docs/ROADMAP.md's "root cause B" entry and
+    // crossTransactionIsolation.test.ts's Phase 2 end-to-end proof).
+    const { buys } = buildCanonicalTrades([
+      upload("fact-1032", [buy({ shares: 49, price: 42.4, date: "2023-02-01", time: "10:32AM", source: "official-broker-excel" })]),
+      upload("fact-1034", [buy({ shares: 49, price: 42.4, date: "2023-02-01", time: "10:34AM", source: "official-broker-excel" })]),
+    ]);
+    expect(buys).toHaveLength(2);
+    const lot1032 = buys.find((b) => b.executionTime === "10:32AM")!;
+    const lot1034 = buys.find((b) => b.executionTime === "10:34AM")!;
+    expect(lot1032.sourceUploadIds).toEqual(["fact-1032"]);
+    expect(lot1034.sourceUploadIds).toEqual(["fact-1034"]);
+    // No overlap at all — each lot's alias set contains only its own real id.
+    expect(lot1032.sourceUploadIds.some((id) => lot1034.sourceUploadIds.includes(id))).toBe(false);
+  });
+
+  it("still corroborates the same real execution across two DIFFERENT documents when times don't conflict (one side has no time at all)", () => {
+    // The routine case sourceUploadIds exists FOR — must not regress: a
+    // Statement row (no time) and an Orders-screen row (has time) reading the
+    // same real trade still corroborate into one shared sourceUploadIds set.
+    const { buys } = buildCanonicalTrades([
+      upload("stmt", [buy({ source: "statement", price: 10 })]),
+      upload("orders", [buy({ source: "orders-screen", price: 10, time: "09:15" })]),
+    ]);
+    expect(buys).toHaveLength(1);
+    expect(buys[0].sourceUploadIds.sort()).toEqual(["orders", "stmt"]);
+  });
 });
 
 describe("dryRunLedgerRebuild", () => {

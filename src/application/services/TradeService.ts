@@ -269,6 +269,17 @@ export async function deleteTrade(repos: AppRepositories & Partial<CommitEngineR
  * projection, any lingering live same-key fact would re-CREATE the deleted
  * trade as a freshly projected lot on the ticker's next commit — the exact
  * resurrection this retraction exists to prevent.
+ *
+ * canonicalKey alone is deliberately time-blind, so this ALSO requires the
+ * candidate fact's own executionTime to not conflict with the trade being
+ * deleted's (the same discriminator ensureBuyFact's own sameValueCandidates
+ * tie-break already uses). Without it, deleting ONE of two legitimate same-
+ * value/different-time trades (e.g. two 49-share ABUK buys two minutes
+ * apart) would retract BOTH of their real facts — permanently destroying the
+ * SURVIVING sibling trade's own official-broker-excel provenance even though
+ * that trade was never touched, silently degrading it to whatever
+ * ensureLegacyFactsExist's gap-backfill reconstructs next (source
+ * "backfill") on the next commit.
  */
 async function retractMatchingRawTransaction(repos: CommitEngineRepos, trade: Trade): Promise<void> {
   const ticker = normalizeTicker(trade.ticker);
@@ -278,6 +289,7 @@ async function retractMatchingRawTransaction(repos: CommitEngineRepos, trade: Tr
     if (t.kind !== "BuyExecution" || t.ticker === undefined || normalizeTicker(t.ticker) !== ticker) return false;
     if (isRetracted(all, t.id)) return false;
     const payload = t.payload as BuyExecutionPayload;
+    if (timesConflict(trade.executionTime, payload.executionTime)) return false;
     return canonicalKey({ side: "BUY", ticker, date: payload.executionDate, shares: payload.shares, price: payload.price }) === key;
   });
   // All but the last are appended without the commit trigger, so the ticker
