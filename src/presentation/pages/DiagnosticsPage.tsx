@@ -14,7 +14,7 @@ function summarize(event: DiagnosticEvent): string {
     case "ReadTrace":
       return `Read ${event.reader}.${event.function}${event.decision ? ` — ${event.decision}` : ""}`;
     case "DecisionTrace":
-      return `Decision (${event.decisionType}) — ${event.reasonText}`;
+      return `Decision (${event.decisionType}) ${event.reader}.${event.function} — ${event.decision} — in: ${event.inputSummary} — out: ${event.outputSummary}`;
     case "RuleExecution":
       return `Rule ${event.ruleName} — ${event.passed ? "PASS" : "FAIL"} — ${event.reason}`;
     case "PerfSample":

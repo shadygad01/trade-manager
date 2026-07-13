@@ -2226,3 +2226,87 @@ nothing uses `valueSource: "snapshot"` yet, since `ledgerRebuild.ts`/`BackupServ
   through them) or Phase 3 (Reader Trace + Decision Trace, Part 5.3) — both are independently startable;
   pick based on whether breadth (more writers traced) or depth (why a decision was made) is more useful
   for the next real debugging session.
+
+### Sprint 13 — Diagnostics Center Phase 3: Reader Trace + Decision Trace (decision engines, ahead of Phase 2b)
+
+Directed reprioritization: ship Phase 3 before Phase 2b. Rationale given — the diagnostics built so far can
+already explain who WROTE data (Phase 2); most real production issues investigated in this codebase's own
+history (Mismatch, Needs Broker Screenshot, Needs Corroborating Evidence) are decision problems, not write
+problems, so explaining who READ data and which engine produced the final decision is higher-value than
+tracing more writers right now.
+
+**Scope, exactly as directed**: instrument only the major decision engines — Replay, Verification, Warning,
+Allocation (decision points only), Constraint evaluation — not Policy (no unified Policy module exists yet,
+per Sprint 11's own finding) and not every function that happens to read facts.
+
+**Two real call sites cover all five decision types cleanly**, both already-existing, already-tested pure
+functions with no fan-out to a dozen callers (the same "find the real choke point" discipline that made
+Phase 2 tractable):
+- `commitEngine.ts`'s `commitTicker` — the ONLY place `verifyAll` (Verification), `generateLedgerEvents`
+  (Replay), and `generateAllocations` (Allocation, decision points) run together, once per real commit. All
+  three decisions now emit from one `commitTicker` call, sharing one `correlationId` generated at the top
+  of the function, so a developer can see "these three decisions happened as part of the same commit"
+  without guessing from timestamps. `commitTicker` gained an optional `diagnostics` parameter, forwarded
+  from `appendAndMaybeCommit`'s four existing internal call sites (which already carry `diagnostics` from
+  Phase 2) — no new call-site threading needed anywhere else.
+- `constraintValidation.ts`'s `buildTickerConstraintReport` — composes `evaluateInventoryConstraint`
+  (Constraint: does the arithmetic add up) and `diagnoseInventoryContradiction` (Warning: plain-English
+  hypotheses for why it doesn't, only computed once a contradiction exists). Both now emit a decision;
+  Warning is skipped entirely when the constraint is satisfied, matching the function's own "diagnosis only
+  after contradiction" rule — recording a Warning for every satisfied ticker would be pure noise, not
+  signal. Wired from its one real call site, `ImportPage.tsx`'s `constraintReport` `useMemo`.
+
+**`DecisionTraceRecord` revised** to match this sprint's explicit field list (Correlation ID, Reader,
+Function, Decision, Inputs/Outputs as summaries only, Timestamp): gained `reader`/`function`/`decision`/
+`inputSummary`/`outputSummary`; `correlationId` added to `DiagnosticEventBase` itself (useful beyond
+decisions); dropped `reasonCode`/`reasonText` (superseded); `factSeqCursor` made optional
+(`buildTickerConstraintReport` is a pure synchronous function with no fact-log access of its own — nothing
+to point a cursor at). Reader Trace and Decision Trace were folded into one event kind for these five
+engines rather than emitted as two separate events per call — for a pure decision function, "what it read"
+and "what it decided" are the same occurrence, and emitting both separately would have doubled the event
+count for no new information.
+
+**"No raw business objects" enforced by construction, not just instruction**: every `inputSummary`/
+`outputSummary` is a hand-built string — verdict counts (`"2 Verified, 1 Needs Review"`), ledger-event-type
+counts (`"3 LotOpened, 1 SellRecorded"`), or a contradiction's expected/calculated/difference numbers —
+never `JSON.stringify` of a `RawTransaction`/`LedgerEvent`/`Allocation`/`TickerConstraintReport`. Tests
+assert this directly (`inputSummary`/`outputSummary` never contain `"payload"`, the tell-tale substring a
+raw business-object dump would carry).
+
+**Verified end-to-end**, not just unit tests: new tests in `commitEngine.diagnostics.test.ts` (5 tests) and
+`constraintValidation.test.ts` (+2 tests) exercise the real, non-mocked engine implementations directly,
+and a live Playwright run against the dev server confirmed both that recording a Buy still works with zero
+console errors and that an Import scenario needing a broker screenshot correctly shows a Constraint
+decision ("Satisfied — Facts reconcile, no contradiction") — confirming that "Needs Broker Screenshot" is
+genuinely a Verification-level gap, not a Constraint-level contradiction (the constraint check has nothing
+to compare against until a broker holdings count exists at all), exactly matching what the unit tests
+already proved.
+
+**A real, verified finding, disclosed rather than silently patched**: the same live run showed the identical
+Constraint decision firing ~12 times for what is conceptually one ticker-card render. Root cause: the
+`useMemo` wrapping `buildTickerConstraintReport` in `ImportPage.tsx` already existed and was never broken
+by this sprint — its dependencies (`matchStatus`, `group.buys`, etc.) simply aren't referentially stable
+across that page's several sequential `useLiveQuery` resolutions, so the memo recomputes on every one of
+them even though the answer never changes. This cost nothing observable before (the function was pure,
+side-effect-free) and only became visible now that it has one. Deliberately left unfixed — repairing
+`ImportPage.tsx`'s memoization is a different, riskier piece of surgery on an already delicate, heavily
+race-condition-tested file, out of scope for "add decision instrumentation," and bounded in practice by
+Part 9's existing retention pruning. Worth a dedicated future sprint if real usage shows it matters
+(candidate fix: dedupe identical consecutive decisions per ticker+decisionType).
+
+- **Files added**: `src/application/services/commitEngine.diagnostics.test.ts`.
+- **Files modified**: `src/domain/entities/diagnostics/DiagnosticEvent.ts` (`DecisionTraceRecord` revision,
+  `correlationId` on `DiagnosticEventBase`); `src/domain/repositories/index.ts` (`RecorderInput` picks up
+  `correlationId`); `src/application/services/{commitEngine.ts,constraintValidation.ts}`;
+  `src/presentation/pages/{ImportPage.tsx,DiagnosticsPage.tsx}`;
+  `src/application/services/constraintValidation.test.ts`;
+  `src/infrastructure/diagnostics/{Noop,Recording}DiagnosticsRecorder.test.ts` (updated call shapes);
+  `docs/DIAGNOSTICS_CENTER_SPEC.md` (Phase 3 execution log).
+- 1030/1031 tests passing (7 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean, production build verified, live Playwright verification against the dev
+  server (both the write flow and the new decision-trace flow).
+- **Next recommended sprint**: Phase 2b (the remaining 6 writer files), as originally deferred in Sprint 12
+  — `ledgerProjection.ts`'s `ensureLegacyFactsExist`/`projectLegacyTicker` remain the highest-value next
+  target, since every commit already runs through them. Independently: the `ImportPage.tsx` re-render/
+  memoization finding above is a real, disclosed piece of technical debt worth a look on its own, unrelated
+  to the Diagnostics Center itself.

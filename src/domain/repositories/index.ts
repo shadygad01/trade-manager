@@ -23,7 +23,7 @@ import type { DiagnosticCase } from "../entities/diagnostics/DiagnosticCase";
 
 /** What a DiagnosticsRecorder caller supplies for one event kind — everything except the fields the repository itself assigns (DiagnosticEventBase's id/seq/recordedAt/sessionId) and the discriminant, which the recorder method name already implies. Exported so DiagnosticsRecorder implementations (Noop/Recording, @infrastructure/diagnostics) can type their methods against the exact same shape. */
 export type RecorderInput<T extends DiagnosticEvent> = Omit<T, keyof DiagnosticEventBase | "kind"> &
-  Partial<Pick<DiagnosticEventBase, "portfolioId" | "ticker" | "workflowStep">>;
+  Partial<Pick<DiagnosticEventBase, "portfolioId" | "ticker" | "workflowStep" | "correlationId">>;
 
 export interface PortfolioRepository {
   getAll(): Promise<Portfolio[]>;

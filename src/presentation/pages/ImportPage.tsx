@@ -2639,14 +2639,19 @@ export function TickerGroupCard({
     const stillPendingRows = [...group.buys, ...group.sells].filter(
       (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
     );
-    return buildTickerConstraintReport(ticker, matchStatus, {
-      reconcileSuggestion,
-      lastBalancedDate: lastBalanced,
-      wrongTickerHintCount: stillPendingRows.filter((e) => wrongTickerHints?.has(e.key)).length,
-      dateMisreadHintCount: stillPendingRows.filter((e) => dateMisreadHints?.has(e.key)).length,
-      orphanedOrderEvidenceCount: orphanedOrderEvidence?.length ?? 0,
-      discrepancySide: matchStatus.discrepancySide,
-    });
+    return buildTickerConstraintReport(
+      ticker,
+      matchStatus,
+      {
+        reconcileSuggestion,
+        lastBalancedDate: lastBalanced,
+        wrongTickerHintCount: stillPendingRows.filter((e) => wrongTickerHints?.has(e.key)).length,
+        dateMisreadHintCount: stillPendingRows.filter((e) => dateMisreadHints?.has(e.key)).length,
+        orphanedOrderEvidenceCount: orphanedOrderEvidence?.length ?? 0,
+        discrepancySide: matchStatus.discrepancySide,
+      },
+      diagnostics,
+    );
   }, [
     ticker,
     matchStatus,

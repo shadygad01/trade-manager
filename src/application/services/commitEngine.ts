@@ -7,6 +7,7 @@ import {
   type RetractionPayload,
 } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { generateId } from "@domain/value-objects/id";
 import { verifyAll } from "./verificationEngine";
 import { generateLedgerEvents } from "./ledgerEngine";
 import { generateAllocations } from "./allocationEngine";
@@ -137,8 +138,22 @@ export async function shouldCommit(repos: CommitEngineRepos, portfolioId: string
   return [...verdicts.values()].every((v) => v.verdict !== "Needs Review");
 }
 
-export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedgerRepos>, portfolioId: string, ticker: string): Promise<void> {
+/** Verdict counts as one short string, e.g. "2 Verified, 1 Needs Review" — never the verdicts/evidence themselves (docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.7/2.3: a decision record's inputSummary/outputSummary are counts and labels, never a copy of the business objects they summarize). */
+function summarizeVerdicts(verdicts: Map<string, { verdict: string }>): string {
+  const counts = new Map<string, number>();
+  for (const v of verdicts.values()) counts.set(v.verdict, (counts.get(v.verdict) ?? 0) + 1);
+  if (counts.size === 0) return "no transactions to verify";
+  return [...counts.entries()].map(([verdict, n]) => `${n} ${verdict}`).join(", ");
+}
+
+export async function commitTicker(
+  repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
+  portfolioId: string,
+  ticker: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<void> {
   const normalizedTicker = normalizeTicker(ticker);
+  const correlationId = generateId();
 
   // Phase 9.8: when the caller's repos bundle carries the legacy tables (the
   // app's real singleton always does; bare CommitEngineRepos test bundles
@@ -168,9 +183,53 @@ export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedg
   // corroboration inputs; verdicts still only ever cover Buy/Sell rows.
   const verdicts = verifyAll({ transactions: relevant, positions: NO_EXISTING_POSITIONS });
   const verifiedTransactions = tradeTransactions.filter((t) => verdicts.get(t.id)?.verdict === "Verified");
+  const factSeqCursor = relevant.reduce((max, t) => Math.max(max, t.seq), 0);
+
+  diagnostics?.recordDecision({
+    decisionType: "Verification",
+    correlationId,
+    portfolioId,
+    ticker: normalizedTicker,
+    reader: "commitEngine.ts",
+    function: "commitTicker",
+    decision: summarizeVerdicts(verdicts),
+    inputSummary: `${relevant.length} relevant facts (${tradeTransactions.length} Buy/Sell)`,
+    outputSummary: `${verdicts.size} verdicts: ${summarizeVerdicts(verdicts)}`,
+    factSeqCursor,
+  });
 
   const events = generateLedgerEvents(verifiedTransactions);
+
+  diagnostics?.recordDecision({
+    decisionType: "Replay",
+    correlationId,
+    portfolioId,
+    ticker: normalizedTicker,
+    reader: "commitEngine.ts",
+    function: "commitTicker",
+    decision: `${events.length} ledger events`,
+    inputSummary: `${verifiedTransactions.length} verified Buy/Sell transactions`,
+    outputSummary: `${events.filter((e) => e.type === "LotOpened").length} LotOpened, ${events.filter((e) => e.type === "SellRecorded").length} SellRecorded`,
+    factSeqCursor,
+  });
+
   const allocations = generateAllocations(events, decisionTransactions);
+
+  diagnostics?.recordDecision({
+    decisionType: "Allocation",
+    correlationId,
+    portfolioId,
+    ticker: normalizedTicker,
+    reader: "commitEngine.ts",
+    function: "commitTicker",
+    decision: `${allocations.length} allocations`,
+    inputSummary: `${events.length} ledger events, ${decisionTransactions.length} allocation decisions`,
+    outputSummary:
+      allocations.length === 0 && decisionTransactions.length > 0
+        ? "0 allocations produced from a nonzero number of decisions — at least one decision's referenced lot could not be resolved"
+        : `${allocations.length} allocations produced`,
+    factSeqCursor,
+  });
 
   // Never fatal, same isolation as ensureLegacyFactsExist/projectLegacyTicker
   // just below: a real, reproduced bug under concurrent commits (many
@@ -245,7 +304,7 @@ export async function appendAndMaybeCommit(
     const { targetId, portfolioId } = appended.payload as PortfolioAssignmentPayload;
     const target = await repos.rawTransactions.getById(targetId);
     if (target?.ticker !== undefined && (await shouldCommit(repos, portfolioId, target.ticker))) {
-      await commitTicker(repos, portfolioId, target.ticker);
+      await commitTicker(repos, portfolioId, target.ticker, diagnostics);
     }
   } else if (appended.kind === "Correction") {
     // A ticker correction moves its target between two tickers' relevant
@@ -264,7 +323,7 @@ export async function appendAndMaybeCommit(
           const currentTicker = resolveCurrentTicker(all, target);
           const affectedTickers = new Set([priorTicker, currentTicker].filter((t): t is string => t !== undefined));
           for (const affectedTicker of affectedTickers) {
-            await commitTicker(repos, resolvedPortfolioId, affectedTicker);
+            await commitTicker(repos, resolvedPortfolioId, affectedTicker, diagnostics);
           }
         }
       }
@@ -280,12 +339,12 @@ export async function appendAndMaybeCommit(
       const resolvedPortfolioId = resolveCurrentPortfolioId(all, target);
       const resolvedTicker = resolveCurrentTicker(all, target);
       if (resolvedPortfolioId !== undefined && resolvedTicker !== undefined) {
-        await commitTicker(repos, resolvedPortfolioId, resolvedTicker);
+        await commitTicker(repos, resolvedPortfolioId, resolvedTicker, diagnostics);
       }
     }
   } else if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
     if (await shouldCommit(repos, appended.portfolioId, appended.ticker)) {
-      await commitTicker(repos, appended.portfolioId, appended.ticker);
+      await commitTicker(repos, appended.portfolioId, appended.ticker, diagnostics);
     }
   }
   return appended;

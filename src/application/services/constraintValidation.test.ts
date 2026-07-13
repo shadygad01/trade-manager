@@ -6,6 +6,8 @@ import {
   diagnoseInventoryContradiction,
   buildTickerConstraintReport,
 } from "./constraintValidation";
+import type { DiagnosticsRecorder } from "@domain/repositories";
+import type { DecisionTraceRecord } from "@domain/entities/diagnostics/DiagnosticEvent";
 
 describe("buildInventoryFacts + evaluateInventoryConstraint", () => {
   it("is satisfied and requires no Holdings for a fully closed position", () => {
@@ -194,5 +196,59 @@ describe("buildTickerConstraintReport", () => {
     expect(report.satisfied).toBe(true);
     expect(report.contradictions).toEqual([]);
     expect(report.diagnosis).toEqual([]);
+  });
+});
+
+describe("buildTickerConstraintReport Phase 3: Decision Trace (Constraint + Warning)", () => {
+  function fakeDiagnostics(): DiagnosticsRecorder & { decisions: DecisionTraceRecord[] } {
+    const decisions: DecisionTraceRecord[] = [];
+    return {
+      decisions,
+      recordSessionEvent() {},
+      recordWrite() {},
+      recordRead() {},
+      recordDecision(event) {
+        decisions.push({ ...event, id: "x", seq: decisions.length + 1, recordedAt: new Date().toISOString(), sessionId: "s1", kind: "DecisionTrace" });
+      },
+      recordRuleExecution() {},
+      recordPerfSample() {},
+    };
+  }
+
+  it("emits only a Constraint decision when the ticker is satisfied — no Warning noise for a passing check", () => {
+    const status = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 100,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 100,
+    });
+    const diagnostics = fakeDiagnostics();
+    buildTickerConstraintReport("COMI", status, {}, diagnostics);
+
+    expect(diagnostics.decisions.map((d) => d.decisionType)).toEqual(["Constraint"]);
+    expect(diagnostics.decisions[0].decision).toBe("Satisfied");
+    expect(diagnostics.decisions[0].ticker).toBe("COMI");
+  });
+
+  it("emits both a Constraint and a Warning decision when a contradiction exists, sharing no raw contradiction/diagnosis objects", () => {
+    const status = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 120,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 100,
+    });
+    const diagnostics = fakeDiagnostics();
+    buildTickerConstraintReport("COMI", status, { discrepancySide: status.discrepancySide }, diagnostics);
+
+    expect(diagnostics.decisions.map((d) => d.decisionType)).toEqual(["Constraint", "Warning"]);
+    const [constraint, warning] = diagnostics.decisions;
+    expect(constraint.decision).toBe("1 contradiction(s)");
+    expect(warning.decision).toContain("hypothesis");
+    for (const d of diagnostics.decisions) {
+      expect(typeof d.inputSummary).toBe("string");
+      expect(typeof d.outputSummary).toBe("string");
+    }
   });
 });

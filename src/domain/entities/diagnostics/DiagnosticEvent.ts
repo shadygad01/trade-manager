@@ -42,6 +42,16 @@ export interface DiagnosticEventBase {
   portfolioId?: string;
   ticker?: string;
   workflowStep?: WorkflowStep;
+  /**
+   * Ties several events together as one logical operation — e.g. every
+   * DecisionTraceRecord `commitTicker` (commitEngine.ts) emits during one
+   * commit (Verification, Replay, Allocation) shares the same
+   * correlationId, generated once at the top of that call, so a developer
+   * can see "these decisions all happened together" without guessing from
+   * timestamps alone. Part 3 (Reader/Decision Trace) — optional everywhere
+   * else, since not every event kind has a natural enclosing operation.
+   */
+  correlationId?: string;
 }
 
 export interface SessionEventRecord extends DiagnosticEventBase {
@@ -101,12 +111,30 @@ export interface ReadTraceRecord extends DiagnosticEventBase {
 
 export type DecisionType = "Replay" | "Verification" | "Allocation" | "Warning" | "Constraint" | "Policy";
 
+/**
+ * One record per decision-engine call (docs/DIAGNOSTICS_CENTER_SPEC.md
+ * Part 5.3/5.7, Phase 3) — Reader Trace and Decision Trace folded into one
+ * event kind for these engines, since for a pure decision function "what
+ * did it read" and "what did it decide" are the same occurrence, not two.
+ * `inputSummary`/`outputSummary` are short, hand-built strings — counts,
+ * verdicts, ticker names — never a serialized copy of the engine's real
+ * input/output objects (Part 2.3's "no raw business objects" rule extends
+ * here: a summary string is metadata about a decision, not a duplicate of
+ * business data). `factSeqCursor`, when present, is the same replay pointer
+ * every other event kind uses, so the ACTUAL inputs/outputs remain
+ * reconstructable on demand (Part 20 Replay Inspector) without ever storing
+ * them twice.
+ */
 export interface DecisionTraceRecord extends DiagnosticEventBase {
   kind: "DecisionTrace";
   decisionType: DecisionType;
-  factSeqCursor: number;
-  reasonCode: string;
-  reasonText: string;
+  reader: string;
+  function: string;
+  /** Short outcome label, e.g. "Verified", "3 allocations produced", "Contradiction found". */
+  decision: string;
+  inputSummary: string;
+  outputSummary: string;
+  factSeqCursor?: number;
 }
 
 export interface RuleExecutionRecord extends DiagnosticEventBase {

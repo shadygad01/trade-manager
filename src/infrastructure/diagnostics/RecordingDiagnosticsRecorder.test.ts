@@ -50,7 +50,15 @@ describe("RecordingDiagnosticsRecorder", () => {
 
     recorder.recordWrite({ writer: "w", function: "f", file: "file.ts", table: "trades", objectId: "1", valueSource: "reference", reason: "r" });
     recorder.recordRead({ reader: "r", function: "f", file: "file.ts", factSeqCursor: 1 });
-    recorder.recordDecision({ decisionType: "Verification", factSeqCursor: 1, reasonCode: "c", reasonText: "t" });
+    recorder.recordDecision({
+      decisionType: "Verification",
+      reader: "r",
+      function: "f",
+      decision: "d",
+      inputSummary: "in",
+      outputSummary: "out",
+      factSeqCursor: 1,
+    });
     recorder.recordRuleExecution({ ruleName: "n", passed: true, factSeqCursor: 1, reason: "r", durationMs: 1 });
     recorder.recordPerfSample({ operation: "Import", durationMs: 1 });
     await flush();

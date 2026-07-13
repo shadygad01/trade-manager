@@ -11,7 +11,15 @@ describe("NoopDiagnosticsRecorder", () => {
     ).toBeUndefined();
     expect(recorder.recordRead({ reader: "r", function: "f", file: "file.ts", factSeqCursor: 1 })).toBeUndefined();
     expect(
-      recorder.recordDecision({ decisionType: "Verification", factSeqCursor: 1, reasonCode: "c", reasonText: "t" })
+      recorder.recordDecision({
+        decisionType: "Verification",
+        reader: "r",
+        function: "f",
+        decision: "d",
+        inputSummary: "in",
+        outputSummary: "out",
+        factSeqCursor: 1,
+      })
     ).toBeUndefined();
     expect(
       recorder.recordRuleExecution({ ruleName: "n", passed: true, factSeqCursor: 1, reason: "r", durationMs: 1 })

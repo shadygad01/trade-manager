@@ -1,18 +1,26 @@
 # Developer Diagnostics Center — Architecture Specification
 
-**Status: APPROVED. Phase 1 and Phase 2 SHIPPED, Phase 2 narrower than planned (Part 12).** Before Phase 1
-began, every field in the data model was certified against a strict four-category provenance test
-(Part 2.3) — two real design defects were found and fixed during that certification, not merely
-categorized around: a mutable `status` field on `DiagnosticCase` that contradicted the "never edited
-field-by-field" rule (removed), and a duplication risk in `oldValue`/`newValue`/`input`/`output` capture
-that would have silently copied canonical/derived business data into the diagnostics store (replaced with
-a three-mode `valueSource` design — reference / replayCursor / narrowly-scoped snapshot — detailed in
-Part 2.3). Phase 1 (foundation) then surfaced one more design gap during implementation, not anticipated
-by the certification: `purge.ts`'s Reset must never wipe the diagnostics log (Part 3.1). Phase 2 (Session
-Recorder + Writer Trace) shipped a complete, end-to-end-verified vertical slice through `TradeService.ts`'s
-`recordBuy`/`recordSell` rather than a shallow pass across all 10 named writer files, after a real
-regression surfaced mid-build (see Part 12's Phase 2 entry) — the remaining 6 writer files are explicitly
-Phase 2b, not started. Next: either Phase 2b (breadth) or Phase 3 (Reader/Decision Trace), not yet decided.
+**Status: APPROVED. Phases 1–3 SHIPPED (Part 12); Phase 3 landed before Phase 2b, by explicit direction.**
+Before Phase 1 began, every field in the data model was certified against a strict four-category
+provenance test (Part 2.3) — two real design defects were found and fixed during that certification, not
+merely categorized around: a mutable `status` field on `DiagnosticCase` that contradicted the "never
+edited field-by-field" rule (removed), and a duplication risk in `oldValue`/`newValue`/`input`/`output`
+capture that would have silently copied canonical/derived business data into the diagnostics store
+(replaced with a three-mode `valueSource` design — reference / replayCursor / narrowly-scoped snapshot —
+detailed in Part 2.3). Phase 1 (foundation) then surfaced one more design gap during implementation, not
+anticipated by the certification: `purge.ts`'s Reset must never wipe the diagnostics log (Part 3.1).
+Phase 2 (Session Recorder + Writer Trace) shipped a complete, end-to-end-verified vertical slice through
+`TradeService.ts`'s `recordBuy`/`recordSell` rather than a shallow pass across all 10 named writer files,
+after a real regression surfaced mid-build (see Part 12's Phase 2 entry) — the remaining 6 writer files
+are explicitly Phase 2b, deliberately deferred again. Phase 3 (Reader Trace + Decision Trace) was directed
+ahead of Phase 2b on the reasoning that most production issues investigated so far are decision problems
+(Mismatch, Needs Broker Screenshot, Needs Corroborating Evidence), not write problems — it instruments the
+five named decision engines (`commitTicker`'s Verification/Replay/Allocation, `buildTickerConstraintReport`'s
+Constraint/Warning) and revised `DecisionTraceRecord` to merge Reader+Decision into one record with
+`reader`/`function`/`decision`/`inputSummary`/`outputSummary`, plus a new cross-event `correlationId`.
+Verified end-to-end; also surfaced (and deliberately left unfixed, out of scope) a pre-existing `ImportPage.tsx`
+re-render pattern that now produces redundant identical decision events — see Part 12's Phase 3 entry.
+Next: Phase 2b (writer breadth), not started.
 
 **Mission**: Portfolio OS runs entirely in the browser with no backend and no server-side database.
 Every user's IndexedDB is private to their machine — a developer or an AI assistant investigating a
@@ -109,7 +117,13 @@ interface DiagnosticEventBase {
   objectId: string; valueSource: "reference"|"replayCursor"|"snapshot"; factSeqCursor?: number;
   oldValue?: unknown; newValue?: unknown; reason: string }`
 - `ReadTraceRecord { kind: "ReadTrace"; reader: string; function: string; file: string; factSeqCursor: number; decision?: string }`
-- `DecisionTraceRecord { kind: "DecisionTrace"; decisionType: "Replay"|"Verification"|"Allocation"|"Warning"|"Constraint"|"Policy"; factSeqCursor: number; reasonCode: string; reasonText: string }`
+- `DecisionTraceRecord { kind: "DecisionTrace"; decisionType: "Replay"|"Verification"|"Allocation"|"Warning"|"Constraint"|"Policy"; reader: string; function: string; decision: string; inputSummary: string; outputSummary: string; factSeqCursor?: number }`
+  — revised again in Phase 3 (Part 12): merges what this Part originally split into `ReadTraceRecord`/
+  `DecisionTraceRecord` for the five actual decision engines (for a pure decision function, "what it read"
+  and "what it decided" are one occurrence), adds `reader`/`function`/`decision`/`inputSummary`/
+  `outputSummary`, drops `reasonCode`/`reasonText` (superseded), and adds `correlationId?: string` to
+  `DiagnosticEventBase` itself (not decision-specific) so several related decisions can be tied together
+  as one logical operation.
 - `RuleExecutionRecord { kind: "RuleExecution"; ruleName: string; passed: boolean; factSeqCursor: number; reason: string; durationMs: number }`
 - `PerfSampleRecord { kind: "PerfSample"; operation: "Import"|"Replay"|"Verification"|"Allocation"|"Commit"|"Render"; durationMs: number; meta?: Record<string, unknown> }`
 
@@ -681,8 +695,39 @@ it displays.
   originally-planned guard (scanning a `src/application/services/diagnostics/` directory) didn't match how
   the instrumentation actually landed — inline in the business files themselves via an optional parameter,
   not a separate wrapping module.
-- **Phase 3 — Reader Trace + Decision Trace.** Instrument the five read entry points (Part 5.3). UI:
-  Decision Trace tab, Query Inspector chain view.
+- **Phase 3 — Reader Trace + Decision Trace. SHIPPED, ahead of Phase 2b per explicit direction** (most
+  production issues investigated so far — Mismatch, Needs Broker Screenshot, Needs Corroborating Evidence
+  — are decision problems, not write problems). Instruments exactly the five decision engines named:
+  `commitTicker` (`commitEngine.ts`) emits Verification, Replay, and Allocation decisions — one of each
+  per commit, sharing one `correlationId` generated once at the top of the call, so a developer can see all
+  three as one logical operation. `buildTickerConstraintReport` (`constraintValidation.ts`) emits a
+  Constraint decision always, and a Warning decision only when a contradiction actually exists (mirroring
+  its own "diagnosis only after contradiction" rule — recording a Warning for every satisfied constraint
+  would be pure noise).
+  **Revised `DecisionTraceRecord` from Part 2's original design**, based on this phase's explicit field
+  requirements: merged what Part 5's original design split into separate Reader Trace / Decision Trace
+  event kinds into one record for these five engines (for a pure decision function, "what did it read" and
+  "what did it decide" are the same occurrence) — added `reader`/`function`/`decision`/`inputSummary`/
+  `outputSummary`, added `correlationId` to `DiagnosticEventBase` (shared across every event kind, not
+  decision-specific), dropped `reasonCode`/`reasonText` (superseded by `decision`+`outputSummary`), made
+  `factSeqCursor` optional (`buildTickerConstraintReport` is a pure synchronous function with no fact-log
+  access of its own — nothing to point a cursor at). `inputSummary`/`outputSummary` are hand-built strings
+  (verdict counts, event-type counts, contradiction deltas) — never a serialized copy of the engine's real
+  input/output objects, per this phase's explicit "no raw business objects" instruction.
+  **Verified end-to-end**: new unit tests exercise the real (non-mocked) `commitTicker`/
+  `buildTickerConstraintReport` implementations directly, plus a live Playwright run against the dev server
+  confirmed both the already-working write flow still works and the constraint/decision path renders
+  correctly for a real "Needs broker screenshot" scenario.
+  **A real, verified finding, disclosed rather than silently fixed**: the live run also showed the same
+  Constraint decision firing ~12 times for one conceptual ticker-card render, because `ImportPage.tsx`'s
+  `constraintReport` `useMemo` dependencies (`matchStatus`, `group.buys`, etc.) aren't referentially stable
+  across that page's several sequential `useLiveQuery` resolutions — a pre-existing re-render pattern in
+  that component, newly OBSERVABLE only because this phase gave a previously side-effect-free `useMemo` a
+  side effect. Left unfixed deliberately: fixing `ImportPage.tsx`'s memoization is a different, riskier
+  piece of surgery on an already-delicate, heavily-tested file, out of scope for "add decision
+  instrumentation." Bounded in practice by Part 9's existing retention pruning; a good candidate for a
+  future phase (e.g. dedupe identical consecutive decisions per ticker) if it proves to matter with real
+  usage.
 - **Phase 4 — Case Detection Engine.** `detectDiagnosticCases` + first three triggers (mismatch,
   exception, assertion failure) (Part 6). UI: Case List with search/filter (Part 7.2, master spec Parts
   16, 18, 19).
