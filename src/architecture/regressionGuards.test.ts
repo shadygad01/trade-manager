@@ -176,6 +176,9 @@ describe("CI guard: no new direct-mutable derived-state Dexie table", () => {
       verifications: "owned-mutable",
       uploads: "owned-mutable",
       pendingExecutions: "owned-mutable (explicitly NOT a Fact — see PendingExecution's own doc comment)",
+      // Diagnostics Center (docs/DIAGNOSTICS_CENTER_SPEC.md Part 3.1) — observation-only, never read by business logic (Part 5.4), never wiped by purge.ts's Reset (see purge.ts's own doc comment on allTables). diagnosticEvents mirrors rawTransactions's append-only discipline; diagnosticCases mirrors ledgerCache's full-delete-and-regenerate-per-key discipline.
+      diagnosticEvents: "diagnostic-store (append-only)",
+      diagnosticCases: "diagnostic-store (replay-cache)",
     };
 
     const db = new PortfolioOsDatabase(`arch-guard-${Math.random()}`);

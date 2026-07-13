@@ -4,6 +4,7 @@ import { Menu } from "lucide-react";
 import { Sidebar } from "@presentation/components/Sidebar";
 import { useT } from "@presentation/i18n/translations";
 import { useLanguage } from "@presentation/i18n/language";
+import { isDeveloperModeEnabled } from "@presentation/lib/developerMode";
 
 const DashboardPage = lazy(() => import("@presentation/pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
 const PortfoliosPage = lazy(() => import("@presentation/pages/PortfoliosPage").then((m) => ({ default: m.PortfoliosPage })));
@@ -27,6 +28,17 @@ const DataPage = lazy(() => import("@presentation/pages/DataPage").then((m) => (
 // import.meta.env.BASE_URL mirrors vite.config.ts's `base: "/trade-manager/"`;
 // wouter needs it without the trailing slash.
 const ROUTER_BASE = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+// docs/DIAGNOSTICS_CENTER_SPEC.md Part 7.1: read once at module load (the
+// same "checked once at composition-root time" discipline the recorder
+// wiring in presentation/lib/data.ts uses), so the route is genuinely
+// absent from the router — and its lazy chunk never fetched — for the
+// overwhelming majority of users who never turn Developer Mode on, not just
+// hidden behind a redirect that would still ship the code.
+const DEVELOPER_MODE_ENABLED = isDeveloperModeEnabled();
+const DiagnosticsPage = DEVELOPER_MODE_ENABLED
+  ? lazy(() => import("@presentation/pages/DiagnosticsPage").then((m) => ({ default: m.DiagnosticsPage })))
+  : null;
 
 // Below `lg`, the sidebar was a fixed-width flex sibling permanently
 // squeezing every page's content into a sliver (the reported "mobile layout
@@ -77,6 +89,7 @@ function AppShell() {
               <Route path="/portfolios/:id/analytics" component={AnalyticsPage} />
               <Route path="/import" component={ImportPage} />
               <Route path="/data" component={DataPage} />
+              {DiagnosticsPage ? <Route path="/diagnostics" component={DiagnosticsPage} /> : null}
               <Route>
                 <Redirect to="/" />
               </Route>

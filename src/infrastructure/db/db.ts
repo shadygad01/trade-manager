@@ -10,6 +10,8 @@ import type { RawTransaction } from "@domain/entities/RawTransaction";
 import type { LedgerEvent } from "@domain/entities/LedgerEvent";
 import type { Allocation } from "@domain/entities/Allocation";
 import type { PendingExecution } from "@domain/entities/PendingExecution";
+import type { DiagnosticEvent } from "@domain/entities/diagnostics/DiagnosticEvent";
+import type { DiagnosticCase } from "@domain/entities/diagnostics/DiagnosticCase";
 
 /** Storage row wrapping a LedgerEvent with the (portfolioId, ticker) keying Dexie needs — never exposed outside DexieCommittedLedgerRepository. `id` is composite (`portfolioId|eventId`) because LedgerEvent.eventId alone isn't unique across portfolios: two different portfolios could coincidentally hold economically identical trades. */
 export interface LedgerCacheRow {
@@ -39,6 +41,8 @@ export class PortfolioOsDatabase extends Dexie {
   ledgerCache!: EntityTable<LedgerCacheRow, "id">;
   allocationsCache!: EntityTable<AllocationCacheRow, "id">;
   pendingExecutions!: EntityTable<PendingExecution, "id">;
+  diagnosticEvents!: EntityTable<DiagnosticEvent, "id">;
+  diagnosticCases!: EntityTable<DiagnosticCase, "id">;
 
   constructor(name = "PortfolioOsDatabase") {
     super(name);
@@ -107,6 +111,31 @@ export class PortfolioOsDatabase extends Dexie {
       ledgerCache: "&id, portfolioId, ticker, [portfolioId+ticker]",
       allocationsCache: "&id, portfolioId, ticker, [portfolioId+ticker]",
       pendingExecutions: "&id, portfolioId, ticker, [portfolioId+ticker], verificationStatus",
+    });
+
+    // Additive again: v1-v4 tables re-listed verbatim, plus the Diagnostics
+    // Center's two tables (docs/DIAGNOSTICS_CENTER_SPEC.md Part 3.1) — an
+    // append-only observation log (diagnosticEvents, same seq-assignment
+    // discipline as rawTransactions) and its derived, replaceable case index
+    // (diagnosticCases, same full-delete-and-regenerate discipline as
+    // ledgerCache/allocationsCache). Both are written only when Developer
+    // Mode is on (Part 4) and are never read by business logic (Part 5.4) —
+    // an observer of the schema above, structurally incapable of becoming a
+    // second source of truth for it.
+    this.version(5).stores({
+      portfolios: "&id, kind, archivedAt",
+      trades: "&id, portfolioId, ticker, [portfolioId+ticker], executionDate",
+      tradeAllocations: "&id, portfolioId, tradeId, ticker, sellGroupId, [portfolioId+ticker]",
+      timelineEvents: "&id, portfolioId, type, ticker, timestamp",
+      journalEntries: "&id, tradeId, portfolioId",
+      verifications: "&id, portfolioId, ticker, [portfolioId+ticker], capturedAt",
+      uploads: "&id, portfolioId, fileHash, [portfolioId+fileHash], status",
+      rawTransactions: "&id, seq, portfolioId, kind, ticker",
+      ledgerCache: "&id, portfolioId, ticker, [portfolioId+ticker]",
+      allocationsCache: "&id, portfolioId, ticker, [portfolioId+ticker]",
+      pendingExecutions: "&id, portfolioId, ticker, [portfolioId+ticker], verificationStatus",
+      diagnosticEvents: "&id, seq, sessionId, recordedAt, kind, ticker, portfolioId",
+      diagnosticCases: "&id, groupKey, severity, triggerType, ticker, portfolioId, latestOccurrenceEventSeq",
     });
   }
 }

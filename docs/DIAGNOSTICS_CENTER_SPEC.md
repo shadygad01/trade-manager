@@ -1,13 +1,16 @@
 # Developer Diagnostics Center — Architecture Specification
 
-**Status: APPROVED. Source-of-truth field certification complete (Part 2.3). Phase 1 underway.** Before
-Phase 1 began, every field in the data model was certified against a strict four-category provenance
-test (Part 2.3) — two real design defects were found and fixed during that certification, not merely
-categorized around: a mutable `status` field on `DiagnosticCase` that contradicted the "never edited
-field-by-field" rule (removed), and a duplication risk in `oldValue`/`newValue`/`input`/`output` capture
-that would have silently copied canonical/derived business data into the diagnostics store (replaced with
-a three-mode `valueSource` design — reference / replayCursor / narrowly-scoped snapshot — detailed in
-Part 2.3). No production code exists against a Part 2 shape that predates this certification.
+**Status: APPROVED. Source-of-truth field certification complete (Part 2.3). Phase 1 SHIPPED (Part 12).**
+Before Phase 1 began, every field in the data model was certified against a strict four-category
+provenance test (Part 2.3) — two real design defects were found and fixed during that certification, not
+merely categorized around: a mutable `status` field on `DiagnosticCase` that contradicted the "never
+edited field-by-field" rule (removed), and a duplication risk in `oldValue`/`newValue`/`input`/`output`
+capture that would have silently copied canonical/derived business data into the diagnostics store
+(replaced with a three-mode `valueSource` design — reference / replayCursor / narrowly-scoped snapshot —
+detailed in Part 2.3). Phase 1 (foundation: domain types, storage, recorder, Developer Mode gating, empty
+route — Part 12) then surfaced one more design gap during implementation, not anticipated by the
+certification: `purge.ts`'s Reset must never wipe the diagnostics log (Part 3.1). Next: Phase 2 (Session
+Recorder + Writer Trace instrumentation), not yet started.
 
 **Mission**: Portfolio OS runs entirely in the browser with no backend and no server-side database.
 Every user's IndexedDB is private to their machine — a developer or an AI assistant investigating a
@@ -326,13 +329,18 @@ table per `DiagnosticEvent` subtype. This also minimizes the blast radius on
 exactly two new entries, both under an explicit new category (`diagnostic-store`), in the same commit
 that adds the schema version — never silently.
 
+**Found during Phase 1 implementation, not anticipated in the original design**: `src/infrastructure/db/purge.ts`'s `allTables()` — the enumeration `purgeAllData`/`purgeTickerData` ("Reset") wipe inside one transaction — has its own test (`purge.test.ts`) asserting it matches the live schema's table list exactly, for the same reason the Dexie table-list guard exists (a table silently missing from `allTables()` previously shipped as a real bug, leaving orphaned `pendingExecutions` rows after a Reset). Naively adding the two new tables to `db.ts`'s schema made that test start asserting `diagnosticEvents`/`diagnosticCases` should ALSO be purged by Reset. They must not be: "Reset" is itself a recorded `WorkflowStep` (Part 2.1), so a Reset that also wiped the diagnostics log would destroy the very record of the Reset happening — exactly the failure mode the Diagnostics Center exists to prevent. Resolution: `diagnosticEvents`/`diagnosticCases` are a **deliberate, named, tested exclusion** from `allTables()`, documented on `allTables()` itself and asserted by `purge.test.ts` (so a THIRD table someday landing in the schema without a decision either way still fails loudly, same discipline as everywhere else in this codebase). This generalizes Part 0's "read-only" ground rule into a two-way boundary: business logic never reads diagnostics data (already covered), and business logic — including its own destructive "start over" action — never writes to or deletes diagnostics data either.
+
 ### 3.2 Repository interfaces live in `@domain`, implementations in `@infrastructure`
 
-Same shape as every other repository in this app:
+Same shape as every other repository in this app — this codebase keeps every repository interface in one
+file (`src/domain/repositories/index.ts`) rather than one file per entity, so `DiagnosticEventRepository`/
+`DiagnosticCaseRepository`/`DiagnosticsRecorder` live there too, not in separate files as an earlier draft
+of this spec assumed:
 
-- `src/domain/repositories/DiagnosticEventRepository.ts` — `append(event)`, `getBySession(sessionId)`, `getRecent(limit)`, `pruneOlderThan(cutoff)`.
-- `src/domain/repositories/DiagnosticCaseRepository.ts` — `replaceForGroupKeys(cases)`, `getAll()`, `search(filter)`.
-- `src/infrastructure/db/DexieDiagnosticEventRepository.ts` / `DexieDiagnosticCaseRepository.ts` — Dexie-backed.
+- `src/domain/repositories/index.ts` — `DiagnosticEventRepository` (`append`, `getBySession`, `getRecent`, `pruneOlderThan`), `DiagnosticCaseRepository` (`getAll`, `search`, `replaceForGroupKeys`, `pruneToMostRecent`), `DiagnosticsRecorder` (Part 3.3).
+- `src/infrastructure/db/repositories/DexieDiagnosticEventRepository.ts` / `DexieDiagnosticCaseRepository.ts` — Dexie-backed, matching every other `Dexie*Repository`'s location.
+- `src/infrastructure/db/repositories/index.ts` gains `createDiagnosticsRepositories()`, a factory deliberately separate from `createRepositories()`/`Repositories` — no business-layer file (`AppRepositories`, `repos` in `presentation/lib/data.ts`) ever gets a handle to a diagnostics repository, keeping Part 5.4's "never read by business logic" true by construction, not just convention.
 
 ### 3.3 The recorder is a port, and the default implementation is a no-op
 
@@ -364,16 +372,20 @@ the same interface-plus-swappable-implementation shape `AppRepositories` already
 No feature-flag mechanism exists in this app today (Part 1). This spec adds the minimum one:
 
 - `localStorage['portfolio-os:developer-mode'] = 'true'` is the persisted flag.
-- It is set only via a **hidden** affordance: a 7-tap sequence on the app's version/build number in
-  Settings (a common, well-understood "hidden dev menu" pattern — no normal user finds it by accident,
-  no URL parameter is needed so it can't leak via a shared link/screenshot).
-- Reading the flag happens once at app boot (`presentation/lib/developerMode.ts`), which decides whether
-  `NoopDiagnosticsRecorder` or `RecordingDiagnosticsRecorder` gets wired into the app's dependency
-  composition root, and whether the `/diagnostics` route is registered at all (Part 7.1) — not just
-  hidden by CSS, genuinely absent from the router when off.
+- **Resolved during Phase 1 (was Part 13's open question #1)**: there is no Settings screen with a version
+  number anywhere in this app to hide a tap-sequence behind, so the hidden affordance is a keyboard
+  shortcut instead — Ctrl+Alt+Shift+D, registered once in `main.tsx` via
+  `installDeveloperModeHiddenToggle()` (`presentation/lib/developerMode.ts`). Toggling flips the flag and
+  reloads the page rather than swapping anything live, since every consumer below reads the flag once at
+  boot. No URL parameter is used, so it can't leak via a shared link or screenshot.
+- Reading the flag happens once at app boot (`presentation/lib/developerMode.ts`'s `isDeveloperModeEnabled()`),
+  which decides whether `NoopDiagnosticsRecorder` or `RecordingDiagnosticsRecorder` gets wired into the
+  app's dependency composition root (`presentation/lib/data.ts`), and whether the `/diagnostics` route is
+  registered at all (Part 7.1) — not just hidden by CSS, genuinely absent from the router when off.
 - Turning Developer Mode off does **not** delete previously recorded diagnostics — it stops recording new
-  events and hides the UI. A separate, explicit "Clear all diagnostics" button (Part 10.3) is the only
-  way to delete diagnostics data.
+  events and hides the UI. A separate, explicit "Clear all diagnostics" button (Part 10.3, not yet built —
+  Phase 1 shipped no delete path beyond Part 9's automatic retention pruning) is the only way meant to
+  delete diagnostics data once it exists.
 
 ### 4.2 Session identity
 
@@ -619,11 +631,22 @@ Each phase below is independently mergeable, independently revertible (deleting 
 does not break an earlier phase), and ships with its own tests. No phase implements UI ahead of the data
 it displays.
 
-- **Phase 1 — Foundation.** `DiagnosticEvent`/`DiagnosticCase` domain types (Part 2), Dexie v5 schema +
-  repositories (Part 3), `NoopDiagnosticsRecorder`/`RecordingDiagnosticsRecorder` (Part 3.3), Developer
-  Mode flag + hidden toggle + composition-root wiring (Part 4), empty `/diagnostics` route showing "no
-  cases recorded yet." **No business file is touched.** Fully reversible: delete the route, the two
-  tables, and the flag.
+- **Phase 1 — Foundation. SHIPPED.** `DiagnosticEvent`/`DiagnosticCase` domain types (Part 2), Dexie v5
+  schema + repositories (Part 3), `NoopDiagnosticsRecorder`/`RecordingDiagnosticsRecorder` (Part 3.3),
+  Developer Mode flag + hidden toggle + composition-root wiring (Part 4), empty `/diagnostics` route
+  showing "no cases recorded yet," Part 9's retention pruning wired at startup. **No business file's
+  behavior is touched** (`purge.ts`'s `allTables()` doc comment gained a one-line note — Part 3.1 — but no
+  logic changed). Fully reversible: delete the route, the two tables, the flag, and the retention-pruning
+  startup hook. 1021 tests passing (34 new), `tsc --noEmit` clean, `npm run arch:check` clean, production
+  build verified (`npm run build`). Files: `src/domain/entities/diagnostics/{DiagnosticEvent,DiagnosticCase}.ts`;
+  `DiagnosticEventRepository`/`DiagnosticCaseRepository`/`DiagnosticsRecorder`/`RecorderInput` added to
+  `src/domain/repositories/index.ts`; `db.ts` version 5; `DexieDiagnosticEventRepository`/
+  `DexieDiagnosticCaseRepository` + tests; `NoopDiagnosticsRecorder`/`RecordingDiagnosticsRecorder` +
+  tests (`src/infrastructure/diagnostics/`); `src/application/services/diagnostics/retentionPolicy.ts` +
+  test; `presentation/lib/developerMode.ts` + test; `presentation/pages/DiagnosticsPage.tsx` + test;
+  `presentation/App.tsx`/`main.tsx`/`presentation/lib/data.ts` wiring;
+  `src/architecture/regressionGuards.test.ts`'s Dexie table allowlist; `purge.ts`/`purge.test.ts`'s
+  documented exclusion (Part 3.1).
 - **Phase 2 — Session Recorder + Writer Trace.** One-line instrumentation in the 10 frozen writer call
   sites (Part 5.1, 5.2) + Part 5.4's observe-only guard. UI: raw Timeline + Writer Trace list (no case
   detection yet — every event is visible, nothing is triaged).
@@ -649,11 +672,11 @@ it displays.
 
 ## Part 13 — Open questions (for the approver, not decided unilaterally here)
 
-1. **Hidden-toggle mechanism** (Part 4.1) proposes a 7-tap version-number sequence in Settings. If there's
-   no existing Settings screen with a version number displayed, an alternative (e.g. a keyboard shortcut)
-   needs picking — this spec's choice is a reasonable default, not a hard requirement.
+1. ~~**Hidden-toggle mechanism**~~ — **Resolved in Phase 1** (Part 4.1): no Settings screen with a version
+   number exists, so the toggle is a Ctrl+Alt+Shift+D keyboard shortcut instead.
 2. **Retention numbers** (Part 9: 5,000 events / 30 days / 200 cases) are starting guesses, not measured —
    worth revisiting after Phase 2 ships with real usage data.
 3. **Should "Clear all diagnostics" require confirmation-typing** (like destructive actions elsewhere in
    this app) or a single confirm dialog — no existing convention in this codebase to anchor to since this
-   would be the first purely-developer-facing destructive action.
+   would be the first purely-developer-facing destructive action. Not yet built (Phase 1 shipped no delete
+   UI at all, only automatic retention pruning).

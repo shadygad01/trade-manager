@@ -9,6 +9,21 @@ import type { RawTransaction } from "../entities/RawTransaction";
 import type { LedgerEvent } from "../entities/LedgerEvent";
 import type { Allocation } from "../entities/Allocation";
 import type { PendingExecution } from "../entities/PendingExecution";
+import type {
+  DiagnosticEvent,
+  DiagnosticEventBase,
+  SessionEventRecord,
+  WriteTraceRecord,
+  ReadTraceRecord,
+  DecisionTraceRecord,
+  RuleExecutionRecord,
+  PerfSampleRecord,
+} from "../entities/diagnostics/DiagnosticEvent";
+import type { DiagnosticCase } from "../entities/diagnostics/DiagnosticCase";
+
+/** What a DiagnosticsRecorder caller supplies for one event kind — everything except the fields the repository itself assigns (DiagnosticEventBase's id/seq/recordedAt/sessionId) and the discriminant, which the recorder method name already implies. Exported so DiagnosticsRecorder implementations (Noop/Recording, @infrastructure/diagnostics) can type their methods against the exact same shape. */
+export type RecorderInput<T extends DiagnosticEvent> = Omit<T, keyof DiagnosticEventBase | "kind"> &
+  Partial<Pick<DiagnosticEventBase, "portfolioId" | "ticker" | "workflowStep">>;
 
 export interface PortfolioRepository {
   getAll(): Promise<Portfolio[]>;
@@ -126,4 +141,59 @@ export interface PriceRepository {
   getSnapshotInfo(): Promise<PriceSnapshotInfo | null>;
   /** Day-by-day closing prices for one ticker, keyed by "YYYY-MM-DD". Empty object if no history is available yet. Backed by a separate accumulating snapshot (public/price-history.json) — a ticker only gains entries once fetch-prices has run on that trading day. */
   getPriceHistory(ticker: string): Promise<Record<string, number>>;
+}
+
+/**
+ * Storage for the Diagnostics Center's append-only observation log (see
+ * DiagnosticEvent.ts's own doc comment). Deliberately exposes no
+ * update/delete beyond retention pruning — immutability is enforced
+ * structurally by this interface's shape, matching RawTransactionRepository.
+ * Never read by, or exposed to, any business-logic code path (see
+ * docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.4).
+ */
+export interface DiagnosticEventRepository {
+  /** Assigns `seq` atomically and persists the row. The only way a DiagnosticEvent ever reaches storage. */
+  append(event: Omit<DiagnosticEvent, "seq">): Promise<DiagnosticEvent>;
+  getBySession(sessionId: string): Promise<DiagnosticEvent[]>;
+  getRecent(limit: number): Promise<DiagnosticEvent[]>;
+  /** Part 9 retention pruning — deletes events older than `cutoff` (ISO timestamp), oldest first. Never called from business logic. */
+  pruneOlderThan(cutoff: string): Promise<number>;
+}
+
+/**
+ * Storage for the Diagnostics Center's derived case index (see
+ * DiagnosticCase.ts's own doc comment). `replaceForGroupKeys` is the only
+ * write path — a full delete-and-regenerate for the given `groupKey`s, never
+ * a per-field update, matching CommittedLedgerRepository.commitTicker's
+ * discipline.
+ */
+export interface DiagnosticCaseRepository {
+  getAll(): Promise<DiagnosticCase[]>;
+  search(filter: {
+    ticker?: string;
+    portfolioId?: string;
+    severity?: DiagnosticCase["severity"];
+    workflowStep?: DiagnosticCase["workflowStep"];
+  }): Promise<DiagnosticCase[]>;
+  /** Deletes every existing case whose groupKey appears in `cases`, then inserts the given cases — full replace, never a merge or patch. */
+  replaceForGroupKeys(cases: DiagnosticCase[]): Promise<void>;
+  /** Part 9 retention pruning — caps the table at the most-recently-active N cases. */
+  pruneToMostRecent(limit: number): Promise<number>;
+}
+
+/**
+ * Port for recording diagnostics. `NoopDiagnosticsRecorder` (default,
+ * Developer Mode off) makes every method a no-op — zero IndexedDB writes,
+ * zero cost. `RecordingDiagnosticsRecorder` (Developer Mode on) writes to
+ * DiagnosticEventRepository, fire-and-forget, never `await`ed by the caller
+ * and never throwing into it — a diagnostics failure must never affect a
+ * business write or read. See docs/DIAGNOSTICS_CENTER_SPEC.md Part 3.3/5.
+ */
+export interface DiagnosticsRecorder {
+  recordSessionEvent(event: RecorderInput<SessionEventRecord>): void;
+  recordWrite(event: RecorderInput<WriteTraceRecord>): void;
+  recordRead(event: RecorderInput<ReadTraceRecord>): void;
+  recordDecision(event: RecorderInput<DecisionTraceRecord>): void;
+  recordRuleExecution(event: RecorderInput<RuleExecutionRecord>): void;
+  recordPerfSample(event: RecorderInput<PerfSampleRecord>): void;
 }

@@ -1,7 +1,10 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "@presentation/App";
+import { installDeveloperModeHiddenToggle } from "@presentation/lib/developerMode";
 import "./index.css";
+
+installDeveloperModeHiddenToggle();
 
 const container = document.getElementById("root");
 if (!container) {

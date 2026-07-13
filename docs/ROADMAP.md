@@ -2087,3 +2087,72 @@ scoped to compile, test, and revert independently.
   no-op/recording `DiagnosticsRecorder` pair, the hidden Developer Mode toggle, an empty `/diagnostics`
   route) — the only phase with zero dependencies and zero touches to any existing business file. Do not
   jump ahead to instrumentation (Phase 2) before Phase 1 lands and is reviewed.
+
+### Sprint 11 — Diagnostics Center field-provenance certification, then Phase 1 (foundation)
+
+Directed sprint: before allowing any Diagnostics Center code, certify that every field the design proposed
+storing is one of exactly four things — canonical stored data, deterministically derived data, runtime/UI
+state, or diagnostic metadata — so the new system can never become a second source of truth. Certification
+was not a rubber-stamp: it found and fixed two real defects in the Sprint 10 design before Phase 1 began
+(full reasoning in `docs/DIAGNOSTICS_CENTER_SPEC.md` Part 2.3).
+
+**Defect 1 — a mutable `status` field on `DiagnosticCase`.** Contradicted the model's own "never edited
+field-by-field" rule (acknowledging a case would have to mutate a supposedly-replaceable-only row). The
+master spec never asked for acknowledgment workflow, so the honest fix was deletion, not inventing a new
+event kind just to make the field derivable.
+
+**Defect 2 — raw value copies (`oldValue`/`newValue`/`input`/`output`) captured on every write and read.**
+Auditing where each value actually comes from split it into three cases: writes to `rawTransactions` need
+no copy at all (it's already permanent and canonical — refetch by id); writes to `trades`/
+`tradeAllocations`/`ledgerCache`/`allocationsCache` by a fact-replay-backed writer need no copy either
+(these tables are themselves materialized projections of `rawTransactions` — replay it up to a recorded
+`factSeqCursor` through the existing engines on demand, exactly what the Replay Inspector phase already
+needs); only two writers in the whole codebase (`BackupService`'s bulk restore, `ledgerRebuild`'s
+`applyLedgerRebuild`) don't derive from fact replay, so only those two are allowed to capture a real
+snapshot — frozen by a planned new regression guard. This became `WriteTraceRecord`'s three-mode
+`valueSource` discriminant (`reference`/`replayCursor`/`snapshot`), and the same reasoning dropped raw
+`input`/`output` from `ReadTraceRecord`/`DecisionTraceRecord`/`RuleExecutionRecord` entirely in favor of a
+`factSeqCursor` pointer plus small scalar decision fields.
+
+**Phase 1 (Foundation) then shipped** on top of the certified design: `DiagnosticEvent`/`DiagnosticCase`
+domain types (`src/domain/entities/diagnostics/`), `DiagnosticEventRepository`/`DiagnosticCaseRepository`/
+`DiagnosticsRecorder` interfaces (`src/domain/repositories/index.ts`), Dexie schema version 5 (two new
+tables, all prior tables re-listed verbatim per this codebase's additive-only convention),
+`DexieDiagnosticEventRepository`/`DexieDiagnosticCaseRepository`, `NoopDiagnosticsRecorder` (zero-cost
+default) and `RecordingDiagnosticsRecorder` (fire-and-forget, non-fatal — same discipline as
+`backfillRawTransactionsSilently`'s startup hook), retention pruning (`retentionPolicy.ts`, day-cap +
+count-cap, run once at boot only when Developer Mode is on), a hidden Ctrl+Alt+Shift+D Developer Mode
+toggle (`developerMode.ts` — resolves Part 13's open question #1: this app has no Settings screen to hide
+a tap-sequence behind), and an empty `/diagnostics` route registered only when Developer Mode is on,
+genuinely absent from the router (and its lazy chunk never fetched) otherwise.
+
+**A third, real defect found during implementation itself, not anticipated by the certification**:
+`src/infrastructure/db/purge.ts`'s `allTables()` — the table list "Reset" wipes in one transaction — has
+its own test asserting it matches the live Dexie schema exactly (the same discipline protecting against
+the historical `pendingExecutions`-orphaned-after-Reset bug). Naively adding the two new tables to the
+schema made that test start demanding Reset also wipe the diagnostics log. It must not: Reset is itself a
+recorded workflow step, so a Reset that erases the diagnostics log destroys the very record of the Reset
+happening. Fixed by making `diagnosticEvents`/`diagnosticCases` a deliberate, documented, tested exclusion
+from `allTables()` — generalizing "read-only" into a two-way boundary: business logic never reads
+diagnostics data, and never writes to or deletes it either, not even via its own "start over" action.
+
+- **Files added**: `src/domain/entities/diagnostics/{DiagnosticEvent,DiagnosticCase}.ts`;
+  `src/infrastructure/db/repositories/{DexieDiagnosticEventRepository,DexieDiagnosticCaseRepository}.ts` +
+  tests; `src/infrastructure/diagnostics/{Noop,Recording}DiagnosticsRecorder.ts` + tests;
+  `src/application/services/diagnostics/retentionPolicy.ts` + test; `src/presentation/lib/developerMode.ts`
+  + test; `src/presentation/pages/DiagnosticsPage.tsx` + test.
+- **Files modified**: `docs/DIAGNOSTICS_CENTER_SPEC.md` (Part 2.3 certification + Phase 1 revisions);
+  `src/domain/repositories/index.ts` (+3 interfaces); `src/infrastructure/db/db.ts` (version 5);
+  `src/infrastructure/db/repositories/index.ts` (+`createDiagnosticsRepositories`, deliberately separate
+  from `createRepositories`); `src/presentation/{App.tsx,main.tsx}`, `src/presentation/lib/data.ts`
+  (wiring); `src/architecture/regressionGuards.test.ts` (Dexie table allowlist); `src/infrastructure/db/
+  {purge.ts,purge.test.ts}` (documented Reset exclusion).
+- 1021/1022 tests passing (34 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean (caught one real violation during development —
+  `presentation/lib/data.ts` importing `@infrastructure/db/db` directly — fixed by adding
+  `createDiagnosticsRepositories()` instead of reaching for the shared `db` singleton), production build
+  verified.
+- **Next recommended sprint**: Phase 2 (Session Recorder + Writer Trace) — one-line instrumentation at the
+  10 already-enumerated writer call sites (`docs/DIAGNOSTICS_CENTER_SPEC.md` Part 5.2) plus the
+  `diagnosticsInstrumentationIsObserveOnly` regression guard (Part 5.4), which does not exist yet since no
+  diagnostics-emitting code exists yet to guard.

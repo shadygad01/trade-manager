@@ -20,6 +20,14 @@ import { Money } from "@domain/value-objects/Money";
  * rows behind after a "Reset" — see docs/ROADMAP.md's "Reset All Data
  * audit" entry). No other file should import this — every other caller
  * goes through purgeTickerData/purgeAllData.
+ *
+ * Deliberately EXCLUDES `diagnosticEvents`/`diagnosticCases`
+ * (docs/DIAGNOSTICS_CENTER_SPEC.md Part 3.1) — "Reset" is itself a recorded
+ * workflow step, and the whole point of the Diagnostics Center is to
+ * survive as a record of what led up to and including a Reset, not be
+ * erased by the very action it's recording. `purge.test.ts` checks this
+ * exclusion is intentional, not drift, the same way it checks every other
+ * table's inclusion is intentional.
  */
 export const allTables = (db: PortfolioOsDatabase) => [
   db.portfolios,

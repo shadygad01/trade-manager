@@ -1,8 +1,13 @@
-import { createRepositories } from "@infrastructure/db/repositories";
+import { createRepositories, createDiagnosticsRepositories } from "@infrastructure/db/repositories";
 import { SnapshotPriceRepository } from "@infrastructure/market-data/SnapshotPriceRepository";
+import { NoopDiagnosticsRecorder } from "@infrastructure/diagnostics/NoopDiagnosticsRecorder";
+import { RecordingDiagnosticsRecorder } from "@infrastructure/diagnostics/RecordingDiagnosticsRecorder";
 import type { ImportOrchestrator } from "@infrastructure/ocr/ImportOrchestrator";
-import type { PriceRepository } from "@domain/repositories";
+import type { PriceRepository, DiagnosticsRecorder } from "@domain/repositories";
+import { generateId } from "@domain/value-objects/id";
 import { backfillRawTransactionsSilently, BackfillAlreadyRanError } from "@application/services/backfillRawTransactions";
+import { pruneDiagnostics } from "@application/services/diagnostics/retentionPolicy";
+import { isDeveloperModeEnabled } from "./developerMode";
 
 /**
  * Single app-wide repository bundle. `createRepositories()` is the
@@ -26,6 +31,31 @@ export const repos = {
 };
 
 export type Repos = typeof repos;
+
+/**
+ * Diagnostics Center wiring (docs/DIAGNOSTICS_CENTER_SPEC.md Part 3.3/4).
+ * Deliberately NOT part of `repos`/`AppRepositories` above — no
+ * business-layer file may hold a diagnostics repository (Part 5.4), and
+ * nothing here is ever read to make a business decision. `diagnostics` is
+ * the one recorder instance every instrumented call site uses; it's a
+ * no-op (zero IndexedDB writes) unless Developer Mode was on at this page
+ * load — see `developerMode.ts` for why toggling requires a reload rather
+ * than swapping this live.
+ */
+const diagnosticsRepos = createDiagnosticsRepositories();
+export const diagnosticEventRepository = diagnosticsRepos.events;
+export const diagnosticCaseRepository = diagnosticsRepos.cases;
+
+export const diagnostics: DiagnosticsRecorder = isDeveloperModeEnabled()
+  ? new RecordingDiagnosticsRecorder(diagnosticEventRepository, generateId())
+  : new NoopDiagnosticsRecorder();
+
+/** Part 4.3/9: retention pruning runs once per boot, only when Developer Mode is on, and can never block app startup. */
+if (isDeveloperModeEnabled()) {
+  pruneDiagnostics(diagnosticEventRepository, diagnosticCaseRepository).catch((err) => {
+    console.warn("Diagnostics retention pruning failed — the app continues normally:", err);
+  });
+}
 
 /**
  * BF-1 (see docs/PORTFOLIO_OS_V2_SPEC.md Part 19's Validation Design):
