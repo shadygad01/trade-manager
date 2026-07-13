@@ -2,9 +2,10 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { diagnosticCaseRepository, diagnosticEventRepository } from "@presentation/lib/data";
 import type { DiagnosticEvent } from "@domain/entities/diagnostics/DiagnosticEvent";
-// TEMPORARY — see TickerAuthorityPanel.tsx's own doc comment. Delete this
-// import and the <TickerAuthorityPanel /> usage below once removed.
+// TEMPORARY — see each panel's own doc comment. Delete these imports and
+// their usages below once removed.
 import { TickerAuthorityPanel } from "./diagnostics/TickerAuthorityPanel";
+import { FactLifecyclePanel } from "./diagnostics/FactLifecyclePanel";
 
 const RECENT_EVENT_LIMIT = 200;
 
@@ -45,6 +46,7 @@ export function DiagnosticsPage() {
       <div>
         <PageHeader title="Diagnostics" description="Developer Mode is on. This is the Diagnostics Center." />
         <TickerAuthorityPanel />
+        <FactLifecyclePanel />
         {cases === undefined ? (
           <p className="text-sm text-slate-500">Loading…</p>
         ) : cases.length === 0 ? (
