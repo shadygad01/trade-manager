@@ -187,3 +187,100 @@ describe("recordImportedRawTransactions", () => {
     expect(await committedLedger.getLedgerEvents("any-portfolio", "COMI")).toEqual([]);
   });
 });
+
+/**
+ * Regression coverage for the invariant: "exactly one live canonical
+ * execution fact per business execution identity." A real, reported defect
+ * (re-importing the SAME Official Broker Excel file): this writer had no
+ * existence check at all, so a genuine re-import created a SECOND live
+ * "official-broker-excel" fact for the identical execution, only ever
+ * cleaned up afterward, non-atomically, by ImportPage.tsx's own presentation-
+ * layer duplicate-skip effect — a real, structural gap any OTHER caller
+ * (a future importer, a notification-based recorder) would not get for free.
+ */
+describe("recordImportedRawTransactions — one-canonical-fact-per-execution invariant", () => {
+  let rawTransactions: RawTransactionRepository;
+  let committedLedger: CommittedLedgerRepository;
+  let repos: { rawTransactions: RawTransactionRepository; committedLedger: CommittedLedgerRepository };
+
+  beforeEach(() => {
+    rawTransactions = createFakeRawTransactionRepository();
+    committedLedger = createFakeCommittedLedgerRepository();
+    repos = { rawTransactions, committedLedger };
+  });
+
+  it("re-import: the SAME Official Broker Excel candidate imported twice (two separate uploads/session keys) leaves exactly one live fact", async () => {
+    const candidate = buyCandidate({ ticker: "ARCC", shares: 42, price: 10, source: "official-broker-excel" });
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "upload-1",
+      candidates: [{ key: "key-1", candidate }],
+      verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [],
+    });
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "upload-2", // a genuine second, independent import call — same value.
+      candidates: [{ key: "key-2", candidate }],
+      verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [],
+    });
+
+    const all = await rawTransactions.getAll();
+    expect(all).toHaveLength(1); // no duplicate — fixed at the writer itself, no downstream cleanup needed.
+    expect(all[0].id).toBe("key-1"); // the first write survives; the second is never created.
+  });
+
+  it("re-import within the SAME batch (two candidates, identical value, in one call) also leaves exactly one live fact", async () => {
+    const candidate = buyCandidate({ ticker: "ARCC", shares: 42, price: 10, source: "official-broker-excel" });
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "upload-1",
+      candidates: [
+        { key: "key-1", candidate },
+        { key: "key-2", candidate },
+      ],
+      verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [],
+    });
+    expect(await rawTransactions.getAll()).toHaveLength(1);
+  });
+
+  it("manual-shaped source (e.g. a CSV row with no document type) re-imported twice: still only one live fact — the check is not authority-specific", async () => {
+    const candidate = buyCandidate({ ticker: "HRHO", shares: 10, price: 5, source: "csv" });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "u1", candidates: [{ key: "k1", candidate }], verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [] });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "u2", candidates: [{ key: "k2", candidate }], verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [] });
+    expect(await rawTransactions.getAll()).toHaveLength(1);
+  });
+
+  it("notification source re-imported twice: still only one live fact", async () => {
+    const candidate = buyCandidate({ ticker: "ORWE", shares: 5, price: 8, source: "notification" });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "u1", candidates: [{ key: "k1", candidate }], verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [] });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "u2", candidates: [{ key: "k2", candidate }], verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [] });
+    expect(await rawTransactions.getAll()).toHaveLength(1);
+  });
+
+  it("future-adoption / upgrade case unchanged: a genuinely HIGHER-authority re-read of an already-live LOWER-authority execution still gets its own new fact (unlike the tie/downgrade case)", async () => {
+    const lowAuthority = buyCandidate({ ticker: "PHAR", shares: 15, price: 20, source: "screenshot" });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "u1", candidates: [{ key: "screenshot-key", candidate: lowAuthority }], verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [] });
+
+    const highAuthority = buyCandidate({ ticker: "PHAR", shares: 15, price: 20, source: "official-broker-excel" });
+    await recordImportedRawTransactions(repos, { sourceUploadId: "u2", candidates: [{ key: "excel-key", candidate: highAuthority }], verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [] });
+
+    const all = await rawTransactions.getAll();
+    // Both facts exist momentarily — retracting the superseded "screenshot"
+    // one remains ImportPage's own provenance-upgrade job (unchanged,
+    // already tested there), same as before this fix. This writer's own
+    // responsibility is narrower and unchanged for this branch: never skip
+    // writing a genuinely more authoritative read.
+    expect(all).toHaveLength(2);
+    expect(all.find((f) => f.id === "excel-key")?.source).toBe("official-broker-excel");
+    expect(all.find((f) => f.id === "screenshot-key")?.source).toBe("screenshot");
+  });
+
+  it("two DIFFERENT executions of the same ticker (different share counts) both get their own facts — the check is identity-scoped, not ticker-scoped", async () => {
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "u1",
+      candidates: [
+        { key: "k1", candidate: buyCandidate({ ticker: "COMI", shares: 100, price: 45.5, date: "2026-02-01" }) },
+        { key: "k2", candidate: buyCandidate({ ticker: "COMI", shares: 200, price: 46, date: "2026-02-02" }) },
+      ],
+      verifications: [], dividends: [], cancelledOrders: [], orderEvidences: [],
+    });
+    expect(await rawTransactions.getAll()).toHaveLength(2);
+  });
+});

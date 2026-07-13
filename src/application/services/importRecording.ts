@@ -3,6 +3,8 @@ import type { PositionVerification } from "@domain/entities/PositionVerification
 import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type PositionVerificationCapturePayload, type OrderEvidenceCapturePayload, type DividendPaymentPayload, type CancelledOrderPayload, type RawTransactionSource } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
+import { findLiveExecutionFact } from "./rawTransactionFolds";
+import { higherAuthority } from "./evidenceAuthority";
 
 /**
  * Import Recording: Import's ONLY sanctioned write. Given the domain-typed
@@ -76,8 +78,41 @@ export function candidateSource(candidate: ParsedTradeCandidate): RawTransaction
 export async function recordImportedRawTransactions(repos: ImportRecordingRepos, input: ImportRecordingInput): Promise<void> {
   const { sourceUploadId, candidates, verifications, dividends, orderEvidences, cancelledOrders } = input;
 
+  // Invariant: exactly one live canonical execution fact per business
+  // execution identity (ticker/date/shares/price/time), regardless of how
+  // many times the same document is (re-)imported. A growing local view —
+  // same "keep a live snapshot updated as this call writes its own facts"
+  // pattern backfillRawTransactions.ts/ledgerProjection.ts already use — so
+  // a second candidate in the SAME batch matching an earlier one in this
+  // SAME batch is caught too, not just cross-call duplicates.
+  const liveExecutionFacts = await repos.rawTransactions.getAll();
+
   for (const { key, candidate } of candidates) {
     const ticker = normalizeTicker(candidate.ticker);
+    const kind = candidate.side === "BUY" ? "BuyExecution" : "SellExecution";
+    const source = candidateSource(candidate);
+    const existingFact = findLiveExecutionFact(liveExecutionFacts, {
+      kind,
+      ticker,
+      date: candidate.date,
+      shares: candidate.shares,
+      price: candidate.price,
+      time: candidate.time,
+    });
+    // A tie or lower-authority re-read of an execution already live at
+    // equal-or-better authority needs no fact of its own — writing one
+    // anyway is exactly what left two live "official-broker-excel" facts
+    // for the same re-imported execution (only ever cleaned up afterward,
+    // non-atomically, by ImportPage's own duplicate-skip effect). A
+    // genuinely HIGHER-authority candidate (a better document describing an
+    // execution only previously seen via a weaker source) still gets its own
+    // fact, unchanged from before — ImportPage's effect remains responsible
+    // for retracting the superseded lower-authority fact in that case, same
+    // as today.
+    if (existingFact && higherAuthority(source, existingFact.source) !== source) {
+      continue;
+    }
+
     if (candidate.side === "BUY") {
       const payload: BuyExecutionPayload = {
         ticker,
@@ -90,20 +125,19 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
         companyName: candidate.companyName,
         transactionNumber: candidate.transactionNumber,
       };
-      await appendAndMaybeCommit(
-        repos,
-        createRawTransaction({
-          id: key,
-          kind: "BuyExecution",
-          source: candidateSource(candidate),
-          sourceUploadId,
-          ticker,
-          confidence: candidate.confidence,
-          extractionMethod: candidate.extractionMethod,
-          parserVersion: candidate.parserVersion,
-          payload,
-        })
-      );
+      const fact = createRawTransaction({
+        id: key,
+        kind: "BuyExecution",
+        source,
+        sourceUploadId,
+        ticker,
+        confidence: candidate.confidence,
+        extractionMethod: candidate.extractionMethod,
+        parserVersion: candidate.parserVersion,
+        payload,
+      });
+      await appendAndMaybeCommit(repos, fact);
+      liveExecutionFacts.push({ ...fact, seq: 0 });
     } else {
       const payload: SellExecutionPayload = {
         ticker,
@@ -115,20 +149,19 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
         executionTime: candidate.time,
         transactionNumber: candidate.transactionNumber,
       };
-      await appendAndMaybeCommit(
-        repos,
-        createRawTransaction({
-          id: key,
-          kind: "SellExecution",
-          source: candidateSource(candidate),
-          sourceUploadId,
-          ticker,
-          confidence: candidate.confidence,
-          extractionMethod: candidate.extractionMethod,
-          parserVersion: candidate.parserVersion,
-          payload,
-        })
-      );
+      const fact = createRawTransaction({
+        id: key,
+        kind: "SellExecution",
+        source,
+        sourceUploadId,
+        ticker,
+        confidence: candidate.confidence,
+        extractionMethod: candidate.extractionMethod,
+        parserVersion: candidate.parserVersion,
+        payload,
+      });
+      await appendAndMaybeCommit(repos, fact);
+      liveExecutionFacts.push({ ...fact, seq: 0 });
     }
   }
 

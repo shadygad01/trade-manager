@@ -101,6 +101,60 @@ describe("CI guard: no new policy/trust-judgment implementations outside their c
   });
 });
 
+describe("CI guard: one canonical execution fact per business execution identity", () => {
+  /**
+   * The invariant certified here (Portfolio OS v2 Severity-1 data-integrity
+   * finding): exactly ONE live BuyExecution/SellExecution RawTransaction
+   * fact may exist per business execution identity (ticker/date/shares/
+   * price/time), regardless of source. Proven violated in two of six
+   * writers (backfillRawTransactions.ts's runBackfill — the reported ARCC
+   * "Needs broker screenshot" defect — and importRecording.ts's
+   * recordImportedRawTransactions, a genuine re-import race); both fixed by
+   * checking `findLiveExecutionFact` (rawTransactionFolds.ts, the same
+   * primitive TradeService.ensureBuyFact/ensureSellFacts already used
+   * safely) before writing. This freezes the current, reviewed set of
+   * writer sites so a NEW one — a future importer, a Notification-based
+   * recorder, anything constructing `kind: "BuyExecution"`/`"SellExecution"`
+   * — trips this guard instead of silently reintroducing the bug class.
+   *
+   * lotManager.ts is deliberately NOT required to call
+   * findLiveExecutionFact/findUnclaimedSellExecutionFact here: it already
+   * calls findUnclaimedSellExecutionFact for its own, narrower, intentional
+   * reason (see lotManager.test.ts's "never adopts another still-pending
+   * 'manual' Lot Manager sell sharing the same value" — two same-value
+   * manual sells MUST be allowed to coexist as genuinely distinct
+   * executions, an irreducible ambiguity this file resolves differently
+   * on purpose, not a violation of this invariant).
+   */
+  it("every file constructing a BuyExecution/SellExecution RawTransaction is in the known, reviewed set", () => {
+    const KNOWN_EXECUTION_FACT_WRITERS = [
+      "application/services/TradeService.ts", // ensureBuyFact/ensureSellFacts — adopts via findLiveExecutionFact/findUnclaimedSellExecutionFact
+      "application/services/backfillRawTransactions.ts", // runBackfill — fixed: skips a trade/sell-order already covered by a live fact
+      "application/services/importRecording.ts", // recordImportedRawTransactions — fixed: skips a tie-or-lower-authority re-import of an already-live execution
+      "application/services/ledgerProjection.ts", // ensureLegacyFactsExist — gap-backfill, already checks live facts grouped by value-key before creating
+      "application/services/lotManager.ts", // recordSellTransactionLocked — its own narrower, intentional adoption policy (see doc comment above)
+    ].sort();
+
+    const actual = filesMatching(
+      files.filter((f) => f.path.startsWith("application/")),
+      // Negative lookahead excludes a union TYPE position (`kind: "BuyExecution" | "SellExecution"`,
+      // e.g. rawTransactionFolds.findLiveExecutionFact's own match parameter) — only an
+      // actual object-literal construction (no trailing `|`) counts as a writer.
+      /kind:\s*["'](BuyExecution|SellExecution)["'](?!\s*\|)/
+    );
+
+    expect(actual).toEqual(KNOWN_EXECUTION_FACT_WRITERS);
+  });
+
+  it("the two writers this invariant was fixed in both still call the shared identity-matching primitive before writing", () => {
+    const backfill = files.find((f) => f.path === "application/services/backfillRawTransactions.ts")!;
+    expect(backfill.content).toMatch(/findLiveExecutionFact/);
+
+    const importRecording = files.find((f) => f.path === "application/services/importRecording.ts")!;
+    expect(importRecording.content).toMatch(/findLiveExecutionFact/);
+  });
+});
+
 describe("CI guard: no new direct-mutable derived-state Dexie table", () => {
   it("the live schema's table list matches the reviewed, categorized allowlist exactly", () => {
     // Every table, categorized so a reviewer immediately sees what kind of
