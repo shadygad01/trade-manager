@@ -1,5 +1,22 @@
 import { describe, it, expect } from "vitest";
 import { checkTickerMatch, isTickerFullyResolved } from "./importVerification";
+import type { DiagnosticsRecorder } from "@domain/repositories";
+import type { DecisionTraceRecord } from "@domain/entities/diagnostics/DiagnosticEvent";
+
+function fakeDiagnostics(): DiagnosticsRecorder & { decisions: DecisionTraceRecord[] } {
+  const decisions: DecisionTraceRecord[] = [];
+  return {
+    decisions,
+    recordSessionEvent() {},
+    recordWrite() {},
+    recordRead() {},
+    recordDecision(event) {
+      decisions.push({ ...event, id: "x", seq: decisions.length + 1, recordedAt: new Date().toISOString(), sessionId: "s1", kind: "DecisionTrace" });
+    },
+    recordRuleExecution() {},
+    recordPerfSample() {},
+  };
+}
 
 describe("checkTickerMatch", () => {
   it("matches when net pending shares exactly equal the verified units", () => {
@@ -536,5 +553,83 @@ describe("isTickerFullyResolved", () => {
         rowErrorKeys: new Set(["buy-1"]),
       }),
     ).toBe(false);
+  });
+});
+
+describe("checkTickerMatch Verification decision (Diagnostics Center)", () => {
+  /**
+   * This is the terminal decision function behind the Import UI's "Needs
+   * broker screenshot"/"Mismatch"/"Closed — needs corroborating evidence"
+   * banners — a real, previously-uninstrumented gap: constraintValidation.ts's
+   * Constraint decision only checks whether already-known facts arithmetically
+   * reconcile (satisfied for ABUK: opening 27 + buy 0 - sell 0 = 27), which is
+   * a different question from "is there independent corroboration for that
+   * figure" — the question checkTickerMatch alone answers, and the one that
+   * actually produced the "Needs broker screenshot" banner. Reproduces the
+   * exact ABUK shape reported: an open position with no pending rows this
+   * batch and no broker holdings verification on file at all.
+   */
+  it("records a Verification decision naming 'Needs broker screenshot' for an unverified open position (the ABUK/ARCC shape)", () => {
+    const diagnostics = fakeDiagnostics();
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 0,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: undefined,
+      ticker: "ABUK",
+      diagnostics,
+    });
+    expect(result.reason).toBe("no-verification");
+
+    expect(diagnostics.decisions).toHaveLength(1);
+    const decision = diagnostics.decisions[0];
+    expect(decision.decisionType).toBe("Verification");
+    expect(decision.reader).toBe("importVerification.ts");
+    expect(decision.function).toBe("checkTickerMatch");
+    expect(decision.ticker).toBe("ABUK");
+    expect(decision.decision).toBe("Needs broker screenshot");
+    expect(decision.inputSummary).toBe("opening 27 + buy 0 - sell 0 = 27, no broker holdings on file");
+    expect(decision.outputSummary).toContain("no-verification");
+  });
+
+  it("records 'Mismatch' as the decision text when net shares disagree with broker holdings", () => {
+    const diagnostics = fakeDiagnostics();
+    checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 120,
+      pendingSellShares: 0,
+      existingRemainingShares: 0,
+      verifiedUnits: 100,
+      ticker: "COMI",
+      diagnostics,
+    });
+    expect(diagnostics.decisions[0].decision).toBe("Mismatch");
+  });
+
+  it("records 'Closed — needs corroborating evidence' for an uncorroborated net-zero position", () => {
+    const diagnostics = fakeDiagnostics();
+    checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 50,
+      pendingSellShares: 50,
+      existingRemainingShares: 0,
+      verifiedUnits: undefined,
+      ticker: "JUFO",
+      diagnostics,
+    });
+    expect(diagnostics.decisions[0].decision).toBe("Closed — needs corroborating evidence");
+  });
+
+  it("records nothing when diagnostics is not passed (default, zero-cost behavior unchanged)", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 0,
+      pendingSellShares: 0,
+      existingRemainingShares: 27,
+      verifiedUnits: undefined,
+    });
+    expect(result.reason).toBe("no-verification");
+    // Nothing to assert on diagnostics — this just proves the call succeeds with no diagnostics arg.
   });
 });

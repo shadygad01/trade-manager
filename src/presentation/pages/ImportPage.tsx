@@ -1765,6 +1765,8 @@ export function ImportPage() {
           allPendingFromOfficialBrokerExcel,
           allPendingSelfVerified,
           allPendingOrderConfirmed,
+          ticker,
+          diagnostics,
         }),
       );
     }

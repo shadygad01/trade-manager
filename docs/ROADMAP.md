@@ -2363,3 +2363,60 @@ under time pressure.
   named rather than left implicit — closing the disclosed residual gap above (`deleteTrade`,
   `renameTickerEverywhere`, and the three other `retractRawTransaction` call sites) as part of that same
   pass, since it's the identical threading pattern applied to the remaining callers.
+
+### Sprint 15 — Diagnostics Center correction: the "Needs broker screenshot"/"Mismatch" decision itself was never instrumented
+
+Using the shipped Diagnostics Center on real data (ABUK, ARCC), the Constraint decision correctly showed
+"Satisfied — Facts reconcile, no contradiction" while the Import UI simultaneously showed "Needs broker
+screenshot" for the same ticker — proof the diagnostics log was NOT capturing the decision that actually
+produced the banner the user was looking at.
+
+**Root cause**: Constraint Evaluation (`constraintValidation.ts`) and the Import UI's match badge answer
+two different questions that Phase 3's naming ("Verification" as one of five decision engines) made sound
+like one. Constraint Evaluation only checks whether already-known facts arithmetically reconcile — for
+ABUK, `opening 27 + buy 0 - sell 0 = 27` genuinely has no contradiction to report, since there was no
+broker holdings figure on file to compare against at all (the constraint is vacuously satisfied when
+`holdingsRemaining` is `undefined`). The actual "is there independent corroboration for that figure"
+question — the one that decides "Needs broker screenshot" vs "Mismatch" vs "Closed — needs corroborating
+evidence" vs "Verified" — is answered entirely by `checkTickerMatch()` in `importVerification.ts`, a
+completely separate module never wired into the Diagnostics Center at all. `ImportPage.tsx`'s `MatchBadge`
+component, which renders the actual banner text, is a pure `.reason` → JSX mapping with no decision logic
+of its own — `checkTickerMatch` is the true terminal decision function.
+
+**The fix**: added an optional `diagnostics?: DiagnosticsRecorder` (plus a tagging-only `ticker?: string`)
+parameter to `checkTickerMatch` itself, recording one `"Verification"` decision per call through a small
+`decide()` wrapper so every one of the function's nine return paths funnels through the same recording
+step. The `decision` field is built from a `describeMatchDecision` helper that reuses the *exact* banner
+wording `MatchBadge` renders ("Needs broker screenshot", "Mismatch", "Closed — needs corroborating
+evidence", etc.) — not a paraphrase that could drift from what the user actually sees. `checkTickerMatch`
+has several other callers (`verificationEngine.ts`'s `computeVerification`, `ledgerRebuild.ts`,
+`reconciliation.ts`, a CLI script) that serve different purposes (per-transaction commit-eligibility
+folding, full ledger rebuilds, a diagnostic script) — `diagnostics` stays optional and unpassed at all of
+those sites, so only `ImportPage.tsx`'s `tickerMatchStatuses` `useMemo` (the actual call site that feeds
+the rendered badge) now records anything; this matches the explicit instruction to instrument only the
+function that makes the final decision displayed to the user, not add generic logging everywhere the
+function happens to be called.
+
+**Verified two ways**: (1) new unit tests in `importVerification.test.ts` reproducing the exact reported
+ABUK shape (`existingRemainingShares: 27, pendingBuyShares: 0, pendingSellShares: 0, verifiedUnits:
+undefined`) and asserting the recorded decision's `decision` field is the literal string `"Needs broker
+screenshot"` and `inputSummary` is `"opening 27 + buy 0 - sell 0 = 27, no broker holdings on file"`, plus
+two more for the "Mismatch" and "Closed — needs corroborating evidence" wordings; (2) a live Playwright
+run against the dev server calling the real, non-mocked `checkTickerMatch` through the real `diagnostics`
+singleton (Developer Mode on) and reading the persisted row back out of real Dexie — confirmed the exact
+same `decision`/`inputSummary`/`outputSummary` values landed in storage.
+
+- **Files modified**: `src/application/services/importVerification.ts` (`checkTickerMatch` gained
+  `diagnostics`/`ticker` params, a `decide()` wrapper around every return path, and a
+  `describeMatchDecision` helper); `src/presentation/pages/ImportPage.tsx` (one call site wired);
+  `src/application/services/importVerification.test.ts` (+4 tests).
+- 1035/1036 tests passing (4 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean, live Playwright verification against the dev server with the real module
+  and real IndexedDB.
+- **Next recommended sprint**: still Phase 2b, plus the disclosed residual writer-diagnostics gap from
+  Sprint 14. Worth a dedicated audit pass, now that this second "decision engine that looks covered by
+  name but isn't" gap has turned up twice: check whether `mismatchResolver.suggestRemovalsToReconcile`,
+  `netShareTimeline.findLastBalancedDate`, and `completenessEngine.recoveryPlan` — every other function
+  `diagnoseInventoryContradiction`'s inputs are sourced from — should get the same treatment, since their
+  outputs also reach the user directly (the reconcile-suggestion and recovery-plan panels) without a
+  Diagnostics Center decision record of their own today.

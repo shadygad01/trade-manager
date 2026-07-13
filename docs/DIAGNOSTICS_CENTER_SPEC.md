@@ -26,6 +26,14 @@ that `commitEngine.ts`'s `assignPortfolioToFact`/`assignPortfolio`/`retractRawTr
 "adopt an existing fact" path recorded zero decisions in production despite every prior test passing.
 Fixed and re-verified via a new permanent regression test plus a second live Playwright run against real
 IndexedDB and the real Confirm button — see Part 12's Phase 3 entry for the full account.
+A second correction followed from using the shipped tool on real data: the Constraint decision reported
+"Satisfied" for a ticker the Import UI simultaneously badged "Needs broker screenshot" — Constraint
+Evaluation and the actual "Needs broker screenshot"/"Mismatch"/"Closed — needs corroborating evidence"
+verdict are different questions, and the latter (`checkTickerMatch` in `importVerification.ts`, the true
+terminal decision function behind `MatchBadge`'s rendering) had never been wired to the recorder at all.
+Fixed by instrumenting `checkTickerMatch` itself (reusing its exact banner wording in the recorded
+`decision` field) and wiring it only from the one call site that feeds the rendered badge — see Part 12's
+Phase 3 entry for the full account.
 Next: Phase 2b (writer breadth), not started.
 
 **Mission**: Portfolio OS runs entirely in the browser with no backend and no server-side database.
@@ -761,6 +769,32 @@ it displays.
   `lotManager.ts`/`provenanceRepair.ts`/`PortfolioService.ts`, still don't thread `diagnostics` —
   these are secondary/administrative actions outside the Import→Confirm flow this phase was justified
   by, left for a future phase alongside Phase 2b.
+  **Second post-ship correction — a real decision-coverage gap, found from using the tool on real data.**
+  On real ABUK/ARCC data the Diagnostics log showed the Constraint decision as "Satisfied — Facts
+  reconcile, no contradiction" while the Import UI simultaneously showed "Needs broker screenshot" for the
+  same ticker — proof the recorder was not capturing the decision that actually produced the visible
+  banner. Root cause: Constraint Evaluation and the Import match badge answer different questions that
+  Phase 3's original five-engines framing made sound like one. Constraint Evaluation
+  (`evaluateInventoryConstraint`) only checks whether already-known facts arithmetically reconcile — for
+  ABUK (`opening 27 + buy 0 - sell 0 = 27`, no broker holdings on file), that check is vacuously satisfied
+  since there's no `holdingsRemaining` to compare against at all. The actual "is there independent
+  corroboration" question — which decides "Needs broker screenshot" vs "Mismatch" vs "Closed — needs
+  corroborating evidence" vs "Verified" — is answered entirely by `checkTickerMatch()` in
+  `importVerification.ts`, never wired to the recorder. `ImportPage.tsx`'s `MatchBadge` component, which
+  renders the actual banner, is a pure `.reason`-to-JSX mapping with no decision logic of its own —
+  `checkTickerMatch` is the true terminal decision function. Fixed by adding an optional
+  `diagnostics`/`ticker` parameter to `checkTickerMatch` itself, recording one `"Verification"` decision
+  per call (all nine return paths funnel through a `decide()` wrapper), with the recorded `decision` field
+  built from a `describeMatchDecision` helper that reuses the *exact* banner wording `MatchBadge` renders,
+  never a paraphrase. `checkTickerMatch` has several other callers for different purposes
+  (`verificationEngine.ts`'s per-transaction commit-eligibility folding, `ledgerRebuild.ts`,
+  `reconciliation.ts`, a CLI script) — `diagnostics` stays unpassed at all of those, so only
+  `ImportPage.tsx`'s `tickerMatchStatuses` `useMemo` (the actual call site feeding the rendered badge) now
+  records anything, per the explicit instruction to instrument only the function that makes the final
+  decision displayed to the user. Verified two ways: (1) new unit tests in `importVerification.test.ts`
+  reproducing the exact reported ABUK shape and asserting the recorded `decision` field is the literal
+  string `"Needs broker screenshot"`; (2) a live Playwright run calling the real `checkTickerMatch` through
+  the real `diagnostics` singleton and reading the persisted row back out of real Dexie.
 - **Phase 4 — Case Detection Engine.** `detectDiagnosticCases` + first three triggers (mismatch,
   exception, assertion failure) (Part 6). UI: Case List with search/filter (Part 7.2, master spec Parts
   16, 18, 19).
