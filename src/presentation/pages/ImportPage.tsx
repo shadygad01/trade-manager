@@ -24,6 +24,15 @@ import {
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
 import { isTickerFullyOfficialBrokerExcelSourced } from "@application/services/reconciliation";
+import {
+  fingerprintEconomicFacts,
+  fingerprintEvidence,
+  checkVerificationInvariant,
+  formatVerificationInvariantViolation,
+  checkShareArithmeticInvariant,
+  formatShareArithmeticViolation,
+  type VerificationSnapshot,
+} from "@application/services/verificationInvariant";
 import { findLiveExecutionFact } from "@application/services/rawTransactionFolds";
 import { higherAuthority } from "@application/services/evidenceAuthority";
 import { upgradeSellExecutionFact } from "@application/services/provenanceRepair";
@@ -113,6 +122,79 @@ function retractRawTransactionKeys(keys: Iterable<string>) {
       console.error("retractRawTransaction failed (shadow write, non-fatal):", err);
     });
   }
+}
+
+/**
+ * Verification invariant guard (see docs/ROADMAP.md's "ABUK class of bug"
+ * entries and verificationInvariant.ts's own doc comment): captures the
+ * ticker's economic-facts fingerprint, evidence fingerprint, Verification
+ * verdict, and derived remaining-shares total straight from the repos — not
+ * from this component's own (possibly-stale, live-query-backed) React state
+ * — so a before/after pair taken around an allocation-only write like Smart
+ * Allocate is a real, independent check, not a re-read of the same state the
+ * operation itself might have corrupted.
+ */
+async function snapshotTickerVerification(portfolioId: string, ticker: string, operation: string, responsibleFunction: string, file: string): Promise<VerificationSnapshot & { remainingShares: number }> {
+  const normalized = normalizeTicker(ticker);
+  const [facts, verifications, trades] = await Promise.all([
+    repos.rawTransactions.getAll(),
+    repos.verifications.getByPortfolio(portfolioId),
+    repos.trades.getByPortfolio(portfolioId),
+  ]);
+  const remainingShares = trades.filter((t) => normalizeTicker(t.ticker) === normalized).reduce((sum, t) => sum + t.remainingShares, 0);
+  const status = checkTickerMatch({
+    hasShares: true,
+    pendingBuyShares: 0,
+    pendingSellShares: 0,
+    existingRemainingShares: remainingShares,
+    allPendingFromOfficialBrokerExcel: isTickerFullyOfficialBrokerExcelSourced(facts, normalized),
+  });
+  return {
+    operation,
+    ticker: normalized,
+    economicFacts: fingerprintEconomicFacts(facts, normalized),
+    evidence: fingerprintEvidence(verifications, normalized),
+    status,
+    responsibleFunction,
+    file,
+    remainingShares,
+  };
+}
+
+/**
+ * Runs both verificationInvariant.ts guards around `write` and logs (never
+ * throws — the write already succeeded by the time this checks, and rolling
+ * it back would itself be a separate, riskier destructive action) any
+ * violation loudly, with every field docs/ROADMAP.md's invariant-guard spec
+ * requires (Operation Name, Previous/Current Verification, Changed Field,
+ * Responsible Function, File). A detector, not an enforcer — see
+ * verificationInvariant.ts's own doc comment.
+ */
+async function withVerificationInvariantGuard<T>(
+  portfolioId: string,
+  ticker: string,
+  operation: string,
+  responsibleFunction: string,
+  file: string,
+  write: () => Promise<T>,
+): Promise<T> {
+  const before = await snapshotTickerVerification(portfolioId, ticker, operation, responsibleFunction, file);
+  const result = await write();
+  const after = await snapshotTickerVerification(portfolioId, ticker, operation, responsibleFunction, file);
+
+  const verdictViolation = checkVerificationInvariant(before, after);
+  if (verdictViolation) console.error(formatVerificationInvariantViolation(verdictViolation));
+
+  const arithmeticViolation = checkShareArithmeticInvariant({
+    rawTransactions: await repos.rawTransactions.getAll(),
+    ticker,
+    actualRemainingShares: after.remainingShares,
+    responsibleFunction,
+    file,
+  });
+  if (arithmeticViolation) console.error(formatShareArithmeticViolation(arithmeticViolation));
+
+  return result;
 }
 
 /**
@@ -939,7 +1021,14 @@ export function ImportPage() {
           source: entry.candidate.source,
         };
 
-        const result = await recordSell(repos, input);
+        const result = await withVerificationInvariantGuard(
+          portfolioId,
+          normalizedTicker,
+          "Smart Allocate",
+          "smartAllocateSell",
+          "src/presentation/pages/ImportPage.tsx",
+          () => recordSell(repos, input),
+        );
         importSession.update((prev) => ({
           ...prev,
           addedKeys: [...prev.addedKeys, entry.key],
