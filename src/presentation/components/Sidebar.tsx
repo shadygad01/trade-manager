@@ -16,6 +16,7 @@ import { useMemo, useState } from "react";
 import { repos } from "@presentation/lib/data";
 import { useT } from "@presentation/i18n/translations";
 import { useLanguage, languageStore } from "@presentation/i18n/language";
+import { isDeveloperModeEnabled, toggleDeveloperModeAndReload } from "@presentation/lib/developerMode";
 
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
   const t = useT();
@@ -25,6 +26,12 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
   const [location] = useLocation();
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+
+  // Read once — same "reload required to take effect" contract as every
+  // other consumer of this flag (developerMode.ts's own doc comment), so a
+  // live in-render subscription would be misleading: the button/link below
+  // can't change state without the reload it itself triggers.
+  const developerModeOn = isDeveloperModeEnabled();
 
   const NAV_ITEMS = [
     { key: "holdings", label: t("sidebar.holdings"), icon: Briefcase, suffix: "" },
@@ -175,6 +182,29 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       <div className="border-t border-slate-800/80 px-5 py-3 text-[11px] text-slate-600">
         {t("sidebar.footer")}
       </div>
+
+      {/* Developer-only utility, deliberately not run through the EN/AR
+          translation layer — same precedent as DiagnosticsPage.tsx itself.
+          Visible (not hidden) by design: reliability over discoverability,
+          the opposite tradeoff of the Ctrl+Alt+Shift+D shortcut this
+          complements. Reads the flag once at render (see above) — the
+          reload this triggers is what actually changes which branch shows. */}
+      {developerModeOn ? (
+        <Link
+          href="/diagnostics"
+          onClick={onNavigate}
+          className="border-t border-slate-800/80 px-5 py-2.5 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-900 hover:text-slate-300"
+        >
+          Diagnostics
+        </Link>
+      ) : (
+        <button
+          onClick={toggleDeveloperModeAndReload}
+          className="border-t border-slate-800/80 px-5 py-2.5 text-start text-xs font-medium text-slate-500 transition-colors hover:bg-slate-900 hover:text-slate-300"
+        >
+          Developer
+        </button>
+      )}
     </aside>
   );
 }
