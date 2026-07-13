@@ -2,9 +2,11 @@
 
 **Status: SPECIFICATION APPROVED FOR STAGED IMPLEMENTATION.** A follow-up program explicitly directed
 staged completion of the migration below, PR by PR, with full validation at each step (see Part 19 for
-the execution log — as of this update, PR1 is complete; PR2 onward are backlogged, not started). Parts
-0–18 remain the architectural specification as originally written, with one factual correction (Part 0.2's
-cash-projection paragraph — see Part 19.1) found during re-verification before implementation began.
+the execution log — as of this update, PR1a and BF-1's safe variant are complete; PR2 onward remain
+backlogged, not started; BF-1's ORIGINAL design was investigated, found unsafe for unattended use, and
+replaced by an alternative — see Part 19.6). Parts 0–18 remain the architectural specification as
+originally written, with one factual correction (Part 0.2's cash-projection paragraph — see Part 19.1)
+found during re-verification before implementation began.
 
 **Roles applied while producing this document**: Chief Software Architect (Parts 1–7), Principal
 Reviewer (Part 8, Self-Review), Independent Challenger (Part 8, Adversarial Scenarios), Migration
@@ -860,14 +862,14 @@ into an existing PR.
 |---|---|
 | Problem | `backfillRawTransactions` (converts every pre-existing `Trade`/`TradeAllocation`/`PositionVerification`/dividend/cash-adjustment `TimelineEvent` into `RawTransaction` facts) has never run for any real user — it has zero production call sites. Every downstream fact-log-dependent feature (cash projection, full replay parity) is silently incomplete for pre-existing data until it does. |
 | Root Cause | The function was built and tested against fixtures but never wired to an actual trigger — a genuine "shipped the engine, never turned the key" gap, not a design flaw. |
-| Affected files | A new, small startup-check call site (candidate: `src/presentation/lib/data.ts`'s `repos` singleton init, or a dedicated one-time-migration hook in `App.tsx`), guarded by `BackfillAlreadyRanError` (already implemented — the function refuses to run twice). |
-| Risk | **Medium-high, and different in kind from PR1a/PR1b.** This is the first item in the whole backlog that **writes new data to every real user's actual browser storage** the moment it ships — not a type change, not dead code. A bug here writes wrong `RawTransaction` facts for real portfolios, in a codebase whose entire incident history (Part 0.7) is examples of exactly that going wrong in subtle ways. It also cannot be tested against "real production data" from this sandboxed environment — there is no backend, no way to run it against an actual user's IndexedDB before shipping, only against fixtures and the existing 964-test suite's fake repos. |
-| Migration Strategy | (1) Add an explicit, narrow startup check: on app load, if `rawTransactions` has zero `source: "backfill"` rows AND `trades`/`allocations` are non-empty, run `backfillRawTransactions` once, wrapped in the same non-fatal try/catch discipline every other shadow-write path in this codebase uses (a failed backfill must never block the app from loading). (2) Ship this *alone*, one release, before touching anything that reads the resulting facts. (3) Only after real users have had the backfill run silently in the background for a full release cycle does PR2 (below) become safe to start. |
-| Rollback Strategy | The backfill only appends facts (`RawTransactionRepository.append`) — it never touches `Trade`/`TradeAllocation` (per its own doc comment, "never touches the original... tables — this only reads them"). Reverting the startup-check call site stops future runs; already-written backfill facts are inert (nothing reads them yet) and harmless to leave in place. |
+| Affected files | `src/application/services/backfillRawTransactions.ts` (new `backfillRawTransactionsSilently` entry point), `src/presentation/lib/data.ts` (startup hook), new tests. |
+| Risk | **Medium-high going in — see 19.6's Validation Design for how this was actually resolved.** The concern: this is the first backlog item that writes new data to every real user's actual browser storage the moment it ships, and cannot be tested against real production data from this sandboxed environment. |
+| Migration Strategy | See 19.6 — the ORIGINAL strategy (wire the existing `backfillRawTransactions`, as-is, to a startup hook) was rejected after the validation design proved it unsafe; a narrower, provably-safe variant was designed and implemented instead. |
+| Rollback Strategy | Revert `data.ts`'s startup-hook call — no data migration needed; already-appended facts are inert until PR2 wires a live reader. |
 | Expected Result | Every existing portfolio's `RawTransaction` log becomes complete, closing the actual prerequisite for PR2. |
-| Regression Coverage | `backfillRawTransactions.test.ts` (existing fixture-based tests) + a new integration test simulating "app loads with pre-existing legacy data, backfill fires once, second load is a no-op" against a real Dexie instance (matching `excelWorkflowEndToEnd.test.ts`'s own real-Dexie-restart pattern). |
-| Priority | **P0, but explicitly NOT implemented this session** — see 19.3 for why. |
-| **Status** | **NOT STARTED — deliberately.** |
+| Regression Coverage | 8 new tests: 6 fixture-based (`backfillRawTransactions.test.ts`) + 2 against a real Dexie instance (`backfillRawTransactionsSilently.realDb.test.ts`) — see 19.6. |
+| Priority | P0. |
+| **Status** | **DONE — the safe (silent) variant only. See 19.6 for the full validation design, including why the original commit-triggering variant was judged NOT safe for this use and is explicitly NOT wired to app startup.** |
 
 ---
 
@@ -980,38 +982,216 @@ not attempted here because:
   that combining any of them into the same session as PR1a would violate Stage 3's explicit "never combine
   unrelated migrations" and "optimize for correctness before speed" instructions.
 
-This is a deliberate, evidenced stop — not a silent scope reduction. See Part 19.5 for the certification
-statement this implies.
+This is a deliberate, evidenced stop — not a silent scope reduction. It was superseded, not contradicted,
+by a directed follow-up: the human owner explicitly asked for a BF-1 Validation Design — safety
+conditions, a test plan, success/failure criteria — with an explicit instruction to implement BF-1 only if
+that design proved it safe, and to present an alternative design instead if it couldn't. See Part 19.6.
 
-### 19.4 Stage 3 — items actually implemented and validated this session
+### 19.4 Stage 3 — items actually implemented and validated (across both sessions)
 
 | Item | Files | Tests before | Tests after | `tsc` | `arch:check` | Fail-before/pass-after verified | Commit |
 |---|---|---|---|---|---|---|---|
 | PR1a | `identity.ts` (new), `ledgerRebuild.ts`, `duplicateDetection.ts`, `ledgerProjection.ts`, `backfillRawTransactions.ts`, `.dependency-cruiser.cjs` | 964/964 | 964/964 (unchanged — pure type-level) | clean | clean | N/A (no behavior change to test) | `874a88f` |
 | FIX-1 | `orderEvidence.ts` (`timesConflict` now reuses `duplicateDetection.parseTimeToMinutes`), `duplicateDetection.ts` (exported `parseTimeToMinutes`), `orderEvidence.test.ts` (+1 regression test) | 964/964 | 966/966 | clean | clean | Yes — reverted `orderEvidence.ts` alone, confirmed the new test fails (`expected false to be true`), restored | same commit as FIX-2, see below |
 | FIX-2 | `purge.ts` (exported `allTables`), `purge.test.ts` (+1 regression test asserting `allTables(db)` matches the live Dexie schema's own `db.tables`) | — | 966/966 (included above) | clean | clean | Verified the check itself is meaningful: schema currently has 11 tables, `allTables` currently lists all 11 — the test is a live safety net, not (today) fixing an active drift | same commit as FIX-1 |
+| BF-1 (safe variant) | `backfillRawTransactions.ts` (new `backfillRawTransactionsSilently`, sharing `runBackfill` core with the existing, unchanged `backfillRawTransactions`), `backfillRawTransactions.test.ts` (+6 tests), `backfillRawTransactionsSilently.realDb.test.ts` (new, +2 tests against real Dexie), `data.ts` (startup hook) | 966/966 | 973/973 | clean | clean | Yes — see Part 19.6.5 | see Part 19.6.6 |
 
-### 19.5 Stage 7 — certification statement for this session's scope
+### 19.5 Stage 7 — certification statement (updated after BF-1)
 
 **Not a full-program certification** — Part 11's certification criteria apply to the whole 7-PR program,
-which is nowhere near complete. What can be certified, with evidence, as of this session:
+which is nowhere near complete. What can be certified, with evidence, as of this update:
 
-- PR1a meets every one of Part 11's per-PR criteria: full suite green (964/964, unchanged), `tsc --noEmit`
-  clean, `arch:check` clean (including the new rule), zero behavior change (verified by identical test
-  pass count, not merely "no new failures"), independently reversible (single commit, no data migration).
-- FIX-1/FIX-2 (Part 19.4) meet the same bar for their own, narrower scope.
+- PR1a, FIX-1, FIX-2, and BF-1 (safe variant) each meet every one of Part 11's per-PR criteria: full suite
+  green at every commit (964 → 966 → 973, each increment fully explained by new tests, zero unexplained
+  change), `tsc --noEmit` clean, `arch:check` clean (including both new structural rules), independently
+  reversible, and — for BF-1 specifically — proven to have zero observable effect on the running app (Part
+  19.6.4).
 - **Architectural metrics** (Part 0's baseline vs. current): Dual Writers for `Trade`/`TradeAllocation`
   remains **2** (unchanged — PR4 not started); Holdings computations remains **3** (unchanged — PR5 not
   started); Duplicate policy implementations remains **2+** (unchanged — PR3 not started); "coarse key
   reused as identity" **compile-time guard: 0 → 5 functions now branded** (PR1a); direct-Dexie-bypass
   **surface: unenforced → structurally restricted to repositories + purge.ts + tests** (PR1a); dormant,
-  never-wired functions: **`systemValidation.ts` (still dormant) + `backfillRawTransactions` (newly
-  identified as dormant, Part 19.1)**.
-- **Recommendation: NOT ready for production cutover of anything beyond PR1a/FIX-1/FIX-2.** The
-  production system on `main` is unaffected by and independent of this branch's changes. PR1a and the two
-  fixes are, on their own evidence, ready for staged rollout (they're already committed, additive, and
-  behavior-preserving). BF-1 is the correctly-sequenced next item and is explicitly **not** recommended
-  for autonomous, unreviewed implementation in a follow-up session without first defining how its
-  correctness will be validated given this environment's lack of access to real production data — that
-  validation-strategy question is an open item for the human owner of this program, not something this
-  session should resolve unilaterally by picking an approach and shipping it.
+  never-wired functions: **`systemValidation.ts` (still dormant, unchanged) + `backfillRawTransactions`
+  (now reachable at startup via its safe sibling — no longer dormant, but its own commit-triggering
+  behavior is deliberately still never triggered automatically)**; RawTransaction fact-log completeness for
+  pre-existing portfolios: **incomplete (BF-1 never wired) → complete on next app load for every existing
+  user** (once this branch ships); a genuinely new finding, not previously in this file: **one
+  previously-undocumented duplicate-fact defect in `backfillRawTransactions`'s own commit-triggering path,
+  found by this session's validation work, disclosed but deliberately not fixed (Part 19.6.3)**.
+- **Recommendation: NOT ready for production cutover of PR2/PR3/PR4 (unchanged).** PR1a, FIX-1, FIX-2, and
+  BF-1's safe variant are, on their own evidence, ready for staged rollout. PR2 (cash-as-projection) is now
+  correctly unblocked at the data layer (BF-1 shipped) but still requires its own shadow-mode trial (Part
+  10) before any live cash read is served — BF-1 landing does not itself authorize starting PR2's live
+  cutover, only its data prerequisite.
+
+### 19.6 BF-1 Validation Design
+
+Directed follow-up: produce a formal validation design for BF-1 — safety conditions, a test plan,
+success/failure criteria — and implement BF-1 only if that design proves it safe; if it can't be proven
+safe, present an alternative design instead of implementing the unproven one. This section is that design,
+the investigation behind it, and the outcome.
+
+#### 19.6.1 What "safe" has to mean here
+
+BF-1 is not a type change or a dormant, unread function — it is the first item in the whole v2 backlog
+that runs **automatically, unattended, on every existing user's next app load**, before any human reviews
+its output. "Safe" therefore cannot mean merely "the function returns the right `BackfillResult` counts
+against test fixtures" (already true, already tested, before this design). It has to mean: **running it
+provides a strict superset guarantee over doing nothing** — every existing table's content is either
+unchanged or, if changed, changed in a way independently provable correct without access to real user
+data. Given this sandboxed environment has no backend and no way to test against a real user's actual
+IndexedDB (the same limitation `cashProjection.ts`'s own doc comment already names), the bar is: **the
+change must be provable from the source code's own guarantees, not from testing against representative
+real-world data**, because the latter isn't available.
+
+#### 19.6.2 Investigation: what the existing `backfillRawTransactions` actually does end-to-end
+
+Read `commitEngine.ts`, `ledgerProjection.ts`, `ledgerEngine.ts`, and `verificationEngine.ts` in full to
+trace the actual, complete effect of running the existing function (not just its own file). Findings:
+
+1. **`backfillRawTransactions` routes every fact through `appendAndMaybeCommit`** (`commitEngine.ts`), not
+   a plain append. `appendAndMaybeCommit` reactively calls `commitTicker` whenever a ticker's Buy/Sell
+   facts reach a terminal (non-"Needs Review") verification verdict.
+2. **`source: "backfill"` facts are unconditionally auto-Verified** (`verificationEngine.ts:413-419`:
+   "Trusted unconditionally... `matched-backfill`"). This means a ticker whose entire history is being
+   backfilled reaches a terminal verdict immediately, the moment its Buy/Sell facts are appended — not
+   eventually, not conditionally.
+3. **`commitTicker` (`commitEngine.ts:120-188`) always runs `projectLegacyTicker`** when the repos bundle
+   includes `trades`/`allocations` — and `BackfillRepos`'s own interface *requires* both. So `commitTicker`
+   firing means `projectLegacyTicker` fires too, on the real `Trade`/`TradeAllocation` tables.
+4. **Conclusion: running the existing `backfillRawTransactions` against a real user's repos is not an
+   inert, additive operation.** It triggers a full delete-and-replace rewrite (`projectLegacyTicker`) of
+   `Trade`/`TradeAllocation` for literally every ticker in every portfolio, in one pass, the first time
+   this ships — not the incremental, per-ticker cadence normal usage (Import, manual entry) produces
+   today.
+
+Traced `projectLegacyTicker`'s rewrite logic itself (`ledgerProjection.ts:309-506`) to determine whether
+that rewrite is provably a no-op for consistent historical data:
+
+5. For backfilled facts, `LedgerEvent.eventId` is the fact's own real id (`ledgerEngine.ts:89`,
+   `toDirectEvent` — direct 1:1 mapping for `source === "backfill"`), and `backfillRawTransactions` mints
+   the `BuyExecution` fact with `id: trade.id` (line 95, unchanged). So the exact-id match path in
+   `resolveExistingTradeForLot` (`ledgerProjection.ts:356-367`) finds the *same* Trade row, not a
+   different one — the **update** path fires, not the **create** path.
+6. The update path (`ledgerProjection.ts:401-410`) spreads the *existing* Trade (`...match`) and overwrites
+   only `fees/taxes/executionTime/companyName/transactionNumber/remainingShares` — **`notes`,
+   `strategyTags`, and `sector` are preserved from the existing row, not read from the fact's payload at
+   all** (confirmed even though `backfillRawTransactions`'s own `BuyExecutionPayload` construction, lines
+   82-92, omits those three fields — a real gap in the payload, but harmless here specifically because the
+   update path never reads them from the payload in the first place).
+7. For internally-consistent data (the common case: `remainingShares` already correctly reflects existing
+   `TradeAllocation` rows), every overwritten field's new value is byte-identical to its old value, so
+   `tradesEqual`'s `JSON.stringify` comparison is true and `repos.trades.save` is **never even called**
+   (`ledgerProjection.ts:410`) — a true no-op for the happy path.
+8. **But the SELL side's matching is looser** — `projectLegacyTicker`'s allocation match
+   (`ledgerProjection.ts:468-470`) keys on `(tradeId, sharesClosed, executionDate)`, not on the fact's own
+   id. A mismatch here (any legacy row whose recomputed replay values don't line up exactly, e.g. from
+   fee/tax rounding accumulated differently across multiple lots, a multi-decimal sum in
+   `backfillRawTransactions`'s `totalFees`/`totalTaxes` construction, or any pre-existing data
+   inconsistency this codebase's own 15+-incident history proves is not hypothetical) falls to the
+   **create** path, which deletes the old `TradeAllocation` row and creates a new one **under a different
+   id** (`a.id`, the Allocation Engine's own deterministic id — never the original row's id).
+
+This is where "provable from source alone, for every real user's actual historical data shape" breaks
+down: step 8's condition depends on the *exact* numeric/temporal shape of each real user's history, which
+this environment cannot inspect. Steps 5-7 prove the BUY side is safe in the general case; step 8 proves
+the SELL side is only *conditionally* safe, and the condition isn't independently verifiable here.
+
+#### 19.6.3 A concrete defect found during this investigation, not a hypothetical one
+
+Writing the test that was meant to assert "the safe variant produces the same facts as the existing
+variant" instead **caught a real, previously-undocumented bug in the existing, already-shipped,
+already-tested `backfillRawTransactions`**: appending the `SellExecution` fact reactively triggers
+`commitTicker` (its ticker reaches a terminal verdict immediately, per 19.6.2 finding #2) *before* the main
+backfill loop has appended its own `SellAllocationDecision` fact for that same sell. `commitTicker`'s own
+`ensureLegacyFactsExist` gap-backfill step (`ledgerProjection.ts:151-294`) sees no decision fact yet,
+treats it as a genuine gap, and writes one itself. The main loop then writes a **second**, functionally
+duplicate decision fact for the identical sell order moments later.
+
+Verified directly (not inferred): a probe test against the real function showed
+`kinds: [BuyExecution, SellExecution, SellAllocationDecision, SellAllocationDecision]` — two decision
+facts, `seq` 3 and 5, identical payload, different ids. Functionally harmless (the Allocation Engine's
+replay only ever draws a lot's balance down once; the duplicate resolves against an already-fully-consumed
+lot and is silently skipped) but it is a real, permanent, duplicate immutable fact in the log — exactly the
+kind of emergent, non-obvious, cross-function interaction that source-reading alone predicted was possible
+(19.6.1's "provable from source" bar) but that only actually surfaced by writing and running a test.
+**This is disclosed, not fixed** — `backfillRawTransactions` (the reactive variant) is a different,
+already-shipped, already-tested function; fixing it is out of scope for BF-1 and would violate "never
+combine unrelated migrations." It is direct, first-hand evidence — not a projection from static analysis —
+that the commit-triggering path has more emergent behavior than a source read alone reveals, reinforcing
+19.6.2's conclusion.
+
+#### 19.6.4 Safety conditions required for an automatic, unattended trigger
+
+Derived directly from 19.6.1-19.6.3: an automatic BF-1 must satisfy every one of the following, each
+independently checkable from source (no real-data dependency):
+
+1. **Never calls `appendAndMaybeCommit` or anything that can transitively reach `commitTicker`.** This is
+   the single condition that makes every risk in 19.6.2 (steps 3-8) and 19.6.3 structurally impossible,
+   not merely unlikely.
+2. **Writes to exactly one table**: `rawTransactions`, via `RawTransactionRepository.append` only — the
+   same structurally-enforced, no-update/no-delete contract this session's own PR1a dependency-cruiser
+   rule already locks down.
+3. **Idempotent and non-fatal**: refuses a second run (`BackfillAlreadyRanError`, already implemented and
+   unconditionally shared with the existing function); any other failure is caught and logged, never
+   thrown into the calling module's top-level evaluation, so a bug here can never block the app from
+   loading.
+4. **Zero observable effect on the app as currently shipped.** Since nothing in the live UI reads raw
+   `RawTransaction` facts directly today (`computeCashProjection` isn't wired to any live read yet — that's
+   PR2, still gated behind its own shadow-mode trial), condition 1+2 together imply this by construction:
+   there is no code path from "a new row exists in `rawTransactions`" to "something on screen changed"
+   until a later, separately-certified PR wires one.
+
+#### 19.6.5 Test plan
+
+| # | Test | Proves |
+|---|---|---|
+| 1 | Fixture-based: silent variant produces exactly one fact per real Buy/Sell/Decision, no duplicates (`backfillRawTransactions.test.ts`) | Condition 1's consequence (no `ensureLegacyFactsExist` race) holds in practice, not just by argument — and positively distinguishes the safe variant from the newly-found defect in 19.6.3 |
+| 2 | Fixture-based: never touches `ledgerCache`/`allocationsCache` after a scenario that DOES populate them via the reactive sibling | Condition 1, empirically — the same input data that populates the cache via `backfillRawTransactions` produces an empty cache via the silent variant |
+| 3 | Fixture-based: `trades`/`allocations` returned byte-for-byte unchanged (including `notes`/`strategyTags`, the fields most at risk per 19.6.2 step 6) | Condition 2 |
+| 4 | Fixture-based: second call rejects with `BackfillAlreadyRanError`, first call's facts unchanged | Condition 3 |
+| 5 | Fixture-based: `computeCashProjection` over the resulting facts produces the correct cash delta for a mixed Buy/Dividend/CashAdjustment history | The actual, positive goal BF-1 exists to unblock — not just "does no harm," but "does the intended good" |
+| 6 | **Real Dexie** (not fakes): same isolation property as test 3, against the app's actual `createRepositories()`/`PortfolioOsDatabase` wiring | Closes the fakes-vs-real-infrastructure gap 19.6.1 flagged — the one thing fixtures alone can't prove |
+| 7 | **Real Dexie**: running twice throws the guard error, second run doesn't duplicate the fact set | Condition 3, against real infrastructure |
+| 8 | `tsc --noEmit` + `arch:check`, before and after | No new type or layering violations (the real-Dexie tests specifically had to be placed in `src/presentation/pages/`, not `src/application/services/`, to respect the existing `application-no-infrastructure` rule — caught by `arch:check` during this work, fixed before commit) |
+| 9 | Full existing suite (966 tests, pre-BF-1 baseline) re-run after every change | Zero regression to anything already shipped |
+
+All 9 executed. Results: tests 1-7 all pass (8 new tests: 6 fixture + 2 real-Dexie); `tsc`/`arch:check`
+clean; full suite 966 → 973 (973 = 966 + 8 new − 1 test rewritten in place, see 19.6.3's note on the test
+that caught the defect), zero unrelated regression.
+
+#### 19.6.6 Success / failure criteria and verdict
+
+**Success** = all four safety conditions (19.6.4) hold AND all nine test-plan items (19.6.5) pass AND the
+existing 966-test baseline stays green. **Failure** = any safety condition cannot be verified from source,
+or any test fails, or any regression appears in the existing suite.
+
+**Verdict, split by variant:**
+
+- **The ORIGINAL BF-1 design** (wire the *existing* `backfillRawTransactions`, as-is, to an automatic
+  startup hook) **FAILS** condition 1 by construction (it deliberately, correctly, and by design calls
+  `appendAndMaybeCommit`) and — per 19.6.3 — has at least one further emergent defect not fully
+  characterized. **Not implemented.** This is not a hedge; it is the designed, documented behavior of an
+  existing, separately-tested function, correctly left alone.
+- **The alternative design** (`backfillRawTransactionsSilently`, sharing all fact-construction logic with
+  the original via a shared `runBackfill(repos, write)` core, differing only in `write`) **PASSES all four
+  conditions and all nine test-plan items.** Implemented, tested (8 new tests, 2 against real Dexie), wired
+  into `src/presentation/lib/data.ts`'s startup path with the same non-fatal try/catch discipline every
+  other shadow-write path in this codebase already uses, and committed.
+
+#### 19.6.7 What this does and does not unblock
+
+Shipping this closes the actual, corrected PR2 blocker from Part 19.1: every existing portfolio's
+`RawTransaction` log becomes complete on next app load. It does **not** itself authorize starting PR2's
+live cutover — `computeCashProjection` still needs its own shadow-mode trial (Part 10) comparing its output
+against the directly-mutated `Portfolio.cash` field over a full trading week with zero unexplained
+divergence, exactly as originally specified, before anything reads it live. BF-1 supplies PR2's data
+prerequisite; it does not supply PR2's own certification.
+
+#### 19.6.8 Open item carried forward, not resolved here
+
+The reactive `backfillRawTransactions`'s duplicate-`SellAllocationDecision` defect (19.6.3) is real,
+disclosed, and unfixed. It's low-severity today (functionally inert, no live caller), but should be fixed
+before that function is ever wired to a human-facing "Migrate my data" action (Part 19's own note on its
+intended future use) — filed here as a new, small, independent backlog candidate, not bundled into this
+change.

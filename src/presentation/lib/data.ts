@@ -2,6 +2,7 @@ import { createRepositories } from "@infrastructure/db/repositories";
 import { SnapshotPriceRepository } from "@infrastructure/market-data/SnapshotPriceRepository";
 import type { ImportOrchestrator } from "@infrastructure/ocr/ImportOrchestrator";
 import type { PriceRepository } from "@domain/repositories";
+import { backfillRawTransactionsSilently, BackfillAlreadyRanError } from "@application/services/backfillRawTransactions";
 
 /**
  * Single app-wide repository bundle. `createRepositories()` is the
@@ -25,6 +26,30 @@ export const repos = {
 };
 
 export type Repos = typeof repos;
+
+/**
+ * BF-1 (see docs/PORTFOLIO_OS_V2_SPEC.md Part 19's Validation Design):
+ * one-time, silent, fire-and-forget conversion of every pre-existing
+ * portfolio's Trade/TradeAllocation/PositionVerification/dividend/
+ * cash-adjustment history into RawTransaction facts, so the fact log is
+ * complete for every existing user, not just one built going forward.
+ * Deliberately the SILENT variant — see backfillRawTransactions.ts's own
+ * module doc comment for why: it appends facts only, never triggers a
+ * commit, never touches Trade/TradeAllocation/ledgerCache/allocationsCache,
+ * so this call has ZERO observable effect on anything the app currently
+ * renders. `BackfillAlreadyRanError` is the expected, silent outcome on
+ * every load after the first (no `source: "backfill"` row existing yet is
+ * the only condition that lets it run) — any OTHER failure is logged, never
+ * thrown into the module's own top-level evaluation, so a bug here can
+ * never block the app from starting.
+ */
+backfillRawTransactionsSilently(repos).catch((err) => {
+  if (err instanceof BackfillAlreadyRanError) return;
+  console.error(
+    "One-time RawTransaction backfill failed — the app continues normally; cash-projection facts for pre-existing history may stay incomplete until this succeeds on a future load:",
+    err
+  );
+});
 
 /**
  * Tesseract.js and pdfjs-dist (pulled in transitively by ImportOrchestrator)

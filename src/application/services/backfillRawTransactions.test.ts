@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { backfillRawTransactions, BackfillAlreadyRanError, type BackfillRepos } from "./backfillRawTransactions";
+import { backfillRawTransactions, backfillRawTransactionsSilently, BackfillAlreadyRanError, type BackfillRepos } from "./backfillRawTransactions";
 import {
   createFakeTradeRepository,
   createFakeTradeAllocationRepository,
@@ -171,5 +171,183 @@ describe("backfillRawTransactions", () => {
     const result = await backfillRawTransactions(repos);
     expect(result).toEqual({ buysBackfilled: 0, sellOrdersBackfilled: 0, verificationsBackfilled: 0, cashEventsBackfilled: 0 });
     expect(await repos.rawTransactions.getAll()).toEqual([]);
+  });
+});
+
+/**
+ * BF-1 Validation Design (docs/PORTFOLIO_OS_V2_SPEC.md Part 19): the safety
+ * case for running a backfill automatically, unattended, on every app load
+ * rests entirely on this variant NEVER touching anything but rawTransactions
+ * — no commit, no cache write, no legacy-table rewrite. These tests are that
+ * safety case's regression coverage: every one of them is meaningless (and
+ * would need to fail) if `backfillRawTransactionsSilently` were ever changed
+ * to route through `appendAndMaybeCommit` like its sibling.
+ */
+describe("backfillRawTransactionsSilently", () => {
+  let trades: Trade[];
+  let allocations: TradeAllocation[];
+  let verifications: PositionVerification[];
+  let timelineEvents: TimelineEvent[];
+  let repos: BackfillRepos;
+
+  function buildRepos() {
+    return {
+      portfolios: createFakePortfolioRepository([createPortfolio({ id: PORTFOLIO, name: "Main", kind: "Trading" })]),
+      trades: createFakeTradeRepository(trades),
+      allocations: createFakeTradeAllocationRepository(allocations),
+      verifications: createFakeVerificationRepository(verifications),
+      timeline: createFakeTimelineRepository(timelineEvents),
+      rawTransactions: createFakeRawTransactionRepository(),
+      committedLedger: createFakeCommittedLedgerRepository(),
+    };
+  }
+
+  beforeEach(() => {
+    trades = [];
+    allocations = [];
+    verifications = [];
+    timelineEvents = [];
+  });
+
+  /**
+   * NOT a byte-for-byte comparison against `backfillRawTransactions`'s own
+   * output — an earlier version of this test asserted exact equality and
+   * caught a real, previously-undocumented defect in the REACTIVE variant
+   * instead: appending the SellExecution fact reactively triggers
+   * `commitTicker` (via `appendAndMaybeCommit`) mid-loop, before the main
+   * backfill loop has written its own `SellAllocationDecision` fact for that
+   * sell — so `commitTicker`'s own `ensureLegacyFactsExist` gap-backfill step
+   * sees no decision yet, treats it as a gap, and writes one itself. The
+   * main loop then writes its own, second, decision fact for the identical
+   * sell order moments later. Functionally harmless (the Allocation Engine's
+   * replay only ever draws down a lot's remaining balance once — the second,
+   * duplicate decision resolves against an already-fully-consumed lot and is
+   * silently skipped, per `generateAllocations`'s own `remaining === 0`
+   * guard) but it is a real duplicate immutable fact, permanently doubling
+   * that sell's audit trail. This is exactly the kind of emergent,
+   * non-obvious behavior the BF-1 Validation Design (Part 19) flagged as a
+   * reason the reactive path can't be fully reasoned about from source
+   * alone — filed as a known, disclosed, NOT-fixed-here defect in
+   * `backfillRawTransactions` (out of scope: a different, already-tested,
+   * already-shipped function; "never combine unrelated migrations"). The
+   * silent variant is immune by construction — it never triggers a commit at
+   * all, so `ensureLegacyFactsExist` never runs during a silent backfill.
+   */
+  it("produces exactly one fact per real Buy/Sell/Decision — no duplicates, unlike a known quirk in the reactive variant", async () => {
+    trades = [
+      createTrade({ id: "t1", portfolioId: PORTFOLIO, ticker: "COMI", shares: 100, entryPrice: 40, executionDate: "2026-01-15", executionTime: "10:00" }),
+    ];
+    allocations = [
+      createTradeAllocation({
+        id: "a1",
+        sellGroupId: "sg1",
+        portfolioId: PORTFOLIO,
+        tradeId: "t1",
+        ticker: "COMI",
+        sharesClosed: 100,
+        exitPrice: 50,
+        executionDate: "2026-02-01",
+        executionTime: "11:00",
+      }),
+    ];
+    repos = buildRepos();
+
+    await backfillRawTransactionsSilently(repos);
+
+    const facts = await repos.rawTransactions.getAll();
+    const kindCounts = Object.fromEntries(["BuyExecution", "SellExecution", "SellAllocationDecision"].map((k) => [k, facts.filter((f) => f.kind === k).length]));
+    expect(kindCounts).toEqual({ BuyExecution: 1, SellExecution: 1, SellAllocationDecision: 1 });
+
+    const decision = facts.find((f) => f.kind === "SellAllocationDecision")!;
+    expect(decision.payload).toEqual({ sellExecutionId: "sg1", allocations: [{ lotRef: "t1", shares: 100 }] });
+  });
+
+  it("never touches ledgerCache/allocationsCache — the entire reason this variant is safe for an automatic, unattended trigger", async () => {
+    trades = [
+      createTrade({ id: "t1", portfolioId: PORTFOLIO, ticker: "COMI", shares: 100, entryPrice: 40, executionDate: "2026-01-15", executionTime: "10:00" }),
+    ];
+    allocations = [
+      createTradeAllocation({
+        id: "a1",
+        sellGroupId: "sg1",
+        portfolioId: PORTFOLIO,
+        tradeId: "t1",
+        ticker: "COMI",
+        sharesClosed: 100,
+        exitPrice: 50,
+        executionDate: "2026-02-01",
+        executionTime: "11:00",
+      }),
+    ];
+    repos = buildRepos();
+
+    // Sanity check first: the SAME data, through the reactive variant, DOES
+    // populate the cache (already proven above) — so this test's "empty"
+    // result below is a real property of the silent variant, not an
+    // artifact of the fixture never producing a terminal verdict at all.
+    await backfillRawTransactionsSilently(repos);
+
+    expect(await repos.committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+    expect(await repos.committedLedger.getAllocations(PORTFOLIO, "COMI")).toEqual([]);
+  });
+
+  it("never touches the legacy trades/allocations tables — the original rows are returned byte-for-byte unchanged", async () => {
+    const originalTrade = createTrade({
+      id: "t1",
+      portfolioId: PORTFOLIO,
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 40,
+      executionDate: "2026-01-15",
+      executionTime: "10:00",
+      notes: "conviction buy",
+      strategyTags: ["swing"],
+    });
+    trades = [originalTrade];
+    const originalAllocation = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "sg1",
+      portfolioId: PORTFOLIO,
+      tradeId: "t1",
+      ticker: "COMI",
+      sharesClosed: 100,
+      exitPrice: 50,
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+    allocations = [originalAllocation];
+    repos = buildRepos();
+
+    await backfillRawTransactionsSilently(repos);
+
+    expect(await repos.trades.getByPortfolio(PORTFOLIO)).toEqual([originalTrade]);
+    expect(await repos.allocations.getByPortfolio(PORTFOLIO)).toEqual([originalAllocation]);
+  });
+
+  it("refuses to run a second time, same guard as the reactive variant", async () => {
+    trades = [createTrade({ id: "t1", portfolioId: PORTFOLIO, ticker: "COMI", shares: 100, entryPrice: 40, executionDate: "2026-01-15", executionTime: "10:00" })];
+    repos = buildRepos();
+
+    await backfillRawTransactionsSilently(repos);
+    await expect(backfillRawTransactionsSilently(repos)).rejects.toBeInstanceOf(BackfillAlreadyRanError);
+  });
+
+  it("once complete, computeCashProjection over the resulting facts matches the cash a real Deposit/Buy/Sell/Dividend history should produce — the actual goal this variant exists to unblock", async () => {
+    timelineEvents = [
+      { id: "div-1", portfolioId: PORTFOLIO, type: "Dividend", timestamp: "2026-04-30T00:00", ticker: "PHAR", amount: 44.18, attachments: [], createdAt: "2026-04-30T00:00" },
+      { id: "adj-1", portfolioId: PORTFOLIO, type: "CashAdjustment", timestamp: "2026-01-15T00:00", amount: -50, notes: "bank fee", attachments: [], createdAt: "2026-01-15T00:00" },
+    ];
+    trades = [
+      createTrade({ id: "t1", portfolioId: PORTFOLIO, ticker: "COMI", shares: 100, entryPrice: 40, fees: 5, executionDate: "2026-01-15", executionTime: "10:00" }),
+    ];
+    repos = buildRepos();
+
+    await backfillRawTransactionsSilently(repos);
+
+    const { computeCashProjection } = await import("./cashProjection");
+    const facts = await repos.rawTransactions.getAll();
+    const cashDelta = computeCashProjection(facts, PORTFOLIO);
+    // -4005 (100 * 40 + 5 fee) - 50 (adjustment) + 44.18 (dividend)
+    expect(cashDelta).toBeCloseTo(-4000 - 5 - 50 + 44.18, 5);
   });
 });

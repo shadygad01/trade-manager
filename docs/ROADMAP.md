@@ -1899,3 +1899,67 @@ session's scope: [`docs/PORTFOLIO_OS_V2_SPEC.md`](PORTFOLIO_OS_V2_SPEC.md) Part 
   a human before more sessions write code against it. PR3 (the single Policy module) and PR1b (branding
   `RawTransaction.id`/`LedgerEvent.eventId` as a distinct `EntityId` type) are both independently startable
   without waiting on that decision, if a smaller next step is preferred instead.
+
+### BF-1 Validation Design: the previous entry's open question, answered — safe variant shipped, unsafe variant rejected with evidence
+
+Direct follow-up to the previous entry's explicit blocker: produce a formal BF-1 validation design (safety
+conditions, test plan, success/failure criteria), implement BF-1 only if it proves safe, otherwise present
+an alternative. Traced `commitEngine.ts`/`ledgerProjection.ts`/`ledgerEngine.ts`/`verificationEngine.ts`
+end-to-end rather than reasoning from `backfillRawTransactions.ts` in isolation.
+
+**Finding: the existing `backfillRawTransactions` is not the inert, additive operation its own doc comment
+implies once its full call chain is traced.** `source: "backfill"` facts are unconditionally auto-Verified
+(`verificationEngine.ts`), which means every ticker's history reaches a terminal verification verdict the
+instant its facts are appended via `appendAndMaybeCommit` — which reactively fires `commitTicker`, which
+(since `BackfillRepos` always carries `trades`/`allocations`) always runs `projectLegacyTicker`. Running
+the existing function against a real user's repos would trigger a full delete-and-replace rewrite of
+`Trade`/`TradeAllocation` for their entire portfolio in one pass, the first time it ships — not the
+incremental, per-ticker cadence normal usage produces. Traced the rewrite logic itself: the BUY side is
+provably a no-op for internally-consistent data (id-stable update, `notes`/`strategyTags`/`sector`
+preserved via the existing row's own spread, never read from the fact); the SELL side's matching is looser
+(keyed on `tradeId`+`sharesClosed`+`executionDate`, not fact id) and its safety for any given real
+portfolio's exact historical shape isn't provable from source alone in an environment with no access to
+real user data to test against.
+
+**A concrete, previously-undocumented defect surfaced while writing the validation tests, not a
+hypothetical one**: a test asserting the safe variant's output matches the existing function's output
+byte-for-byte failed — not because the safe variant was wrong, but because the EXISTING, already-shipped,
+already-tested `backfillRawTransactions` produces a duplicate `SellAllocationDecision` fact for every sell
+order. Root cause: appending the SellExecution fact reactively triggers `commitTicker` before the main
+backfill loop has written its own decision fact for that sell; `commitTicker`'s own `ensureLegacyFactsExist`
+gap-backfill step sees no decision yet, treats it as a real gap, and writes one itself — then the main loop
+writes a second one moments later. Verified directly (a probe test showed two `SellAllocationDecision`
+facts, same payload, different ids, seq 3 and 5). Functionally harmless (the Allocation Engine's replay
+only draws a lot's balance down once) but a real, permanent, duplicate immutable fact. Disclosed here,
+deliberately NOT fixed (a different, already-shipped, already-tested function; out of scope for this item)
+— filed as a small, independent follow-up candidate.
+
+**Verdict**: the ORIGINAL design (wire the existing function as-is to an automatic startup hook) fails
+safety condition 1 (must never reach `commitTicker`) by construction and was **not implemented**. The
+**alternative** — `backfillRawTransactionsSilently`, sharing all fact-construction logic with the existing
+function via a new shared `runBackfill(repos, write)` core, differing only in routing every write through
+`repos.rawTransactions.append` directly instead of `appendAndMaybeCommit` — passes every safety condition
+(inherits `RawTransactionRepository`'s structurally-enforced append-only contract; touches exactly one
+table; same `BackfillAlreadyRanError` idempotency guard; zero observable effect on the running app, since
+nothing reads raw facts live yet). Implemented, tested (8 new tests: 6 fixture-based including one that
+positively distinguishes it from the existing function's duplicate-fact defect, 2 against a **real** Dexie
+instance — not just fakes — proving `trades`/`allocations`/`ledgerCache`/`allocationsCache` stay
+byte-for-byte untouched), and wired into `src/presentation/lib/data.ts`'s startup path with the same
+non-fatal try/catch discipline every other shadow-write path in this codebase already uses.
+
+Full validation design, investigation, test plan, and verdict: `docs/PORTFOLIO_OS_V2_SPEC.md` Part 19.6.
+
+- **Files modified**: `backfillRawTransactions.ts` (new `backfillRawTransactionsSilently` entry point;
+  existing `backfillRawTransactions` unchanged, still tested, still available for a possible future
+  human-reviewed "Migrate my data" action), `backfillRawTransactions.test.ts` (+6 tests),
+  `backfillRawTransactionsSilently.realDb.test.ts` (new, +2 tests — placed in `src/presentation/pages/`,
+  not `src/application/services/`, since it needs real Dexie access and application-layer files are
+  structurally forbidden from importing infrastructure), `data.ts` (startup hook), `docs/PORTFOLIO_OS_V2_SPEC.md`.
+- 973/973 tests (966 previous + 8 new − 1 rewritten in place after it caught the defect above), `tsc --noEmit`
+  clean, `npm run arch:check` clean (the real-Dexie test's initial placement under `src/application/services/`
+  was caught by `arch:check` and relocated before commit).
+- **Next recommended sprint**: PR2's data prerequisite is now satisfied (every existing portfolio's fact
+  log completes on next app load), but PR2 itself still needs its own shadow-mode trial (Part 10) — do not
+  treat BF-1 landing as authorization to wire a live cash read. Independently: the duplicate-decision-fact
+  defect in `backfillRawTransactions` (not the silent variant) is a small, well-scoped, disclosed fix
+  worth its own short session before that function is ever exposed to a human-facing action.
