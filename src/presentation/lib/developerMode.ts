@@ -39,16 +39,24 @@ function setDeveloperModeEnabled(enabled: boolean): void {
 }
 
 /**
- * Registers the Ctrl+Alt+Shift+D listener once. Toggling reloads the page —
- * every consumer of `isDeveloperModeEnabled()` reads it once at boot, so a
- * live in-place toggle would leave the recorder/route wiring stale.
+ * The single toggle action both hidden triggers below share — flips the
+ * flag and reloads. Every consumer of `isDeveloperModeEnabled()` reads it
+ * once at boot, so a live in-place toggle would leave the recorder/route
+ * wiring stale; a reload is required, not optional.
+ */
+export function toggleDeveloperModeAndReload(): void {
+  setDeveloperModeEnabled(!isDeveloperModeEnabled());
+  window.location.reload();
+}
+
+/**
+ * Registers the Ctrl+Alt+Shift+D listener once — the desktop trigger.
  */
 export function installDeveloperModeHiddenToggle(): void {
   if (typeof window === "undefined") return;
   window.addEventListener("keydown", (event) => {
     if (event.ctrlKey && event.altKey && event.shiftKey && event.key.toLowerCase() === "d") {
-      setDeveloperModeEnabled(!isDeveloperModeEnabled());
-      window.location.reload();
+      toggleDeveloperModeAndReload();
     }
   });
 }

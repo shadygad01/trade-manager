@@ -12,10 +12,13 @@ import {
   Database,
   Languages,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { repos } from "@presentation/lib/data";
 import { useT } from "@presentation/i18n/translations";
 import { useLanguage, languageStore } from "@presentation/i18n/language";
+import { toggleDeveloperModeAndReload } from "@presentation/lib/developerMode";
+
+const DEVELOPER_MODE_LONG_PRESS_MS = 1500;
 
 export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () => void }) {
   const t = useT();
@@ -25,6 +28,22 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
   const [location] = useLocation();
   const portfolios = useLiveQuery(() => repos.portfolios.getAll(), []);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+
+  // Ctrl+Alt+Shift+D (developerMode.ts) has no mobile equivalent — a
+  // long-press on the logo is the same "hidden, off by default, never
+  // leaks via a screenshot" trigger for touch devices. Deliberately no
+  // visible button/hint: same design intent as the keyboard shortcut, not a
+  // separate, more-discoverable mechanism.
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startLongPress = () => {
+    longPressTimer.current = setTimeout(toggleDeveloperModeAndReload, DEVELOPER_MODE_LONG_PRESS_MS);
+  };
+  const cancelLongPress = () => {
+    if (longPressTimer.current !== null) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
 
   const NAV_ITEMS = [
     { key: "holdings", label: t("sidebar.holdings"), icon: Briefcase, suffix: "" },
@@ -52,7 +71,15 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       }`}
     >
       <div className="flex items-center gap-2 border-b border-slate-800/80 px-5 py-5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-cyan-500/10 text-cyan-400 font-bold">
+        <div
+          className="flex h-8 w-8 select-none items-center justify-center rounded-md bg-cyan-500/10 text-cyan-400 font-bold"
+          style={{ WebkitTouchCallout: "none" }}
+          onPointerDown={startLongPress}
+          onPointerUp={cancelLongPress}
+          onPointerLeave={cancelLongPress}
+          onPointerCancel={cancelLongPress}
+          onContextMenu={(e) => e.preventDefault()}
+        >
           P
         </div>
         <div className="flex-1">
