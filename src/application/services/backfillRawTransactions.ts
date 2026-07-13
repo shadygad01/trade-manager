@@ -51,11 +51,11 @@ export class BackfillAlreadyRanError extends Error {
   }
 }
 
-/** Same grouping key TradeService/duplicateDetection.ts's groupSellAllocationsByOrder already uses — sellGroupId, with a legacy composite fallback for any pre-sellGroupId row. */
+/** Same grouping key TradeService/duplicateDetection.ts's groupSellAllocationsByOrder already uses — sellGroupId, with a legacy composite (date+price+time) fallback for any pre-sellGroupId row. */
 function groupAllocationsBySellOrder(allocations: TradeAllocation[]): Map<string, TradeAllocation[]> {
   const groups = new Map<string, TradeAllocation[]>();
   for (const a of allocations) {
-    const key = a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}`;
+    const key = a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}|${a.executionTime}`;
     const list = groups.get(key) ?? [];
     list.push(a);
     groups.set(key, list);

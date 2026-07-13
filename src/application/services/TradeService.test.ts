@@ -281,6 +281,48 @@ describe("deleteTrade", () => {
       await deleteTrade(repos, trade.id);
       expect(await repos.trades.getById(trade.id)).toBeUndefined();
     });
+
+    it("real bug shape (ABUK): deleting ONE of two same-value/different-time twin trades never retracts the SURVIVING sibling's own real fact", async () => {
+      // canonicalKey (ticker/side/date/shares/price) is time-blind — before
+      // the fix, retractMatchingRawTransaction's filter matched BOTH twin
+      // facts (10:32AM and 10:34AM) purely on shared value and retracted
+      // them BOTH, even though only the 10:32 trade was being deleted. That
+      // silently destroyed the STILL-EXISTING 10:34 trade's own
+      // official-broker-excel provenance.
+      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000_000)] }));
+      const { trade: trade1032 } = await recordBuy(repos, {
+        portfolioId: "p1", ticker: "ABUK", shares: 49, entryPrice: 42.4, executionDate: "2026-02-01", executionTime: "10:32AM",
+      });
+      const { trade: trade1034 } = await recordBuy(repos, {
+        portfolioId: "p1", ticker: "ABUK", shares: 49, entryPrice: 42.4, executionDate: "2026-02-01", executionTime: "10:34AM",
+      });
+      await commitTicker(repos, "p1", "ABUK");
+
+      await deleteTrade(repos, trade1032.id);
+
+      // The surviving trade must still exist...
+      expect(await repos.trades.getById(trade1034.id)).toBeDefined();
+      // ...and its own real fact must still be LIVE, not retracted.
+      const all = await repos.rawTransactions.getAll();
+      const retractedTargets = new Set(
+        all.filter((t) => t.kind === "Retraction").map((t) => (t.payload as { targetId: string }).targetId),
+      );
+      const survivorFacts = all.filter(
+        (t) =>
+          t.kind === "BuyExecution" &&
+          t.ticker === "ABUK" &&
+          (t.payload as BuyExecutionPayload).executionTime === "10:34AM",
+      );
+      expect(survivorFacts.length).toBeGreaterThan(0);
+      expect(survivorFacts.every((f) => !retractedTargets.has(f.id))).toBe(true);
+      expect(survivorFacts.every((f) => f.source === "official-broker-excel" || f.source === "manual")).toBe(true);
+
+      // After a full rebuild, the surviving trade is still correctly ABUK/49sh, not orphaned into a backfill fact.
+      await commitTicker(repos, "p1", "ABUK");
+      const tradesAfter = (await repos.trades.getByPortfolio("p1")).filter((t) => t.ticker === "ABUK");
+      expect(tradesAfter).toHaveLength(1);
+      expect(tradesAfter[0].shares).toBe(49);
+    });
   });
 });
 

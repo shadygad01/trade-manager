@@ -2,6 +2,7 @@ import type { RawTransaction, BuyExecutionPayload, SellExecutionPayload } from "
 import type { Upload } from "@domain/entities/Upload";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { canonicalKey } from "./ledgerRebuild";
+import { timesConflict } from "./duplicateDetection";
 import { verifyAllDetailed, type VerifyAllParams, type VerificationVerdict } from "./verificationEngine";
 import { buildEvidenceGraph, type EvidenceEdge } from "./evidenceGraph";
 import { higherAuthority } from "./evidenceAuthority";
@@ -19,9 +20,19 @@ import { higherAuthority } from "./evidenceAuthority";
  * "Canonical Transaction" table would be exactly the kind of parallel
  * implementation this sprint's own instructions say to remove, not add.
  * Two or more RawTransaction rows sharing the same canonicalKey (same
- * ticker/side/date/shares/price) are already the SAME execution by this
- * app's own domain rule — this is a read-only VIEW over that existing
- * identity, not a new merge algorithm.
+ * ticker/side/date/shares/price) are the SAME execution ONLY when their own
+ * execution times don't conflict (see timesConflict) — canonicalKey alone is
+ * deliberately time-blind, and two genuinely distinct real executions can
+ * share it (e.g. two same-price fills minutes apart — a real, reported case:
+ * two 49-share ABUK buys at E£42.40, 10:32AM and 10:34AM). Grouping by
+ * canonicalKey alone used to merge such pairs into one CanonicalTransaction,
+ * silently combining two real executions' evidence/verdict into one and
+ * making the ticker appear to have one fewer real transaction than it does
+ * (the same architectural mistake ledgerRebuild.ts's sourceUploadIds
+ * construction made — see docs/ROADMAP.md). Fixed by clustering each
+ * canonicalKey bucket by time-compatibility before merging, the same
+ * discriminator used throughout duplicateDetection.ts for this exact
+ * distinction.
  */
 
 export interface CanonicalTransaction {
@@ -62,6 +73,49 @@ function strongestVerdict(verdicts: VerificationVerdict[]): VerificationVerdict 
   return "Rejected";
 }
 
+function rowTime(row: RawTransaction): string | undefined {
+  return toBuySellPayload(row)?.payload.executionTime;
+}
+
+/**
+ * Splits one canonicalKey bucket into clusters of rows that could genuinely
+ * be the same real execution — union-find over "does not time-conflict"
+ * edges, so a chain of pairwise-compatible reads (e.g. two documents, one
+ * with no time at all, both corroborating the same trade) still merges into
+ * one cluster, while a row whose own time conflicts with every other row's
+ * lands in its own singleton cluster instead of being folded in. Determinism
+ * (which cluster "wins" the group's base key) is by lexicographically-first
+ * row id, mirroring ledgerRebuild.ts's disambiguateCollidingKeys.
+ */
+function clusterByTimeCompatibility(rows: RawTransaction[]): RawTransaction[][] {
+  const parent = rows.map((_, i) => i);
+  function find(i: number): number {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  }
+  function union(a: number, b: number): void {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  }
+  for (let i = 0; i < rows.length; i++) {
+    for (let j = i + 1; j < rows.length; j++) {
+      if (!timesConflict(rowTime(rows[i]), rowTime(rows[j]))) union(i, j);
+    }
+  }
+  const clusters = new Map<number, RawTransaction[]>();
+  for (let i = 0; i < rows.length; i++) {
+    const root = find(i);
+    const cluster = clusters.get(root) ?? [];
+    cluster.push(rows[i]);
+    clusters.set(root, cluster);
+  }
+  return [...clusters.values()];
+}
+
 /**
  * Every execution for one ticker, merged by canonicalKey — the same
  * "documents describing the same execution must merge into one node"
@@ -90,40 +144,48 @@ export function buildCanonicalTransactions(ticker: string, params: VerifyAllPara
   const knownMissing = graph.edges.some((e) => e.type === "missing");
 
   const result: CanonicalTransaction[] = [];
-  for (const [transactionId, rows] of groups) {
-    const ids = rows.map((r) => r.id);
-    const bs = toBuySellPayload(rows[0])!;
+  for (const [key, bucket] of groups) {
+    const clusters = clusterByTimeCompatibility(bucket);
+    for (const rows of clusters) {
+      const ids = rows.map((r) => r.id).sort();
+      // A bucket with no time-conflict split keeps the plain canonicalKey (the
+      // common case, and what every existing consumer's transactionId already
+      // expects); a bucket split by time gets one disambiguated id per
+      // cluster so two genuinely distinct executions never share an id.
+      const transactionId = clusters.length === 1 ? key : `${key}#${ids[0]}`;
+      const bs = toBuySellPayload(rows[0])!;
 
-    // Highest-authority row's own fees/taxes win — see evidenceAuthority.ts.
-    // Reduces left-to-right; higherAuthority returns undefined on a tie, in
-    // which case the row already chosen (leftmost/first-seen) is kept.
-    let bestFeesSource = rows[0];
-    for (const row of rows.slice(1)) {
-      if (higherAuthority(row.source, bestFeesSource.source) === row.source) bestFeesSource = row;
+      // Highest-authority row's own fees/taxes win — see evidenceAuthority.ts.
+      // Reduces left-to-right; higherAuthority returns undefined on a tie, in
+      // which case the row already chosen (leftmost/first-seen) is kept.
+      let bestFeesSource = rows[0];
+      for (const row of rows.slice(1)) {
+        if (higherAuthority(row.source, bestFeesSource.source) === row.source) bestFeesSource = row;
+      }
+      const bestPayload = toBuySellPayload(bestFeesSource)!.payload;
+
+      const rowVerdicts = ids.map((id) => verdicts.get(id)?.verdict).filter((v): v is VerificationVerdict => v !== undefined);
+      const edgesTouching = graph.edges.filter((e) => (e.type === "corroborates" || e.type === "contradicts") && (ids.includes(e.from) || ids.includes(e.to)));
+
+      result.push({
+        transactionId,
+        ticker: normalizedTicker,
+        side: bs.side,
+        shares: bs.payload.shares,
+        price: bs.payload.price,
+        fees: bestPayload.fees,
+        taxes: bestPayload.taxes,
+        date: bs.payload.executionDate,
+        time: bs.payload.executionTime,
+        confidence: rows.find((r) => r.confidence)?.confidence,
+        evidenceSources: ids,
+        evidenceCount: ids.length,
+        corroboratingEdges: edgesTouching.filter((e) => e.type === "corroborates"),
+        contradictingEdges: edgesTouching.filter((e) => e.type === "contradicts"),
+        tickerHasKnownMissingEvidence: knownMissing,
+        currentStatus: rowVerdicts.length > 0 ? strongestVerdict(rowVerdicts) : "Needs Review",
+      });
     }
-    const bestPayload = toBuySellPayload(bestFeesSource)!.payload;
-
-    const rowVerdicts = ids.map((id) => verdicts.get(id)?.verdict).filter((v): v is VerificationVerdict => v !== undefined);
-    const edgesTouching = graph.edges.filter((e) => (e.type === "corroborates" || e.type === "contradicts") && (ids.includes(e.from) || ids.includes(e.to)));
-
-    result.push({
-      transactionId,
-      ticker: normalizedTicker,
-      side: bs.side,
-      shares: bs.payload.shares,
-      price: bs.payload.price,
-      fees: bestPayload.fees,
-      taxes: bestPayload.taxes,
-      date: bs.payload.executionDate,
-      time: bs.payload.executionTime,
-      confidence: rows.find((r) => r.confidence)?.confidence,
-      evidenceSources: ids,
-      evidenceCount: ids.length,
-      corroboratingEdges: edgesTouching.filter((e) => e.type === "corroborates"),
-      contradictingEdges: edgesTouching.filter((e) => e.type === "contradicts"),
-      tickerHasKnownMissingEvidence: knownMissing,
-      currentStatus: rowVerdicts.length > 0 ? strongestVerdict(rowVerdicts) : "Needs Review",
-    });
   }
 
   return result.sort((a, b) => a.date.localeCompare(b.date));

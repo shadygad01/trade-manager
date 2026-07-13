@@ -109,11 +109,11 @@ export function resolveLotRef(all: RawTransaction[], trade: Trade): string {
   return matched ? matched.id : tradeCanonicalKey(trade);
 }
 
-/** Same grouping backfillRawTransactions uses — sellGroupId with the legacy composite fallback. */
+/** Same grouping backfillRawTransactions/duplicateDetection.groupSellAllocationsByOrder use — sellGroupId with the legacy composite fallback (date+price+time, so two distinct legacy same-day/same-price sell orders never merge — see duplicateDetection.ts's own doc comment on this key). */
 function groupBySellOrder(allocations: TradeAllocation[]): Map<string, TradeAllocation[]> {
   const groups = new Map<string, TradeAllocation[]>();
   for (const a of allocations) {
-    const key = a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}`;
+    const key = a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}|${a.executionTime}`;
     const list = groups.get(key) ?? [];
     list.push(a);
     groups.set(key, list);

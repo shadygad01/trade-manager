@@ -214,8 +214,14 @@ export function groupSellAllocationsByOrder(existingAllocations: TradeAllocation
     // it was allocated across. Legacy rows recorded before sellGroupId existed
     // must be re-unified by date+exact price, or a 39-share sell split 24+15
     // across two lots would never sum back to 39 and the re-imported candidate
-    // would sit pending forever against a fully-consumed position.
-    const key = a.sellGroupId || `legacy:${a.executionDate}|${round4(a.exitPrice)}`;
+    // would sit pending forever against a fully-consumed position. Time is
+    // included too — date+price alone is deliberately coarse enough that two
+    // genuinely different legacy sell orders on the same day at the same
+    // price (routine) could otherwise merge into one phantom order; every
+    // fragment of one real order was written with the identical executionTime
+    // in one recordSell call, so this can never split a legitimate order,
+    // only keep two distinct ones apart.
+    const key = a.sellGroupId || `legacy:${a.executionDate}|${round4(a.exitPrice)}|${a.executionTime}`;
     const g = groups.get(key);
     if (g) {
       g.totalShares += a.sharesClosed;
