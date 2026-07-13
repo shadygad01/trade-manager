@@ -18,6 +18,7 @@ import { createTimelineEvent } from "@domain/entities/TimelineEvent";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { generateId } from "@domain/value-objects/id";
+import { type GroupingSignature, toGroupingSignature } from "@domain/value-objects/identity";
 import { canonicalKey } from "./ledgerRebuild";
 import { isRetracted, findLiveExecutionFact } from "./rawTransactionFolds";
 import { timesConflict } from "./duplicateDetection";
@@ -110,10 +111,10 @@ export function resolveLotRef(all: RawTransaction[], trade: Trade): string {
 }
 
 /** Same grouping backfillRawTransactions/duplicateDetection.groupSellAllocationsByOrder use — sellGroupId with the legacy composite fallback (date+price+time, so two distinct legacy same-day/same-price sell orders never merge — see duplicateDetection.ts's own doc comment on this key). */
-function groupBySellOrder(allocations: TradeAllocation[]): Map<string, TradeAllocation[]> {
-  const groups = new Map<string, TradeAllocation[]>();
+function groupBySellOrder(allocations: TradeAllocation[]): Map<GroupingSignature, TradeAllocation[]> {
+  const groups = new Map<GroupingSignature, TradeAllocation[]>();
   for (const a of allocations) {
-    const key = a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}|${a.executionTime}`;
+    const key = toGroupingSignature(a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}|${a.executionTime}`);
     const list = groups.get(key) ?? [];
     list.push(a);
     groups.set(key, list);

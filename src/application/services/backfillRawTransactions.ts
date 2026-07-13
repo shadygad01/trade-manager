@@ -2,6 +2,7 @@ import type { TradeRepository, TradeAllocationRepository, VerificationRepository
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import {
   createRawTransaction,
+  type RawTransaction,
   type BuyExecutionPayload,
   type SellExecutionPayload,
   type SellAllocationDecisionPayload,
@@ -10,6 +11,7 @@ import {
   type CashAdjustmentPayload,
 } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { type GroupingSignature, toGroupingSignature } from "@domain/value-objects/identity";
 import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 
 /**
@@ -19,14 +21,51 @@ import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
  * for why those rows bypass normal verification (already reconciled once,
  * under the old system's own rules, at the time). Never touches the
  * original trades/tradeAllocations/verifications tables — this only reads
- * them. Every write routes through appendAndMaybeCommit, so a ticker's
- * ledgerCache/allocationsCache populate immediately as its backfilled facts
- * land, exactly like any other write to this architecture.
+ * them.
+ *
+ * Two entry points share the same fact-construction logic below, differing
+ * ONLY in how each fact is written (see `runBackfill`'s `write` parameter):
+ *
+ * - `backfillRawTransactions` (unchanged, still the only one any existing
+ *   test/caller uses) routes every write through `appendAndMaybeCommit` —
+ *   a ticker's ledgerCache/allocationsCache (and, per commitEngine's own
+ *   Phase 9.8 projection step, the legacy Trade/TradeAllocation rows
+ *   themselves) populate/rewrite immediately as its backfilled facts reach
+ *   a terminal verification verdict ("backfill" source is always
+ *   auto-Verified — see verificationEngine.ts), exactly like any other
+ *   write to this architecture. This is deliberate and tested
+ *   (`backfillRawTransactions.test.ts`'s own "commits into
+ *   ledgerCache/allocationsCache automatically" case) — appropriate for an
+ *   explicit, human-reviewed action (e.g. a future "Migrate my data" button
+ *   mirroring RebuildLedgerPanel/ProvenanceRepairPanel's dry-run-then-confirm
+ *   pattern), where a user consciously triggers a operation whose worst case
+ *   is `projectLegacyTicker` rewriting their entire ledger's Trade/
+ *   TradeAllocation rows in one pass and can review/undo the result.
+ *
+ * - `backfillRawTransactionsSilently` routes every write through
+ *   `repos.rawTransactions.append` directly — inheriting
+ *   `RawTransactionRepository`'s own structurally-enforced append-only
+ *   contract (reinforced by the dependency-cruiser rule restricting direct
+ *   Dexie access) and touching NO other table. This is the only variant
+ *   safe to run unattended on every app load: see
+ *   docs/PORTFOLIO_OS_V2_SPEC.md Part 19's "BF-1 Validation Design" for the
+ *   full safety analysis of why the commit-triggering path was judged NOT
+ *   provably safe for an automatic, un-reviewed trigger (it would rewrite
+ *   every ticker's legacy Trade/TradeAllocation identity across a user's
+ *   ENTIRE portfolio in one pass, the first time this ships, with no way to
+ *   validate that rewrite against real historical data shapes from this
+ *   environment) and why this narrower variant closes that gap by
+ *   construction rather than by review discipline alone.
  *
  * Field naming matches presentation/lib/data.ts's `repos` singleton exactly
- * (`allocations`, not `tradeAllocations`) so this can be called directly
- * against the app's real repos with no adapter.
+ * (`allocations`, not `tradeAllocations`) so either entry point can be
+ * called directly against the app's real repos with no adapter.
  */
+
+type FactWriter = (repos: BackfillRepos, transaction: Omit<RawTransaction, "seq">) => Promise<RawTransaction>;
+
+const reactiveWrite: FactWriter = (repos, transaction) => appendAndMaybeCommit(repos, transaction);
+const silentWrite: FactWriter = (repos, transaction) => repos.rawTransactions.append(transaction);
 
 export interface BackfillRepos extends CommitEngineRepos {
   portfolios: PortfolioRepository;
@@ -52,10 +91,10 @@ export class BackfillAlreadyRanError extends Error {
 }
 
 /** Same grouping key TradeService/duplicateDetection.ts's groupSellAllocationsByOrder already uses — sellGroupId, with a legacy composite (date+price+time) fallback for any pre-sellGroupId row. */
-function groupAllocationsBySellOrder(allocations: TradeAllocation[]): Map<string, TradeAllocation[]> {
-  const groups = new Map<string, TradeAllocation[]>();
+function groupAllocationsBySellOrder(allocations: TradeAllocation[]): Map<GroupingSignature, TradeAllocation[]> {
+  const groups = new Map<GroupingSignature, TradeAllocation[]>();
   for (const a of allocations) {
-    const key = a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}|${a.executionTime}`;
+    const key = toGroupingSignature(a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}|${a.executionTime}`);
     const list = groups.get(key) ?? [];
     list.push(a);
     groups.set(key, list);
@@ -63,7 +102,7 @@ function groupAllocationsBySellOrder(allocations: TradeAllocation[]): Map<string
   return groups;
 }
 
-export async function backfillRawTransactions(repos: BackfillRepos): Promise<BackfillResult> {
+async function runBackfill(repos: BackfillRepos, write: FactWriter): Promise<BackfillResult> {
   const existing = await repos.rawTransactions.getAll();
   if (existing.some((t) => t.source === "backfill")) {
     throw new BackfillAlreadyRanError();
@@ -89,7 +128,7 @@ export async function backfillRawTransactions(repos: BackfillRepos): Promise<Bac
       companyName: trade.companyName,
       transactionNumber: trade.transactionNumber,
     };
-    await appendAndMaybeCommit(
+    await write(
       repos,
       createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "backfill", portfolioId: trade.portfolioId, ticker, payload })
     );
@@ -131,7 +170,7 @@ export async function backfillRawTransactions(repos: BackfillRepos): Promise<Bac
       ticker,
       payload: sellPayload,
     });
-    await appendAndMaybeCommit(repos, sellFact);
+    await write(repos, sellFact);
 
     const decisionAllocations = group.map((a) => {
       const trade = tradeById.get(a.tradeId);
@@ -139,7 +178,7 @@ export async function backfillRawTransactions(repos: BackfillRepos): Promise<Bac
       return { lotRef: trade.id, shares: a.sharesClosed };
     });
     const decisionPayload: SellAllocationDecisionPayload = { sellExecutionId: sellFact.id, allocations: decisionAllocations };
-    await appendAndMaybeCommit(
+    await write(
       repos,
       createRawTransaction({ kind: "SellAllocationDecision", source: "backfill", portfolioId: first.portfolioId, ticker, payload: decisionPayload })
     );
@@ -154,7 +193,7 @@ export async function backfillRawTransactions(repos: BackfillRepos): Promise<Bac
       capturedAt: verification.capturedAt,
       companyName: verification.companyName,
     };
-    await appendAndMaybeCommit(
+    await write(
       repos,
       createRawTransaction({ kind: "PositionVerificationCapture", source: "backfill", portfolioId: verification.portfolioId, ticker, payload })
     );
@@ -178,15 +217,35 @@ export async function backfillRawTransactions(repos: BackfillRepos): Promise<Bac
     for (const event of events) {
       if (event.type === "Dividend") {
         const payload: DividendPaymentPayload = { ticker: event.ticker, amount: event.amount ?? 0, date: event.timestamp.slice(0, 10) };
-        await appendAndMaybeCommit(repos, createRawTransaction({ id: event.id, kind: "DividendPayment", source: "backfill", portfolioId, payload }));
+        await write(repos, createRawTransaction({ id: event.id, kind: "DividendPayment", source: "backfill", portfolioId, payload }));
         cashEventsBackfilled += 1;
       } else if (event.type === "CashAdjustment") {
         const payload: CashAdjustmentPayload = { amount: event.amount ?? 0, notes: event.notes ?? "", date: event.timestamp.slice(0, 10) };
-        await appendAndMaybeCommit(repos, createRawTransaction({ id: event.id, kind: "CashAdjustment", source: "backfill", portfolioId, payload }));
+        await write(repos, createRawTransaction({ id: event.id, kind: "CashAdjustment", source: "backfill", portfolioId, payload }));
         cashEventsBackfilled += 1;
       }
     }
   }
 
   return { buysBackfilled: trades.length, sellOrdersBackfilled: sellGroups.size, verificationsBackfilled: verifications.length, cashEventsBackfilled };
+}
+
+/** Commit-triggering variant — see this file's module doc comment. Existing, tested, unchanged behavior. */
+export async function backfillRawTransactions(repos: BackfillRepos): Promise<BackfillResult> {
+  return runBackfill(repos, reactiveWrite);
+}
+
+/**
+ * Append-only variant, safe for unattended use (e.g. an automatic app-load
+ * hook) — see this file's module doc comment and
+ * docs/PORTFOLIO_OS_V2_SPEC.md Part 19's BF-1 Validation Design for why the
+ * commit-triggering variant above is NOT used here. Produces byte-identical
+ * RawTransaction facts to `backfillRawTransactions`; the only difference is
+ * that `repos.rawTransactions.append` is called directly instead of
+ * `appendAndMaybeCommit`, so `ledgerCache`, `allocationsCache`, `trades`,
+ * and `allocations` are never read from or written to by this function —
+ * verified by `backfillRawTransactions.test.ts`'s own isolation tests.
+ */
+export async function backfillRawTransactionsSilently(repos: BackfillRepos): Promise<BackfillResult> {
+  return runBackfill(repos, silentWrite);
 }

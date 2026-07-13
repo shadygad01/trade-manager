@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { PortfolioOsDatabase } from "./db";
-import { purgeTickerData, purgeAllData } from "./purge";
+import { purgeTickerData, purgeAllData, allTables } from "./purge";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createTrade } from "@domain/entities/Trade";
 import { createTimelineEvent } from "@domain/entities/TimelineEvent";
@@ -140,5 +140,27 @@ describe("purgeAllData", () => {
     expect(await db.ledgerCache.count()).toBe(0);
     expect(await db.allocationsCache.count()).toBe(0);
     expect(await db.pendingExecutions.count()).toBe(0);
+  });
+});
+
+/**
+ * A new Dexie table can be added to db.ts's schema without being added to
+ * purge.ts's own `allTables` enumeration — already happened once for real
+ * (`pendingExecutions`, see docs/ROADMAP.md's "Reset All Data audit" entry),
+ * leaving orphaned rows behind after a "Reset" that looked complete. This
+ * test reads the live schema (Dexie's own `db.tables`, populated from
+ * whichever `.stores()` call registered the latest version) and fails the
+ * moment the two lists diverge in either direction, instead of waiting for
+ * a user to notice leftover data after the next new table ships.
+ */
+describe("purge.ts's table list vs. the live Dexie schema", () => {
+  it("purges every table the schema actually defines — no more, no less", async () => {
+    const db = new PortfolioOsDatabase(`test-db-${crypto.randomUUID()}`);
+    await db.open();
+
+    const schemaTableNames = new Set(db.tables.map((t) => t.name));
+    const purgedTableNames = new Set(allTables(db).map((t) => t.name));
+
+    expect(purgedTableNames).toEqual(schemaTableNames);
   });
 });
