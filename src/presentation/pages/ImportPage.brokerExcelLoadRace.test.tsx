@@ -32,6 +32,7 @@ const state = vi.hoisted(() => ({
 let resolveRawTransactions: (() => void) | undefined;
 
 vi.mock("@presentation/lib/data", () => ({
+  diagnostics: { recordSessionEvent() {}, recordWrite() {}, recordRead() {}, recordDecision() {}, recordRuleExecution() {}, recordPerfSample() {} },
   repos: {
     portfolios: {
       getAll: () => Promise.resolve(state.portfolios),

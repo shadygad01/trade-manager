@@ -50,6 +50,9 @@ export const diagnostics: DiagnosticsRecorder = isDeveloperModeEnabled()
   ? new RecordingDiagnosticsRecorder(diagnosticEventRepository, generateId())
   : new NoopDiagnosticsRecorder();
 
+/** Session Recorder (docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.1) — always the first event of a session when Developer Mode is on. */
+diagnostics.recordSessionEvent({ workflowStep: "AppStart", label: "Application started" });
+
 /** Part 4.3/9: retention pruning runs once per boot, only when Developer Mode is on, and can never block app startup. */
 if (isDeveloperModeEnabled()) {
   pruneDiagnostics(diagnosticEventRepository, diagnosticCaseRepository).catch((err) => {

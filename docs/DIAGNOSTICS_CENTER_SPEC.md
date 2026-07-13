@@ -1,16 +1,18 @@
 # Developer Diagnostics Center — Architecture Specification
 
-**Status: APPROVED. Source-of-truth field certification complete (Part 2.3). Phase 1 SHIPPED (Part 12).**
-Before Phase 1 began, every field in the data model was certified against a strict four-category
-provenance test (Part 2.3) — two real design defects were found and fixed during that certification, not
-merely categorized around: a mutable `status` field on `DiagnosticCase` that contradicted the "never
-edited field-by-field" rule (removed), and a duplication risk in `oldValue`/`newValue`/`input`/`output`
-capture that would have silently copied canonical/derived business data into the diagnostics store
-(replaced with a three-mode `valueSource` design — reference / replayCursor / narrowly-scoped snapshot —
-detailed in Part 2.3). Phase 1 (foundation: domain types, storage, recorder, Developer Mode gating, empty
-route — Part 12) then surfaced one more design gap during implementation, not anticipated by the
-certification: `purge.ts`'s Reset must never wipe the diagnostics log (Part 3.1). Next: Phase 2 (Session
-Recorder + Writer Trace instrumentation), not yet started.
+**Status: APPROVED. Phase 1 and Phase 2 SHIPPED, Phase 2 narrower than planned (Part 12).** Before Phase 1
+began, every field in the data model was certified against a strict four-category provenance test
+(Part 2.3) — two real design defects were found and fixed during that certification, not merely
+categorized around: a mutable `status` field on `DiagnosticCase` that contradicted the "never edited
+field-by-field" rule (removed), and a duplication risk in `oldValue`/`newValue`/`input`/`output` capture
+that would have silently copied canonical/derived business data into the diagnostics store (replaced with
+a three-mode `valueSource` design — reference / replayCursor / narrowly-scoped snapshot — detailed in
+Part 2.3). Phase 1 (foundation) then surfaced one more design gap during implementation, not anticipated
+by the certification: `purge.ts`'s Reset must never wipe the diagnostics log (Part 3.1). Phase 2 (Session
+Recorder + Writer Trace) shipped a complete, end-to-end-verified vertical slice through `TradeService.ts`'s
+`recordBuy`/`recordSell` rather than a shallow pass across all 10 named writer files, after a real
+regression surfaced mid-build (see Part 12's Phase 2 entry) — the remaining 6 writer files are explicitly
+Phase 2b, not started. Next: either Phase 2b (breadth) or Phase 3 (Reader/Decision Trace), not yet decided.
 
 **Mission**: Portfolio OS runs entirely in the browser with no backend and no server-side database.
 Every user's IndexedDB is private to their machine — a developer or an AI assistant investigating a
@@ -647,9 +649,38 @@ it displays.
   `presentation/App.tsx`/`main.tsx`/`presentation/lib/data.ts` wiring;
   `src/architecture/regressionGuards.test.ts`'s Dexie table allowlist; `purge.ts`/`purge.test.ts`'s
   documented exclusion (Part 3.1).
-- **Phase 2 — Session Recorder + Writer Trace.** One-line instrumentation in the 10 frozen writer call
-  sites (Part 5.1, 5.2) + Part 5.4's observe-only guard. UI: raw Timeline + Writer Trace list (no case
-  detection yet — every event is visible, nothing is triaged).
+- **Phase 2 — Session Recorder + Writer Trace. SHIPPED, narrower than originally scoped.**
+  `TradeService.ts`'s two main entry points (`recordBuy`/`recordSell`) are now fully instrumented
+  end-to-end — both their `rawTransactions` writes (`reference` mode, via `ensureBuyFact`/
+  `ensureSellFacts`) and their `trades`/`tradeAllocations` writes (`replayCursor` mode) — plus a Session
+  Recorder event at four top-level workflow actions (AppStart, ManualEdit/Record Buy, Allocate/Sell
+  allocation, Confirm/Import commit, Reset). Verified end-to-end in a real browser (Playwright against
+  the dev server): recording a Buy produces exactly the three events the design predicts, in order —
+  `[ManualEdit] Record Buy submitted` → `Write (reference) rawTransactions/<id>` →
+  `Write (replayCursor) trades/<id>`, same id on both writes since the fact adopts the trade's own id.
+  **Deliberately deferred to Phase 2b** (not started): the other 6 named writer files —
+  `backfillRawTransactions.ts`, `importRecording.ts`, `ledgerProjection.ts`, `lotManager.ts`,
+  `ledgerRebuild.ts`, `BackupService.ts` — and the `snapshot`-mode `valueSource` (so
+  `diagnosticsSnapshotModeIsNarrowlyScoped`, Part 5.4/2.3 §D, isn't built yet either, since nothing uses
+  `snapshot` mode yet). Scoped down mid-phase, not per the original plan, once instrumenting all 10 in one
+  pass proved too large to review/test carefully in one sitting — TradeService.ts's two entry points are
+  the highest-value, most-exercised writers, so a complete vertical slice through them beats a shallow
+  pass across all 10.
+  **A real regression was found and fixed while building this** (see the doc comments on `ensureBuyFact`/
+  `ensureSellFacts` in `TradeService.ts`): the first draft computed `factSeqCursor` with a fresh
+  `rawTransactions.getAll()` query after the fact write, and that extra `await` — even though it never
+  ran when Developer Mode was off, since the query itself still executed — shifted async interleaving
+  enough to fail this codebase's own ORWE/ABUK/ADPC race-condition regression tests (real Dexie,
+  `useLiveQuery` reactivity). Fixed by returning the already-known seq from `appendAndMaybeCommit`'s own
+  result instead of re-querying — zero extra reads, and a concrete demonstration of why Part 0's
+  "never modifies business logic" has to mean timing, not just data. Also required updating 21 existing
+  test files' `vi.mock("@presentation/lib/data", ...)` factories to export a `diagnostics` stub (Vitest
+  throws on an accessed-but-undeclared mock export, it does not return `undefined` silently) and adding a
+  new observe-only regression guard scoped to what actually exists
+  (`src/infrastructure/diagnostics/*.ts` never calling a qualified business-repo write method), since the
+  originally-planned guard (scanning a `src/application/services/diagnostics/` directory) didn't match how
+  the instrumentation actually landed — inline in the business files themselves via an optional parameter,
+  not a separate wrapping module.
 - **Phase 3 — Reader Trace + Decision Trace.** Instrument the five read entry points (Part 5.3). UI:
   Decision Trace tab, Query Inspector chain view.
 - **Phase 4 — Case Detection Engine.** `detectDiagnosticCases` + first three triggers (mismatch,

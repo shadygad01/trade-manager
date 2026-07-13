@@ -187,3 +187,40 @@ describe("CI guard: no new direct-mutable derived-state Dexie table", () => {
     expect(liveTableNames).toEqual(Object.keys(KNOWN_TABLES).sort());
   });
 });
+
+describe("CI guard: the Diagnostics Center recorder never writes business data (Part 0.1/5.4's 'observe-only' rule, enforced structurally)", () => {
+  it("src/infrastructure/diagnostics/*.ts never calls a business repository write method or imports a business writer's writing functions", () => {
+    // Phase 2 landed instrumentation as an ADDITIVE optional parameter
+    // threaded through the existing writer functions themselves
+    // (TradeService.ts/commitEngine.ts), not as a separate module wrapping
+    // them — so the actual risk this guard protects against isn't "the
+    // diagnostics module writes business data" (recordWrite/
+    // recordSessionEvent/etc. are plain data-collection calls, they never
+    // touch a repository), it's "a future diagnostics FEATURE built on top
+    // of the recorded log — e.g. Part 20's Replay Inspector — reaches for a
+    // business write method instead of staying read-only." Scoped to
+    // src/infrastructure/diagnostics/ (the recorder implementations) since
+    // that's the only diagnostics-specific code that exists yet; this
+    // allowlist-free assertion (zero matches, not a frozen count) is
+    // deliberately strict — there is no legitimate reason for a write here,
+    // ever.
+    const diagnosticsFiles = files.filter((f) => f.path.startsWith("infrastructure/diagnostics/"));
+    expect(diagnosticsFiles.length).toBeGreaterThan(0);
+
+    // Qualified with the business repo's own property name (not a bare
+    // `.append(`/`.save(`) — the recorder's own DiagnosticEventRepository
+    // legitimately has an `append` method too (see
+    // RecordingDiagnosticsRecorder.ts), and that's not a business write.
+    const writeCallSites = filesMatching(
+      diagnosticsFiles,
+      /\.(trades|allocations|tradeAllocations|rawTransactions|portfolios|timeline|journal|verifications|uploads|pendingExecutions|committedLedger)\.(save|delete|append|saveRemainingShares|commitTicker)\(/
+    );
+    expect(writeCallSites).toEqual([]);
+
+    const businessWriterImports = filesMatching(
+      diagnosticsFiles,
+      /from ["']@application\/services\/(TradeService|commitEngine|ledgerProjection|lotManager|ledgerRebuild|BackupService|backfillRawTransactions|importRecording)["']/
+    );
+    expect(businessWriterImports).toEqual([]);
+  });
+});

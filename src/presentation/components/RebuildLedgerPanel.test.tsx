@@ -18,6 +18,7 @@ function portfolio(id = "p1"): Portfolio {
 let fakeRepos: ReturnType<typeof createFakeRepositories>;
 
 vi.mock("@presentation/lib/data", () => ({
+  diagnostics: { recordSessionEvent() {}, recordWrite() {}, recordRead() {}, recordDecision() {}, recordRuleExecution() {}, recordPerfSample() {} },
   get repos() {
     return fakeRepos;
   },

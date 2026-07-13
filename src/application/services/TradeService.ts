@@ -8,7 +8,14 @@ import { sectorForTicker } from "@domain/value-objects/knownSectors";
 import { KNOWN_EGX_TICKERS, tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers";
 import { getTrackingStartDate, isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import type { AppRepositories } from "./types";
-import { retractRawTransaction, renameRawTransactionsTicker, assignPortfolioToFact, appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
+import type { DiagnosticsRecorder } from "@domain/repositories";
+import {
+  retractRawTransaction,
+  renameRawTransactionsTicker,
+  assignPortfolioToFact,
+  appendAndMaybeCommit,
+  type CommitEngineRepos,
+} from "./commitEngine";
 import { canonicalKey } from "./ledgerRebuild";
 import { resolveLotRef } from "./ledgerProjection";
 import { isRetracted, resolveCurrentTicker, findUnclaimedSellExecutionFact } from "./rawTransactionFolds";
@@ -77,8 +84,23 @@ export interface RecordBuyResult {
  * with no fact of its own, orphaning it from the next commit's projection
  * (see the regression tests this guards: "a second buy sharing another's
  * exact value never adopts its fact").
+ *
+ * Returns the seq of the fact this trade now resolves to (freshly written or
+ * adopted) — reused by `recordBuy` as its Writer Trace `factSeqCursor`
+ * (docs/DIAGNOSTICS_CENTER_SPEC.md Part 2.3 §A) without an extra
+ * `rawTransactions` read: an earlier draft of this instrumentation added a
+ * fresh `getAll()` query for exactly this purpose, and that extra await
+ * point measurably shifted async interleaving in this codebase's own
+ * documented race-condition regression tests (ImportPage's ORWE/ABUK/ADPC
+ * suites) — a stark, concrete reminder that Part 0's "never modifies
+ * business logic" has to include timing, not just data.
  */
-async function ensureBuyFact(repos: CommitEngineRepos & Partial<AppRepositories>, trade: Trade, input: RecordBuyInput): Promise<void> {
+async function ensureBuyFact(
+  repos: CommitEngineRepos & Partial<AppRepositories>,
+  trade: Trade,
+  input: RecordBuyInput,
+  diagnostics?: DiagnosticsRecorder
+): Promise<number | undefined> {
   const ticker = normalizeTicker(trade.ticker);
   const key = canonicalKey({ side: "BUY", ticker, date: trade.executionDate, shares: trade.shares, price: trade.entryPrice });
   const all = await repos.rawTransactions.getAll();
@@ -129,16 +151,24 @@ async function ensureBuyFact(repos: CommitEngineRepos & Partial<AppRepositories>
       // Only a genuine user override is a fact — a derivable sector is recomputed, never stored.
       sector: input.sector,
     };
-    await appendAndMaybeCommit(
+    const appended = await appendAndMaybeCommit(
       repos,
-      createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "manual", portfolioId: trade.portfolioId, ticker, payload })
+      createRawTransaction({ id: trade.id, kind: "BuyExecution", source: "manual", portfolioId: trade.portfolioId, ticker, payload }),
+      diagnostics,
+      { writer: "TradeService.ts", function: "ensureBuyFact", file: "src/application/services/TradeService.ts", reason: "Wrote the BuyExecution fact backing a manually-recorded Buy" }
     );
+    return appended.seq;
   } else {
     await assignPortfolioToFact(repos, liveMatch.id, trade.portfolioId);
+    return liveMatch.seq;
   }
 }
 
-export async function recordBuy(repos: AppRepositories & Partial<CommitEngineRepos>, input: RecordBuyInput): Promise<RecordBuyResult> {
+export async function recordBuy(
+  repos: AppRepositories & Partial<CommitEngineRepos>,
+  input: RecordBuyInput,
+  diagnostics?: DiagnosticsRecorder
+): Promise<RecordBuyResult> {
   assertWithinTrackingRange(input.executionDate);
   const portfolio = await repos.portfolios.getById(input.portfolioId);
   if (!portfolio) {
@@ -186,9 +216,26 @@ export async function recordBuy(repos: AppRepositories & Partial<CommitEngineRep
     })
   );
 
+  let factSeqCursor: number | undefined;
   if (repos.rawTransactions && repos.committedLedger) {
-    await ensureBuyFact(repos as AppRepositories & CommitEngineRepos, trade, input).catch((err) => {
+    factSeqCursor = await ensureBuyFact(repos as AppRepositories & CommitEngineRepos, trade, input, diagnostics).catch((err) => {
       console.error("ensureBuyFact failed (fact write, non-fatal):", err);
+      return undefined;
+    });
+  }
+
+  if (diagnostics && factSeqCursor !== undefined) {
+    diagnostics.recordWrite({
+      writer: "TradeService.ts",
+      function: "recordBuy",
+      file: "src/application/services/TradeService.ts",
+      table: "trades",
+      objectId: trade.id,
+      valueSource: "replayCursor",
+      factSeqCursor,
+      reason: "Recorded a new Buy lot",
+      portfolioId: input.portfolioId,
+      ticker: trade.ticker,
     });
   }
 
@@ -473,7 +520,11 @@ export interface RecordSellResult {
   allocations: TradeAllocation[];
 }
 
-export async function recordSell(repos: AppRepositories & Partial<CommitEngineRepos>, input: RecordSellInput): Promise<RecordSellResult> {
+export async function recordSell(
+  repos: AppRepositories & Partial<CommitEngineRepos>,
+  input: RecordSellInput,
+  diagnostics?: DiagnosticsRecorder
+): Promise<RecordSellResult> {
   if (input.allocations.length === 0) {
     throw new Error("recordSell requires at least one allocation");
   }
@@ -565,12 +616,51 @@ export async function recordSell(repos: AppRepositories & Partial<CommitEngineRe
     })
   );
 
+  let factSeqCursor: number | undefined;
   if (repos.rawTransactions && repos.committedLedger) {
-    await ensureSellFacts(repos as AppRepositories & CommitEngineRepos, input, ticker, sellGroupId, createdAllocations, closedTrades).catch(
-      (err) => {
-        console.error("ensureSellFacts failed (fact write, non-fatal):", err);
-      }
-    );
+    factSeqCursor = await ensureSellFacts(
+      repos as AppRepositories & CommitEngineRepos,
+      input,
+      ticker,
+      sellGroupId,
+      createdAllocations,
+      closedTrades,
+      diagnostics
+    ).catch((err) => {
+      console.error("ensureSellFacts failed (fact write, non-fatal):", err);
+      return undefined;
+    });
+  }
+
+  if (diagnostics && factSeqCursor !== undefined) {
+    for (const allocation of createdAllocations) {
+      diagnostics.recordWrite({
+        writer: "TradeService.ts",
+        function: "recordSell",
+        file: "src/application/services/TradeService.ts",
+        table: "tradeAllocations",
+        objectId: allocation.id,
+        valueSource: "replayCursor",
+        factSeqCursor,
+        reason: "Recorded a new sell allocation closing a lot",
+        portfolioId: input.portfolioId,
+        ticker,
+      });
+    }
+    for (const trade of closedTrades) {
+      diagnostics.recordWrite({
+        writer: "TradeService.ts",
+        function: "recordSell",
+        file: "src/application/services/TradeService.ts",
+        table: "trades",
+        objectId: trade.id,
+        valueSource: "replayCursor",
+        factSeqCursor,
+        reason: "Updated remaining shares after a sell allocation",
+        portfolioId: input.portfolioId,
+        ticker,
+      });
+    }
   }
 
   return { realizedPnl: microsToMoney(realizedMicros), allocations: createdAllocations };
@@ -620,14 +710,21 @@ export async function recordSell(repos: AppRepositories & Partial<CommitEngineRe
  * first (see allocationEngine.indexEventsByReference) and only falls back to
  * the value-keyed identity for decisions written before this fix.
  */
+/**
+ * Returns the SellAllocationDecision fact's own seq — the last (and
+ * therefore highest-seq) fact this function writes, reused by `recordSell`
+ * as its Writer Trace `factSeqCursor` without an extra `rawTransactions`
+ * read (same reasoning as `ensureBuyFact`'s own doc comment above).
+ */
 async function ensureSellFacts(
   repos: CommitEngineRepos & Partial<AppRepositories>,
   input: RecordSellInput,
   ticker: string,
   sellGroupId: string,
   createdAllocations: TradeAllocation[],
-  closedTrades: Trade[]
-): Promise<void> {
+  closedTrades: Trade[],
+  diagnostics?: DiagnosticsRecorder
+): Promise<number | undefined> {
   const totalShares = createdAllocations.reduce((sum, a) => sum + a.sharesClosed, 0);
   const price = createdAllocations[0].exitPrice;
 
@@ -656,7 +753,9 @@ async function ensureSellFacts(
   if (!existingFact) {
     await appendAndMaybeCommit(
       repos,
-      createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: input.source ?? "manual", portfolioId: input.portfolioId, ticker, payload })
+      createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: input.source ?? "manual", portfolioId: input.portfolioId, ticker, payload }),
+      diagnostics,
+      { writer: "TradeService.ts", function: "ensureSellFacts", file: "src/application/services/TradeService.ts", reason: "Wrote the SellExecution fact backing a manually-recorded Sell" }
     );
   }
 
@@ -667,7 +766,7 @@ async function ensureSellFacts(
       shares: a.sharesClosed,
     })),
   };
-  await appendAndMaybeCommit(
+  const decisionFact = await appendAndMaybeCommit(
     repos,
     createRawTransaction({
       id: `${sellGroupId}|decision`,
@@ -676,10 +775,13 @@ async function ensureSellFacts(
       portfolioId: input.portfolioId,
       ticker,
       payload: decisionPayload,
-    })
+    }),
+    diagnostics,
+    { writer: "TradeService.ts", function: "ensureSellFacts", file: "src/application/services/TradeService.ts", reason: "Wrote the SellAllocationDecision fact recording which lots were closed" }
   );
 
   await assignPortfolioToFact(repos, sellExecutionId, input.portfolioId);
+  return decisionFact.seq;
 }
 
 export interface MoveTradeResult {

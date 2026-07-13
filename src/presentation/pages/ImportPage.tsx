@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser, ChevronDown } from "lucide-react";
-import { repos, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
+import { repos, diagnostics, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
 import { recordBuy, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions, candidateSource } from "@application/services/importRecording";
@@ -805,19 +805,23 @@ export function ImportPage() {
         return;
       }
 
-      const { trade } = await recordBuy(repos, {
-        portfolioId,
-        ticker,
-        companyName: entry.candidate.companyName,
-        shares: entry.candidate.shares,
-        entryPrice: entry.candidate.price,
-        fees: entry.candidate.fees ?? 0,
-        taxes: entry.candidate.taxes ?? 0,
-        executionDate: entry.candidate.date,
-        executionTime: entry.candidate.time ?? "00:00",
-        notes: "Imported from screenshot/PDF",
-        transactionNumber: entry.candidate.transactionNumber,
-      });
+      const { trade } = await recordBuy(
+        repos,
+        {
+          portfolioId,
+          ticker,
+          companyName: entry.candidate.companyName,
+          shares: entry.candidate.shares,
+          entryPrice: entry.candidate.price,
+          fees: entry.candidate.fees ?? 0,
+          taxes: entry.candidate.taxes ?? 0,
+          executionDate: entry.candidate.date,
+          executionTime: entry.candidate.time ?? "00:00",
+          notes: "Imported from screenshot/PDF",
+          transactionNumber: entry.candidate.transactionNumber,
+        },
+        diagnostics,
+      );
       importSession.update((prev) => ({
         ...prev,
         addedKeys: [...prev.addedKeys, entry.key],
@@ -939,7 +943,7 @@ export function ImportPage() {
           source: entry.candidate.source,
         };
 
-        const result = await recordSell(repos, input);
+        const result = await recordSell(repos, input, diagnostics);
         importSession.update((prev) => ({
           ...prev,
           addedKeys: [...prev.addedKeys, entry.key],
@@ -1047,6 +1051,7 @@ export function ImportPage() {
   }
 
   async function commitTickerGroupLocked(ticker: string, portfolioId: string): Promise<void> {
+    diagnostics.recordSessionEvent({ workflowStep: "Confirm", label: `Confirm ${ticker}`, portfolioId, ticker });
     const state = importSession.getState();
 
     const buys = state.pendingCandidates.filter(

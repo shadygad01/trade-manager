@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@presentation/lib/data", () => ({
+  diagnostics: { recordSessionEvent() {}, recordWrite() {}, recordRead() {}, recordDecision() {}, recordRuleExecution() {}, recordPerfSample() {} },
   repos: {
     portfolios: {
       getById: (id: string) => Promise.resolve(state.portfolios.find((p) => p.id === id)),

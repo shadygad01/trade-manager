@@ -1,4 +1,4 @@
-import type { RawTransactionRepository, CommittedLedgerRepository } from "@domain/repositories";
+import type { RawTransactionRepository, CommittedLedgerRepository, DiagnosticsRecorder } from "@domain/repositories";
 import {
   createRawTransaction,
   type RawTransaction,
@@ -37,6 +37,26 @@ import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } f
 export interface CommitEngineRepos {
   rawTransactions: RawTransactionRepository;
   committedLedger: CommittedLedgerRepository;
+}
+
+/**
+ * docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.2 — `appendAndMaybeCommit` is the
+ * single choke point every real execution-fact writer already routes
+ * through, so it's also the single place a Writer Trace event is emitted
+ * for a `rawTransactions` append (valueSource "reference" — see Part 2.3
+ * §A: the row is already permanent and canonical the moment it's appended,
+ * so nothing beyond its own `id` needs capturing). `WriterContext` is how
+ * the TRUE originating caller (TradeService.ensureBuyFact, not
+ * commitEngine.ts itself) stays attributable through this shared choke
+ * point — every caller that wants accurate Writer Trace attribution passes
+ * its own identity; a caller that passes neither `diagnostics` nor
+ * `writerContext` behaves exactly as before this parameter existed.
+ */
+export interface WriterContext {
+  writer: string;
+  function: string;
+  file: string;
+  reason: string;
 }
 
 const NON_SUBJECT_KINDS = new Set(["PortfolioAssignment", "Correction", "Retraction"]);
@@ -201,8 +221,25 @@ export async function commitTicker(repos: CommitEngineRepos & Partial<LegacyLedg
  * everything Import writes today, before an assignment exists) or no
  * ticker has nothing to commit yet: a correct, expected no-op, not a gap.
  */
-export async function appendAndMaybeCommit(repos: CommitEngineRepos, transaction: Omit<RawTransaction, "seq">): Promise<RawTransaction> {
+export async function appendAndMaybeCommit(
+  repos: CommitEngineRepos,
+  transaction: Omit<RawTransaction, "seq">,
+  diagnostics?: DiagnosticsRecorder,
+  writerContext?: WriterContext
+): Promise<RawTransaction> {
   const appended = await repos.rawTransactions.append(transaction);
+
+  diagnostics?.recordWrite({
+    writer: writerContext?.writer ?? "commitEngine.ts",
+    function: writerContext?.function ?? "appendAndMaybeCommit",
+    file: writerContext?.file ?? "src/application/services/commitEngine.ts",
+    table: "rawTransactions",
+    objectId: appended.id,
+    valueSource: "reference",
+    reason: writerContext?.reason ?? `Appended a ${appended.kind} fact`,
+    portfolioId: appended.portfolioId,
+    ticker: appended.ticker,
+  });
 
   if (appended.kind === "PortfolioAssignment") {
     const { targetId, portfolioId } = appended.payload as PortfolioAssignmentPayload;

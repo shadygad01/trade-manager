@@ -6,6 +6,7 @@ import { PriceFreshness } from "./PriceFreshness";
 const getSnapshotInfo = vi.fn();
 
 vi.mock("@presentation/lib/data", () => ({
+  diagnostics: { recordSessionEvent() {}, recordWrite() {}, recordRead() {}, recordDecision() {}, recordRuleExecution() {}, recordPerfSample() {} },
   repos: {
     prices: {
       get getSnapshotInfo() {

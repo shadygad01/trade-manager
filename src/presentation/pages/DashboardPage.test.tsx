@@ -20,6 +20,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@presentation/lib/data", () => ({
+  diagnostics: { recordSessionEvent() {}, recordWrite() {}, recordRead() {}, recordDecision() {}, recordRuleExecution() {}, recordPerfSample() {} },
   repos: {
     portfolios: { getAll: () => Promise.resolve(state.portfolios) },
     trades: { getByPortfolio: () => Promise.resolve([]), getAll: () => Promise.resolve([]) },

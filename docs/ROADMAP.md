@@ -2156,3 +2156,73 @@ diagnostics data, and never writes to or deletes it either, not even via its own
   10 already-enumerated writer call sites (`docs/DIAGNOSTICS_CENTER_SPEC.md` Part 5.2) plus the
   `diagnosticsInstrumentationIsObserveOnly` regression guard (Part 5.4), which does not exist yet since no
   diagnostics-emitting code exists yet to guard.
+
+### Sprint 12 — Diagnostics Center Phase 2: Session Recorder + Writer Trace (TradeService.ts slice)
+
+Directed continuation: instrument the writer call sites the Sprint 11 spec named. Attempting all 10 in one
+pass (5 execution-fact writers + 5 Trade/TradeAllocation writers, across 7 files) proved too large to
+review and test carefully in one sitting, so this sprint deliberately narrowed to a complete, verified
+vertical slice through `TradeService.ts`'s `recordBuy`/`recordSell` — the two most central, most-exercised
+writer functions in the app — rather than a shallow pass across all 10. The other 6 named files
+(`backfillRawTransactions.ts`, `importRecording.ts`, `ledgerProjection.ts`, `lotManager.ts`,
+`ledgerRebuild.ts`, `BackupService.ts`) are explicitly deferred to Phase 2b, not started.
+
+**What shipped**: `commitEngine.ts`'s `appendAndMaybeCommit` — the single choke point every
+`rawTransactions` append in `TradeService.ts` already routes through — gained optional `diagnostics`/
+`writerContext` parameters and now emits one `WriteTrace` event (`valueSource: "reference"`) per fact
+append, attributed to the TRUE calling function via `writerContext`, not to `commitEngine.ts` itself.
+`TradeService.recordBuy`/`recordSell` gained an optional `diagnostics` parameter, threaded through to
+`ensureBuyFact`/`ensureSellFacts` and also used to emit their own `WriteTrace` events for the `trades`/
+`tradeAllocations` writes (`valueSource: "replayCursor"`). Four presentation call sites
+(`TradesPage.tsx`, `SellAllocationForm.tsx`, `ImportPage.tsx` ×2) now pass the real `diagnostics` singleton
+through, plus a Session Recorder event at four top-level actions: AppStart (`data.ts`), ManualEdit
+(Record Buy submit), Allocate (Sell allocation submit), Confirm (Import's `commitTickerGroupLocked`), and
+Reset (`DataPage`'s purge). `DiagnosticsPage` now renders a raw "Recent Events" list under the still-empty
+Case List, so the instrumentation is actually visible somewhere, not just written to a table nothing reads.
+
+**Verified end-to-end in a real browser**, not just unit tests: launched the dev server, drove it with
+Playwright (enable Developer Mode via `localStorage`, create a portfolio, submit Record Buy, read
+`/diagnostics`). The event log showed exactly what the design predicts, in order: `[ManualEdit] Record Buy
+submitted` → `Write (reference) rawTransactions/<id> — TradeService.ts.ensureBuyFact` → `Write
+(replayCursor) trades/<id> — TradeService.ts.recordBuy` — same id on both writes, since `ensureBuyFact`
+deliberately reuses the trade's own id for its fact. Zero console errors.
+
+**A real regression found and fixed while building this**: the first working draft computed
+`WriteTraceRecord.factSeqCursor` with a fresh `rawTransactions.getAll()` query issued right after the
+Trade/TradeAllocation write. That extra `await` — present regardless of whether Developer Mode was on,
+since the query itself still ran even though its RESULT was then discarded when `diagnostics` was a
+no-op — measurably shifted async interleaving enough to fail three of this codebase's own historical
+race-condition regression suites (ImportPage's ORWE/ABUK/ADPC tests, which use real Dexie +
+`useLiveQuery` reactivity specifically to catch exactly this class of timing bug). Root-caused by
+bisecting the diff file-by-file and adding targeted `console.log` tracing rather than guessing. Fixed by
+returning the already-known seq from `appendAndMaybeCommit`'s own result (`ensureBuyFact`/
+`ensureSellFacts` now return `Promise<number | undefined>` instead of `Promise<void>`) instead of
+re-querying — zero extra reads, same result. A second, smaller issue surfaced during the same fix: Vitest
+throws (does not silently return `undefined`) when code reads a named export a `vi.mock(...)` factory
+didn't declare — so every one of the 21 existing test files that mock `@presentation/lib/data` needed a
+`diagnostics` stub added to their mock's returned object once `TradesPage.tsx`/`SellAllocationForm.tsx`/
+`ImportPage.tsx` started reading that binding.
+
+**The planned `diagnosticsInstrumentationIsObserveOnly` guard was redesigned to match how the code actually
+landed**: the spec's Part 5.4 assumed a separate `src/application/services/diagnostics/` module wrapping
+the writers; the real instrumentation is inline in the writer functions themselves via an optional
+parameter, so nothing exists at that path to scan. Shipped instead: a guard asserting
+`src/infrastructure/diagnostics/*.ts` (the recorder implementations) never calls a qualified business-repo
+write method (`.trades.save(`, `.rawTransactions.append(`, etc. — qualified by property name, not a bare
+`.append(`, since the diagnostics repository legitimately has its own `append` method) and never imports a
+business writer's module. `diagnosticsSnapshotModeIsNarrowlyScoped` (Part 2.3 §D) still doesn't exist —
+nothing uses `valueSource: "snapshot"` yet, since `ledgerRebuild.ts`/`BackupService.ts` are Phase 2b.
+
+- **Files modified**: `src/application/services/{TradeService.ts,commitEngine.ts}`;
+  `src/presentation/{pages/TradesPage.tsx,pages/ImportPage.tsx,pages/DataPage.tsx,
+  components/SellAllocationForm.tsx,lib/data.ts,pages/DiagnosticsPage.tsx,pages/DiagnosticsPage.test.tsx}`;
+  `src/architecture/regressionGuards.test.ts` (+1 guard); 21 test files' `vi.mock("@presentation/lib/data")`
+  factories (+`diagnostics` stub); `docs/DIAGNOSTICS_CENTER_SPEC.md` (Phase 2 execution log).
+- 1023/1024 tests passing (2 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean, production build verified, and a live Playwright run against the dev server
+  confirmed the actual browser behavior end-to-end (not just component tests).
+- **Next recommended sprint**: either Phase 2b (the remaining 6 writer files — `ledgerProjection.ts`'s
+  `ensureLegacyFactsExist`/`projectLegacyTicker` are the highest-value next target, since every commit runs
+  through them) or Phase 3 (Reader Trace + Decision Trace, Part 5.3) — both are independently startable;
+  pick based on whether breadth (more writers traced) or depth (why a decision was made) is more useful
+  for the next real debugging session.
