@@ -1847,3 +1847,55 @@ Full deliverable: [`docs/PORTFOLIO_OS_V2_SPEC.md`](PORTFOLIO_OS_V2_SPEC.md) — 
 - **Next recommended sprint**: two small, independent fixes the spec calls out as immediately actionable regardless of whether the broader v2 program is ever approved — (1) a test asserting every Dexie table in the schema appears in `purge.ts`'s enumeration (closes the `pendingExecutions`-style maintenance-list-drift bug class for good), and (2) normalizing execution-time-string comparison before any `timesConflict`-style check, closing the ACAMD 12h/24h format-mismatch bug class at its root rather than per call site. If and when the v2 program itself is approved, PR1 (structural fact-store lint rule + `EntityId`/`GroupingSignature` type branding — see the spec's Part 9) is the recommended starting point: it is pure type-level/lint change with zero runtime behavior change, fully reversible, and establishes the compile-time guarantee every later PR depends on.
 
 **Certification**: There are no remaining places in the repository where a coarse deduplication signature is incorrectly reused as an identity or alias mapping.
+
+### v2 migration: PR1a shipped, plus the two small fixes from the previous entry — a directed follow-up
+
+A dedicated "Migration Completion Program" session picked up the previous entry's "Next recommended
+sprint" directly, under explicit instruction to implement the v2 backlog under full stage discipline
+(re-verify the baseline against the real repo before trusting the prior spec pass, expand the backlog with
+full risk/rollback fields, implement one item at a time, validate before every commit) rather than
+attempting the whole 7-PR program in one sitting — this repo's own working convention ("implement the
+highest-priority gap(s) only, not the whole backlog") took precedence over the instruction to push through
+every stage in one session.
+
+**Re-verifying the baseline surfaced a correction to the v2 spec itself, found before any code was
+touched**: `computeCashProjection` (`cashProjection.ts`) already exists, is fully implemented, and is
+tested (9 tests) — the spec's original description of PR2 as "implement the cash replay function" was
+wrong. The actual blocker is that `backfillRawTransactions` (the one-time conversion of every pre-existing
+portfolio's history into RawTransaction facts, which the cash projection depends on for correctness) has
+never been called from any production code path — confirmed by grep, zero matches in `src/presentation`.
+This is a more specific, more actionable finding than "partially wired in," and it's now its own backlog
+item (`BF-1`), explicitly *not* implemented this session: it's the first item in the whole v2 backlog that
+writes new data to every real user's actual browser storage rather than being a type-level or dormant-code
+change, and this sandboxed environment has no way to validate it against real production data before
+shipping — exactly the failure mode the whole v2 program exists to design away. Flagged as an open
+question for the program's human owner (how to validate BF-1 given that constraint), not resolved
+unilaterally.
+
+**Implemented and shipped, each independently validated (964/964 unchanged → 966/966, `tsc`/`arch:check`
+clean at every step, fail-before/pass-after verified for both real fixes):**
+- **PR1a** — `GroupingSignature`, a branded string type (`src/domain/value-objects/identity.ts`) closing
+  the compile-time gap behind the "coarse signature reused as identity" bug class this file's own
+  repo-wide audit (two entries above) found and fixed by hand. Applied to the five functions that audit
+  named. Also adds a dependency-cruiser rule restricting direct `db.ts` imports to its own repository
+  adapters, `purge.ts`, and test files — closing the one remaining way a future file could bypass
+  `RawTransactionRepository`'s structural no-update/no-delete guarantee. Pure type-level/lint change, zero
+  runtime behavior change (identical 964/964 test count before and after).
+- **FIX-1** — `orderEvidence.ts`'s own `timesConflict` compared raw time strings, the exact ACAMD 12h/24h
+  format-mismatch bug already fixed in `duplicateDetection.ts`'s sibling function but explicitly flagged,
+  not fixed, in that earlier entry's own "Next recommended sprint" note. Now reuses the same
+  `parseTimeToMinutes` normalization via a new export.
+- **FIX-2** — a test asserting `purge.ts`'s table enumeration always matches the live Dexie schema exactly
+  (currently 11/11, already in sync — a safety net against the next table shipping without a matching
+  purge-list update, not a fix for an active gap).
+
+Full detail, per-item risk/rollback/regression fields, and the explicit certification statement for this
+session's scope: [`docs/PORTFOLIO_OS_V2_SPEC.md`](PORTFOLIO_OS_V2_SPEC.md) Part 19.
+
+- **Next recommended sprint**: `BF-1` (wire `backfillRawTransactions` to run automatically, once, on app
+  load) is the correctly-sequenced next item by priority — but per the spec's Part 19.3/19.5, it should not
+  be picked up by an autonomous session without first deciding how its correctness will be validated given
+  this environment's lack of access to real production data. That validation-strategy decision belongs to
+  a human before more sessions write code against it. PR3 (the single Policy module) and PR1b (branding
+  `RawTransaction.id`/`LedgerEvent.eventId` as a distinct `EntityId` type) are both independently startable
+  without waiting on that decision, if a smaller next step is preferred instead.
