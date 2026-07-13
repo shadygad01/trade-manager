@@ -3,6 +3,7 @@ import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 import type { ParsedTradeCandidate } from "@domain/entities/Upload";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { type GroupingSignature, toGroupingSignature } from "@domain/value-objects/identity";
 
 export type DuplicateMatchType = "exact" | "possible";
 
@@ -205,9 +206,9 @@ export interface SellOrderGroup {
  * allocations at once (see ledgerRebuild.ts, which needs every existing sell
  * order across the whole ledger, not just one candidate's ticker).
  */
-export function groupSellAllocationsByOrder(existingAllocations: TradeAllocation[], ticker?: string): Map<string, SellOrderGroup> {
+export function groupSellAllocationsByOrder(existingAllocations: TradeAllocation[], ticker?: string): Map<GroupingSignature, SellOrderGroup> {
   const normalizedTicker = ticker !== undefined ? normalizeTicker(ticker) : undefined;
-  const groups = new Map<string, SellOrderGroup>();
+  const groups = new Map<GroupingSignature, SellOrderGroup>();
   for (const a of existingAllocations) {
     if (normalizedTicker !== undefined && normalizeTicker(a.ticker) !== normalizedTicker) continue;
     // sellGroupId identifies one real sell order regardless of how many lots
@@ -221,7 +222,7 @@ export function groupSellAllocationsByOrder(existingAllocations: TradeAllocation
     // fragment of one real order was written with the identical executionTime
     // in one recordSell call, so this can never split a legitimate order,
     // only keep two distinct ones apart.
-    const key = a.sellGroupId || `legacy:${a.executionDate}|${round4(a.exitPrice)}|${a.executionTime}`;
+    const key = toGroupingSignature(a.sellGroupId || `legacy:${a.executionDate}|${round4(a.exitPrice)}|${a.executionTime}`);
     const g = groups.get(key);
     if (g) {
       g.totalShares += a.sharesClosed;
@@ -330,8 +331,8 @@ export function isDividendAlreadyRecorded(
  * one, so higher-priced Sell duplicates are suggested instead.
  */
 /** Same real transaction, independent of a possibly re-OCR'd price: same ticker+side+date+share count. Shared by the sibling-duplicate grouping below and the cross-source verification check in ImportPage. */
-export function pendingCandidateSignature(candidate: { ticker: string; side: "BUY" | "SELL"; date: string; shares: number }): string {
-  return `${normalizeTicker(candidate.ticker)}|${candidate.side}|${candidate.date}|${candidate.shares}`;
+export function pendingCandidateSignature(candidate: { ticker: string; side: "BUY" | "SELL"; date: string; shares: number }): GroupingSignature {
+  return toGroupingSignature(`${normalizeTicker(candidate.ticker)}|${candidate.side}|${candidate.date}|${candidate.shares}`);
 }
 
 /**

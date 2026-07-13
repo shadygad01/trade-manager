@@ -10,6 +10,7 @@ import {
   type CashAdjustmentPayload,
 } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { type GroupingSignature, toGroupingSignature } from "@domain/value-objects/identity";
 import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 
 /**
@@ -52,10 +53,10 @@ export class BackfillAlreadyRanError extends Error {
 }
 
 /** Same grouping key TradeService/duplicateDetection.ts's groupSellAllocationsByOrder already uses — sellGroupId, with a legacy composite (date+price+time) fallback for any pre-sellGroupId row. */
-function groupAllocationsBySellOrder(allocations: TradeAllocation[]): Map<string, TradeAllocation[]> {
-  const groups = new Map<string, TradeAllocation[]>();
+function groupAllocationsBySellOrder(allocations: TradeAllocation[]): Map<GroupingSignature, TradeAllocation[]> {
+  const groups = new Map<GroupingSignature, TradeAllocation[]>();
   for (const a of allocations) {
-    const key = a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}|${a.executionTime}`;
+    const key = toGroupingSignature(a.sellGroupId || `legacy:${a.executionDate}|${Math.round(a.exitPrice * 10_000) / 10_000}|${a.executionTime}`);
     const list = groups.get(key) ?? [];
     list.push(a);
     groups.set(key, list);

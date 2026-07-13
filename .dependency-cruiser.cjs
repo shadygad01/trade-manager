@@ -31,6 +31,17 @@ module.exports = {
       from: { path: "^src/infrastructure" },
       to: { path: "^src/presentation" },
     },
+    {
+      name: "only-repositories-and-purge-touch-db-directly",
+      comment:
+        "db.ts (the raw Dexie instance) may only be imported by its own repository adapters and purge.ts's disclosed, sanctioned bypass of the RawTransaction append-only contract (see purge.ts's own doc comment). Every other caller — including presentation — must go through a repository interface, never Dexie directly, or the RawTransactionRepository's structural no-update/no-delete guarantee (see docs/PORTFOLIO_OS_V2_SPEC.md Part 2.1) has a silent second door. Test files are exempted: several integration tests deliberately restart against the same on-disk Dexie database to prove real persistence, which is a legitimate, different use case from a production write path.",
+      severity: "error",
+      from: {
+        path: "^src",
+        pathNot: ["^src/infrastructure/db/repositories", "^src/infrastructure/db/purge\\.ts$", "\\.test\\.tsx?$"],
+      },
+      to: { path: "^src/infrastructure/db/db\\.ts$" },
+    },
   ],
   options: {
     tsPreCompilationDeps: true,

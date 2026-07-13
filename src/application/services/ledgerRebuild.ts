@@ -3,6 +3,7 @@ import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
+import { type GroupingSignature, toGroupingSignature } from "@domain/value-objects/identity";
 import {
   findAggregateStatementMatches,
   completeCandidateFieldsFromSiblings,
@@ -94,8 +95,8 @@ export interface CanonicalTrade {
 }
 
 /** Exported so a caller with a canonicalization-worthy entry pool that isn't shaped like Upload[] (e.g. the Ledger Engine, over RawTransactions) can derive the same deterministic identity for "one real execution" without re-deriving the formula. */
-export function canonicalKey(c: { side: "BUY" | "SELL"; ticker: string; date: string; shares: number; price: number }): string {
-  return `${normalizeTicker(c.ticker)}|${c.side}|${c.date}|${c.shares}|${c.price}`;
+export function canonicalKey(c: { side: "BUY" | "SELL"; ticker: string; date: string; shares: number; price: number }): GroupingSignature {
+  return toGroupingSignature(`${normalizeTicker(c.ticker)}|${c.side}|${c.date}|${c.shares}|${c.price}`);
 }
 
 /**
