@@ -47,6 +47,45 @@ export function isTickerFullyOfficialBrokerExcelSourced(rawTransactions: RawTran
   return live.length > 0 && live.every((t) => authorityRank(t.source) >= OFFICIAL_BROKER_EXCEL_RANK);
 }
 
+/**
+ * True only when every live Buy/Sell fact for the ticker is LITERALLY
+ * `official-broker-excel` sourced — not merely rank-equal-or-above it (see
+ * isTickerFullyOfficialBrokerExcelSourced, which also accepts an
+ * Invoice-only history). Policy audit finding: checkTickerMatch's own doc
+ * comment deliberately draws a narrower line than the authority rank does —
+ * official-broker-excel is "authoritative even against a DISAGREEING My
+ * Position screenshot," while Invoice only ever substitutes for a MISSING
+ * one and still blocks/mismatches on a real, present disagreement (a single
+ * Invoice is a per-transaction document with real duplicate-import risk;
+ * the broker's own account-wide Excel export is not). evidenceAuthority.ts's
+ * own doc comment says as much: the rank "never decides whether an
+ * execution... is trustworthy... only whose numbers to prefer" once
+ * corroboration is already established — it was never meant to decide
+ * whether a screenshot disagreement can be silently ignored.
+ *
+ * Use this, not the rank-based function, for any caller that fully skips or
+ * suppresses a disagreeing verification (reconcilePositions' own skip,
+ * PortfolioDetailPage's "matches broker Excel" badge) — those callers never
+ * see checkTickerMatch's `secondaryMismatch` flag, so routing an
+ * Invoice-only ticker through them would silently hide a real discrepancy
+ * a screenshot actually flagged, not just skip asking for one that doesn't
+ * exist yet. The rank-based function remains correct for callers that only
+ * need "does this ticker's history already establish itself without a
+ * screenshot, when none exists at all" (e.g. ImportPage's zero-pending
+ * branch, which must still route a non-excel, rank-qualifying ticker to
+ * `allPendingFromInvoice`, not `allPendingFromOfficialBrokerExcel`).
+ */
+export function isTickerFullyExcelSourced(rawTransactions: RawTransaction[], ticker: string): boolean {
+  const normalized = normalizeTicker(ticker);
+  const live = rawTransactions.filter((t) => {
+    if (t.kind !== "BuyExecution" && t.kind !== "SellExecution") return false;
+    if (isRetracted(rawTransactions, t.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(rawTransactions, t);
+    return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalized;
+  });
+  return live.length > 0 && live.every((t) => t.source === "official-broker-excel");
+}
+
 export interface PositionReconciliation {
   ticker: string;
   /** The specific PositionVerification record this reconciliation is based on — lets the UI offer a direct delete for a stray/misfiled verification (see PortfolioDetailPage's "no recorded trades" banner). */
@@ -155,11 +194,16 @@ export function latestByTicker(verifications: PositionVerification[]): Map<strin
  * fully explain is suppressed rather than reported as a live discrepancy.
  *
  * A ticker fully sourced from the broker's own official Excel export (see
- * `isTickerFullyOfficialBrokerExcelSourced`) never produces a row at all,
- * regardless of any "My Position" screenshot on file — per the broker-record
- * trust policy, that whole comparison no longer applies once the Excel
- * export alone already confirms the position; a stray disagreeing
- * screenshot is not this module's concern to surface for such a ticker.
+ * `isTickerFullyExcelSourced` — literal source match, deliberately narrower
+ * than the rank-based `isTickerFullyOfficialBrokerExcelSourced`; see that
+ * function's own doc comment) never produces a row at all, regardless of any
+ * "My Position" screenshot on file — per the broker-record trust policy,
+ * that whole comparison no longer applies once the Excel export alone
+ * already confirms the position; a stray disagreeing screenshot is not this
+ * module's concern to surface for such a ticker. An Invoice-only ticker gets
+ * no such exemption here — checkTickerMatch's own policy still blocks/
+ * mismatches an Invoice-sourced ticker against a real, disagreeing
+ * screenshot, so it must flow through the ordinary comparison below.
  * `rawTransactions` is deliberately REQUIRED, not optional/defaulted —
  * an architectural-audit finding was that a defaulted-to-`[]` parameter here
  * would let any future caller silently bypass the trust policy (an omitted
@@ -181,7 +225,7 @@ export function reconcilePositions(
 
   const results: PositionReconciliation[] = [];
   for (const ticker of tickers) {
-    if (isTickerFullyOfficialBrokerExcelSourced(rawTransactions, ticker)) continue;
+    if (isTickerFullyExcelSourced(rawTransactions, ticker)) continue;
     const verification = verificationByTicker.get(ticker);
     if (!verification) continue;
 

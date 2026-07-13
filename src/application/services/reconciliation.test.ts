@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations, isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations, isTickerFullyOfficialBrokerExcelSourced, isTickerFullyExcelSourced } from "./reconciliation";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
 import { createRawTransaction, type RawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
@@ -117,6 +117,49 @@ describe("reconcilePositions", () => {
     const results = reconcilePositions([position("COMI", 150)], [verification()], [], [], facts);
     expect(results).toHaveLength(1);
     expect(results[0].quantityMismatch).toBe(true);
+  });
+
+  // Policy audit finding: a ticker fully sourced from Invoice (not
+  // official-broker-excel) was previously ALSO exempted from this
+  // comparison entirely, because reconcilePositions' skip used the
+  // rank-based isTickerFullyOfficialBrokerExcelSourced (Invoice ranks above
+  // Excel — see evidenceAuthority.ts). But checkTickerMatch's own documented
+  // policy reserves "authoritative even against a DISAGREEING screenshot"
+  // for official-broker-excel only; Invoice only ever substitutes for a
+  // MISSING screenshot and still blocks/mismatches on a real disagreement.
+  // A genuinely mismatched Invoice-only ticker was silently produced as
+  // zero rows here instead of a real quantityMismatch. Fixed by switching
+  // this skip to the literal-match isTickerFullyExcelSourced.
+  it("still reconciles (and flags a mismatch) for a ticker fully sourced from Invoice alone — Invoice does not get Excel's exemption from a disagreeing screenshot", () => {
+    const facts = [buyFact({ id: "b1", source: "invoice", shares: 100 })];
+    const results = reconcilePositions([position("COMI", 100)], [verification({ units: 30 })], [], [], facts);
+    expect(results).toHaveLength(1);
+    expect(results[0].quantityMismatch).toBe(true);
+  });
+});
+
+describe("isTickerFullyExcelSourced", () => {
+  it("is true when every live fact is literally official-broker-excel sourced", () => {
+    const facts = [buyFact({ id: "b1", source: "official-broker-excel" }), buyFact({ id: "b2", source: "official-broker-excel" })];
+    expect(isTickerFullyExcelSourced(facts, "COMI")).toBe(true);
+  });
+
+  // The deliberate difference from isTickerFullyOfficialBrokerExcelSourced:
+  // Invoice outranks Excel (see evidenceAuthority.ts) but must NOT satisfy
+  // this narrower, literal-match predicate — see this function's own doc
+  // comment in reconciliation.ts and the policy-audit finding above.
+  it("is false for a ticker whose history is Invoice-only, even though Invoice outranks official-broker-excel", () => {
+    const facts = [buyFact({ id: "b1", source: "invoice" })];
+    expect(isTickerFullyExcelSourced(facts, "COMI")).toBe(false);
+  });
+
+  it("is false when even one fact for the ticker came from a different source", () => {
+    const facts = [buyFact({ id: "b1", source: "official-broker-excel" }), buyFact({ id: "b2", source: "manual" })];
+    expect(isTickerFullyExcelSourced(facts, "COMI")).toBe(false);
+  });
+
+  it("is false for a ticker with zero facts at all", () => {
+    expect(isTickerFullyExcelSourced([], "COMI")).toBe(false);
   });
 });
 

@@ -23,7 +23,7 @@ import {
   findDateMisreadDuplicateHints,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
-import { isTickerFullyOfficialBrokerExcelSourced } from "@application/services/reconciliation";
+import { isTickerFullyOfficialBrokerExcelSourced, isTickerFullyExcelSourced } from "@application/services/reconciliation";
 import { findLiveExecutionFact } from "@application/services/rawTransactionFolds";
 import { higherAuthority } from "@application/services/evidenceAuthority";
 import { upgradeSellExecutionFact } from "@application/services/provenanceRepair";
@@ -1697,8 +1697,6 @@ export function ImportPage() {
       // gating the whole page: a ticker with real pending rows this batch
       // never depends on this query at all and is unaffected.
       if (remainingBuysAndSells.length === 0 && existingRawTransactionsRaw === undefined) continue;
-      const allPendingFromInvoice =
-        remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
       // While rows are still pending, only trust THIS batch's own sourcing —
       // never let the ticker's past history override a genuinely new,
       // not-yet-verified row from a different source (e.g. a fresh
@@ -1711,10 +1709,23 @@ export function ImportPage() {
       // corroboration" branch purely because there's nothing left pending to
       // check the source of, even though every real transaction behind it
       // came from the broker's own official export.
+      //
+      // Deliberately isTickerFullyExcelSourced (literal match) here, not the
+      // rank-based isTickerFullyOfficialBrokerExcelSourced — this flag is
+      // checked BEFORE checkTickerMatch's verifiedUnits/screenshot branch and
+      // stays true even against a DISAGREEING screenshot (policy audit
+      // finding; see isTickerFullyExcelSourced's doc comment in
+      // reconciliation.ts). An Invoice-only committed history doesn't get
+      // that pass — it's routed to allPendingFromInvoice below instead,
+      // which still blocks/mismatches on a real disagreement and only ever
+      // substitutes for a screenshot that's simply missing.
       const allPendingFromOfficialBrokerExcel =
         remainingBuysAndSells.length > 0
           ? remainingBuysAndSells.every((e) => e.candidate.source === "official-broker-excel")
-          : isTickerFullyOfficialBrokerExcelSourced(existingRawTransactions, ticker);
+          : isTickerFullyExcelSourced(existingRawTransactions, ticker);
+      const allPendingFromInvoice = remainingBuysAndSells.length > 0
+        ? remainingBuysAndSells.every((e) => e.candidate.source === "invoice")
+        : !allPendingFromOfficialBrokerExcel && isTickerFullyOfficialBrokerExcelSourced(existingRawTransactions, ticker);
       const allPendingSelfVerified =
         remainingBuysAndSells.length > 0 &&
         remainingBuysAndSells.every(

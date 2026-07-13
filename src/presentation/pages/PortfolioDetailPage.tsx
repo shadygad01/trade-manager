@@ -16,7 +16,7 @@ import {
   unarchivePortfolio,
   renamePortfolio,
 } from "@application/services/PortfolioService";
-import { reconcilePositions, suggestDuplicateTradeIds, isTickerFullyOfficialBrokerExcelSourced } from "@application/services/reconciliation";
+import { reconcilePositions, suggestDuplicateTradeIds, isTickerFullyExcelSourced } from "@application/services/reconciliation";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { PendingExecution } from "@domain/entities/PendingExecution";
 import { useTrackingStartDate } from "@presentation/lib/trackingStartDateStore";
@@ -75,8 +75,16 @@ export function PortfolioDetailPage() {
       // shows a positive "Verified" state for them instead of falling
       // through to the dash/mismatch/stale states below, which are all
       // about a screenshot comparison this ticker's position no longer needs.
+      // Deliberately isTickerFullyExcelSourced (literal match), not the
+      // rank-based isTickerFullyOfficialBrokerExcelSourced — this branch is
+      // checked before quantityMismatch/stale below and never surfaces a
+      // secondaryMismatch-style caveat, so an Invoice-only ticker routed
+      // through it would silently show "matches broker Excel" over a real,
+      // disagreeing screenshot instead of the mismatch/stale row it should
+      // get (policy audit finding; see isTickerFullyExcelSourced's doc
+      // comment in reconciliation.ts).
       brokerExcelVerifiedTickers: new Set(
-        positions.map((p) => p.ticker).filter((ticker) => isTickerFullyOfficialBrokerExcelSourced(rawTransactions, ticker)),
+        positions.map((p) => p.ticker).filter((ticker) => isTickerFullyExcelSourced(rawTransactions, ticker)),
       ),
     };
   }, [id, positions, refreshKey]);
