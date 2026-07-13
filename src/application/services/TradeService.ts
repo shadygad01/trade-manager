@@ -159,7 +159,7 @@ async function ensureBuyFact(
     );
     return appended.seq;
   } else {
-    await assignPortfolioToFact(repos, liveMatch.id, trade.portfolioId);
+    await assignPortfolioToFact(repos, liveMatch.id, trade.portfolioId, diagnostics);
     return liveMatch.seq;
   }
 }
@@ -780,7 +780,7 @@ async function ensureSellFacts(
     { writer: "TradeService.ts", function: "ensureSellFacts", file: "src/application/services/TradeService.ts", reason: "Wrote the SellAllocationDecision fact recording which lots were closed" }
   );
 
-  await assignPortfolioToFact(repos, sellExecutionId, input.portfolioId);
+  await assignPortfolioToFact(repos, sellExecutionId, input.portfolioId, diagnostics);
   return decisionFact.seq;
 }
 

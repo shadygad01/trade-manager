@@ -20,6 +20,12 @@ Constraint/Warning) and revised `DecisionTraceRecord` to merge Reader+Decision i
 `reader`/`function`/`decision`/`inputSummary`/`outputSummary`, plus a new cross-event `correlationId`.
 Verified end-to-end; also surfaced (and deliberately left unfixed, out of scope) a pre-existing `ImportPage.tsx`
 re-render pattern that now produces redundant identical decision events — see Part 12's Phase 3 entry.
+A post-ship audit, triggered by an explicit "is this really wired into production" challenge, then found
+that `commitEngine.ts`'s `assignPortfolioToFact`/`assignPortfolio`/`retractRawTransaction`/
+`renameRawTransactionsTicker` silently dropped `diagnostics` — meaning the common Import→Confirm
+"adopt an existing fact" path recorded zero decisions in production despite every prior test passing.
+Fixed and re-verified via a new permanent regression test plus a second live Playwright run against real
+IndexedDB and the real Confirm button — see Part 12's Phase 3 entry for the full account.
 Next: Phase 2b (writer breadth), not started.
 
 **Mission**: Portfolio OS runs entirely in the browser with no backend and no server-side database.
@@ -728,6 +734,33 @@ it displays.
   instrumentation." Bounded in practice by Part 9's existing retention pruning; a good candidate for a
   future phase (e.g. dedupe identical consecutive decisions per ticker) if it proves to matter with real
   usage.
+  **Post-ship correction — a real production-wiring gap, found by direct challenge, not by a failing
+  test.** Asked to confirm Phase 3 was "fully wired into the production application, not just tests,"
+  an end-to-end audit of every real caller (not just `commitTicker`'s own unit tests) found that
+  `assignPortfolio`, `assignPortfolioToFact`, `retractRawTransaction`, and
+  `renameRawTransactionsTicker` in `commitEngine.ts` did not accept a `diagnostics` parameter at all —
+  they silently dropped it before it could ever reach `appendAndMaybeCommit`/`commitTicker`. This
+  mattered because `TradeService.ensureBuyFact`'s "adopt an existing fact" branch calls
+  `assignPortfolioToFact`, not `appendAndMaybeCommit` directly — and that branch is the common
+  real-world Import shape: Step 1 "Extract" already wrote the fact, so Step 2 "Confirm" adopts it
+  rather than creating a new one. Every prior verification (unit tests calling `commitTicker` directly;
+  the one Playwright run, which used TradesPage manual entry and so only ever hit the "create new
+  fact" branch) happened to avoid this exact path, so it passed while the adopt-path stayed
+  uninstrumented in production. Fixed by threading `diagnostics` through all four `commitEngine.ts`
+  helpers and their in-scope callers (`TradeService.ts`'s two `assignPortfolioToFact` call sites in
+  `ensureBuyFact`/`ensureSellFacts`; `ImportPage.tsx`'s five call sites covering retraction, provenance
+  upgrade, manual portfolio assignment, and the Confirm-time ticker sweep). Verified two ways: (1) a new
+  permanent regression test (`commitEngine.diagnostics.test.ts`, describe block "diagnostics survives
+  the REAL Import -> Confirm call chain") that calls `recordBuy` against a pre-seeded
+  `official-broker-excel` fact — the exact adopt-path shape — and asserts the Verification/Replay/
+  Allocation decisions are recorded; (2) a live Playwright run against the dev server using dynamic
+  `import()` of the app's real ES modules to seed a real fact in real IndexedDB, then clicking the real
+  "Confirm — Distribute to Portfolios" button and confirming all three decisions appeared on
+  `/diagnostics` with zero console errors. **Disclosed, deliberately unfixed residual gap**:
+  `TradeService.deleteTrade`/`renameTickerEverywhere`, and the `retractRawTransaction` calls inside
+  `lotManager.ts`/`provenanceRepair.ts`/`PortfolioService.ts`, still don't thread `diagnostics` —
+  these are secondary/administrative actions outside the Import→Confirm flow this phase was justified
+  by, left for a future phase alongside Phase 2b.
 - **Phase 4 — Case Detection Engine.** `detectDiagnosticCases` + first three triggers (mismatch,
   exception, assertion failure) (Part 6). UI: Case List with search/filter (Part 7.2, master spec Parts
   16, 18, 19).

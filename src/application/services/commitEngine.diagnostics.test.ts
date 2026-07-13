@@ -1,7 +1,20 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { commitTicker, type CommitEngineRepos } from "./commitEngine";
-import { createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
+import { recordBuy } from "./TradeService";
+import {
+  createFakeRawTransactionRepository,
+  createFakeCommittedLedgerRepository,
+  createFakePortfolioRepository,
+  createFakeTradeRepository,
+  createFakeTradeAllocationRepository,
+  createFakeTimelineRepository,
+  createFakeJournalRepository,
+  createFakeVerificationRepository,
+  createFakeUploadRepository,
+  createFakePendingExecutionRepository,
+} from "@application/testUtils/fakeRepositories";
 import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
+import { createPortfolio } from "@domain/entities/Portfolio";
 import type { RawTransactionRepository, CommittedLedgerRepository, DiagnosticsRecorder } from "@domain/repositories";
 import type { DecisionTraceRecord } from "@domain/entities/diagnostics/DiagnosticEvent";
 
@@ -115,5 +128,55 @@ describe("commitEngine Phase 3: Decision Trace (Replay/Verification/Allocation)"
 
     const allocation = diagnostics.decisions.find((d) => d.decisionType === "Allocation")!;
     expect(allocation.decision).toBe("0 allocations");
+  });
+});
+
+describe("commitEngine Phase 3: diagnostics survives the REAL Import -> Confirm call chain, not just a direct commitTicker call", () => {
+  /**
+   * Every test above calls `commitTicker` directly — that alone doesn't
+   * prove `diagnostics` actually reaches it from a real user action, since
+   * `commitTicker` sits behind `appendAndMaybeCommit`, which itself sits
+   * behind whichever writer function the UI actually calls. The real Import
+   * workflow's most common shape is: Step 1 "Extract" already wrote this
+   * ticker's fact (via `recordImportedRawTransactions`, sourced from the
+   * real document), so Step 2 "Confirm" -> `recordBuy` finds a live matching
+   * fact and ADOPTS it (`TradeService.ensureBuyFact`'s `assignPortfolioToFact`
+   * branch) rather than appending a fresh one — a structurally different
+   * code path than every test above, which never had a pre-existing fact to
+   * adopt. `assignPortfolioToFact` previously dropped `diagnostics` on the
+   * floor entirely (didn't even accept the parameter), so this exact,
+   * extremely common path recorded ZERO decisions in production despite
+   * every unit test above passing — found by an explicit end-to-end audit,
+   * not by a test failure. Fixed by threading `diagnostics` through
+   * `assignPortfolio`/`assignPortfolioToFact`/`retractRawTransaction`/
+   * `renameRawTransactionsTicker` the same way `commitTicker` already was.
+   */
+  it("recordBuy adopting a pre-existing official-broker-excel fact (the real Confirm path) still records Verification/Replay/Allocation decisions", async () => {
+    const rawTransactions = createFakeRawTransactionRepository();
+    const repos = {
+      portfolios: createFakePortfolioRepository([createPortfolio({ id: PORTFOLIO, name: "Main", kind: "Trading", initialCash: 1_000_000 })]),
+      trades: createFakeTradeRepository(),
+      allocations: createFakeTradeAllocationRepository(),
+      timeline: createFakeTimelineRepository(),
+      journal: createFakeJournalRepository(),
+      verifications: createFakeVerificationRepository(),
+      uploads: createFakeUploadRepository(),
+      pendingExecutions: createFakePendingExecutionRepository(),
+      rawTransactions,
+      committedLedger: createFakeCommittedLedgerRepository(),
+    };
+
+    // Step 1 "Extract" — the real recordImportedRawTransactions shape: a
+    // trusted-on-its-own document source, no portfolio assigned yet.
+    const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01", executionTime: "10:00" };
+    await rawTransactions.append(createRawTransaction({ id: "0-c0", kind: "BuyExecution", source: "official-broker-excel", ticker: "COMI", confidence: "high", payload }));
+
+    const diagnostics = fakeDiagnostics();
+
+    // Step 2 "Confirm" — addBuyCandidate's real call.
+    await recordBuy(repos, { portfolioId: PORTFOLIO, ticker: "COMI", shares: 100, entryPrice: 45.5, executionDate: "2026-02-01", executionTime: "10:00" }, diagnostics);
+
+    expect(diagnostics.decisions.map((d) => d.decisionType)).toEqual(["Verification", "Replay", "Allocation"]);
+    expect(diagnostics.decisions.find((d) => d.decisionType === "Verification")!.decision).toContain("Verified");
   });
 });

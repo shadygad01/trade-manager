@@ -109,7 +109,7 @@ function verificationContentKey(v: { ticker: string; units: number; avgCost?: nu
  */
 function retractRawTransactionKeys(keys: Iterable<string>) {
   for (const key of keys) {
-    retractRawTransaction(repos, key).catch((err) => {
+    retractRawTransaction(repos, key, undefined, diagnostics).catch((err) => {
       console.error("retractRawTransaction failed (shadow write, non-fatal):", err);
     });
   }
@@ -386,7 +386,7 @@ export function ImportPage() {
       const oldPortfolioId = resolveCurrentPortfolioId(existingRawTransactions, existingFact!);
       const upgradeFact = async () => {
         if (oldPortfolioId !== undefined) {
-          await assignPortfolioToFact(repos, e.key, oldPortfolioId);
+          await assignPortfolioToFact(repos, e.key, oldPortfolioId, diagnostics);
         }
         if (e.candidate.side === "BUY") {
           // A Buy fact is never referenced by another fact's id, so a plain
@@ -395,6 +395,7 @@ export function ImportPage() {
             repos,
             existingFact!.id,
             "Provenance upgrade: superseded by a higher-authority document describing the same execution.",
+            diagnostics,
           );
         } else {
           // A Sell's fact may already be claimed by a live
@@ -546,7 +547,7 @@ export function ImportPage() {
     // matters: any subsequent commitTickerGroup/smartAllocateSell/
     // SellAllocationForm call for this ticker shares the identical key and
     // will correctly queue behind this sweep instead of racing it.
-    void runSerialized(`${portfolioId}|${normalizeTicker(ticker)}`, () => assignPortfolio(repos, ticker, portfolioId)).catch((err) => {
+    void runSerialized(`${portfolioId}|${normalizeTicker(ticker)}`, () => assignPortfolio(repos, ticker, portfolioId, diagnostics)).catch((err) => {
       console.error("assignPortfolio failed (shadow write, non-fatal):", err);
     });
   }
@@ -1153,7 +1154,7 @@ export function ImportPage() {
     // verifications missing their portfolio assignment), never a reason to
     // fail the Buy commit that already succeeded.
     try {
-      await assignPortfolio(repos, ticker, portfolioId);
+      await assignPortfolio(repos, ticker, portfolioId, diagnostics);
     } catch (err) {
       console.error("assignPortfolio failed (shadow write, non-fatal):", err);
     }

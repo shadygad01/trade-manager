@@ -358,7 +358,12 @@ export async function appendAndMaybeCommit(
  * portfolio a ticker's extracted rows belong to; it's the only place a
  * freshly-imported (portfolioId-less) raw transaction ever gets one.
  */
-export async function assignPortfolio(repos: CommitEngineRepos, ticker: string, portfolioId: string): Promise<void> {
+export async function assignPortfolio(
+  repos: CommitEngineRepos,
+  ticker: string,
+  portfolioId: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<void> {
   const normalizedTicker = normalizeTicker(ticker);
   const all = await repos.rawTransactions.getAll();
   const unassigned = all.filter((t) => {
@@ -371,7 +376,12 @@ export async function assignPortfolio(repos: CommitEngineRepos, ticker: string, 
 
   for (const target of unassigned) {
     const payload: PortfolioAssignmentPayload = { targetId: target.id, portfolioId };
-    await appendAndMaybeCommit(repos, createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }));
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }),
+      diagnostics,
+      { writer: "commitEngine.ts", function: "assignPortfolio", file: "src/application/services/commitEngine.ts", reason: "Assigned a still-unassigned fact to a portfolio (ticker-wide sweep)" }
+    );
   }
 }
 
@@ -400,12 +410,22 @@ export async function assignPortfolio(repos: CommitEngineRepos, ticker: string, 
  * assignment to exactly the fact just adopted/created closes this off at
  * the source: no other still-pending sibling is ever touched.
  */
-export async function assignPortfolioToFact(repos: CommitEngineRepos, targetId: string, portfolioId: string): Promise<void> {
+export async function assignPortfolioToFact(
+  repos: CommitEngineRepos,
+  targetId: string,
+  portfolioId: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<void> {
   const all = await repos.rawTransactions.getAll();
   const target = all.find((t) => t.id === targetId);
   if (!target || isRetracted(all, target.id) || resolveCurrentPortfolioId(all, target) !== undefined) return;
   const payload: PortfolioAssignmentPayload = { targetId, portfolioId };
-  await appendAndMaybeCommit(repos, createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }));
+  await appendAndMaybeCommit(
+    repos,
+    createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }),
+    diagnostics,
+    { writer: "commitEngine.ts", function: "assignPortfolioToFact", file: "src/application/services/commitEngine.ts", reason: "Assigned exactly one adopted/created fact to a portfolio" }
+  );
 }
 
 /**
@@ -415,9 +435,19 @@ export async function assignPortfolioToFact(repos: CommitEngineRepos, targetId: 
  * user just removed. `targetId` must be the RawTransaction's own id, not a
  * derived LedgerEvent id.
  */
-export async function retractRawTransaction(repos: CommitEngineRepos, targetId: string, reason?: string): Promise<void> {
+export async function retractRawTransaction(
+  repos: CommitEngineRepos,
+  targetId: string,
+  reason?: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<void> {
   const payload: RetractionPayload = { targetId, reason };
-  await appendAndMaybeCommit(repos, createRawTransaction({ kind: "Retraction", source: "manual", payload }));
+  await appendAndMaybeCommit(
+    repos,
+    createRawTransaction({ kind: "Retraction", source: "manual", payload }),
+    diagnostics,
+    { writer: "commitEngine.ts", function: "retractRawTransaction", file: "src/application/services/commitEngine.ts", reason: reason ?? "Retracted a raw transaction" }
+  );
 }
 
 /**
@@ -428,7 +458,12 @@ export async function retractRawTransaction(repos: CommitEngineRepos, targetId: 
  * pre-migration UI doesn't leave this architecture's copy permanently
  * orphaned under the old, now-corrected-away ticker.
  */
-export async function renameRawTransactionsTicker(repos: CommitEngineRepos, oldTicker: string, newTicker: string): Promise<number> {
+export async function renameRawTransactionsTicker(
+  repos: CommitEngineRepos,
+  oldTicker: string,
+  newTicker: string,
+  diagnostics?: DiagnosticsRecorder
+): Promise<number> {
   const normalizedOld = normalizeTicker(oldTicker);
   const normalizedNew = normalizeTicker(newTicker);
   if (!normalizedNew || normalizedNew === normalizedOld) return 0;
@@ -443,7 +478,12 @@ export async function renameRawTransactionsTicker(repos: CommitEngineRepos, oldT
 
   for (const target of targets) {
     const payload: CorrectionPayload = { targetId: target.id, patch: { ticker: normalizedNew } };
-    await appendAndMaybeCommit(repos, createRawTransaction({ kind: "Correction", source: "manual", payload }));
+    await appendAndMaybeCommit(
+      repos,
+      createRawTransaction({ kind: "Correction", source: "manual", payload }),
+      diagnostics,
+      { writer: "commitEngine.ts", function: "renameRawTransactionsTicker", file: "src/application/services/commitEngine.ts", reason: `Corrected ticker ${normalizedOld} -> ${normalizedNew}` }
+    );
   }
   return targets.length;
 }

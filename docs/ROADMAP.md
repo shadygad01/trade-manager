@@ -2310,3 +2310,56 @@ Part 9's existing retention pruning. Worth a dedicated future sprint if real usa
   target, since every commit already runs through them. Independently: the `ImportPage.tsx` re-render/
   memoization finding above is a real, disclosed piece of technical debt worth a look on its own, unrelated
   to the Diagnostics Center itself.
+
+### Sprint 14 — Diagnostics Center correction: adopt-existing-fact path was silently dropping Phase 3 diagnostics
+
+Directly asked to confirm Phase 3 was "fully wired into the production application, not just tests" and
+would genuinely record live events from a normal user workflow after merging to main. Rather than repeat
+Sprint 13's own "verified end-to-end" claim, re-audited every real caller of `commitEngine.ts`'s helpers —
+not just `commitTicker`'s own unit tests — and found a real gap Sprint 13 missed.
+
+**The gap**: `assignPortfolio`, `assignPortfolioToFact`, `retractRawTransaction`, and
+`renameRawTransactionsTicker` in `commitEngine.ts` never accepted a `diagnostics` parameter at all — they
+silently dropped it before it could reach `appendAndMaybeCommit`/`commitTicker`. This mattered because
+`TradeService.ensureBuyFact`'s "adopt an existing fact" branch calls `assignPortfolioToFact`, not
+`appendAndMaybeCommit` directly, and that branch is the common real-world Import shape: Step 1 "Extract"
+already wrote the raw fact from the parsed document, so Step 2 "Confirm" adopts the existing fact rather
+than creating a new one. Every prior verification avoided this exact path by coincidence, not by design —
+Sprint 13's unit tests called `commitTicker` directly (bypassing the writer functions entirely), and its
+one Playwright run used TradesPage manual entry, which always takes the "create a brand-new fact" branch.
+The result: Phase 3 worked in every test and in the one live scenario tried, while the single most common
+production workflow (Import → Confirm) recorded zero decisions.
+
+**The fix**: threaded `diagnostics` through all four `commitEngine.ts` helper functions (each now builds a
+`WriterContext` and forwards it, mirroring how `commitTicker` already did) and their in-scope callers —
+`TradeService.ts`'s two `assignPortfolioToFact` call sites (`ensureBuyFact`, `ensureSellFacts`), and
+`ImportPage.tsx`'s five call sites (retraction, provenance upgrade, manual per-ticker portfolio
+assignment, and the Confirm-time ticker-wide sweep that runs on every real Confirm click).
+
+**Verified two independent ways**: (1) a new permanent regression test in
+`commitEngine.diagnostics.test.ts` (describe block "diagnostics survives the REAL Import -> Confirm call
+chain, not just a direct commitTicker call") that seeds a pre-existing `official-broker-excel` fact and
+calls the real `recordBuy` — the exact adopt-path shape — asserting Verification/Replay/Allocation
+decisions are recorded; (2) a second live Playwright run against the dev server, this time seeding a real
+fact into real IndexedDB via dynamic `import()` of the app's actual bundled modules (not mocks) and
+clicking the real "Confirm — Distribute to Portfolios" button, then confirming `/diagnostics` showed
+`Decision (Verification)` / `Decision (Replay)` / `Decision (Allocation)` with zero console errors.
+
+**Disclosed, deliberately still-unfixed residual gap**: `TradeService.deleteTrade`/`renameTickerEverywhere`,
+and the `retractRawTransaction` calls inside `lotManager.ts`/`provenanceRepair.ts`/`PortfolioService.ts`,
+still don't thread `diagnostics` — these are secondary/administrative actions outside the Import→Confirm
+flow Phase 3 was justified by, left for a future phase alongside Phase 2b rather than folded in here
+under time pressure.
+
+- **Files modified**: `src/application/services/commitEngine.ts` (4 helper functions gained a
+  `diagnostics?: DiagnosticsRecorder` parameter); `src/application/services/TradeService.ts` (2 call
+  sites); `src/presentation/pages/ImportPage.tsx` (5 call sites);
+  `src/application/services/commitEngine.diagnostics.test.ts` (+1 test, new describe block);
+  `docs/DIAGNOSTICS_CENTER_SPEC.md` (Phase 3 entry addendum + top status line).
+- 1031/1032 tests passing (1 new; 1 pre-existing intentional skip, unrelated), `tsc --noEmit` clean,
+  `npm run arch:check` clean, production build verified, live Playwright verification against the dev
+  server using real app modules and real IndexedDB (not fakes/mocks).
+- **Next recommended sprint**: still Phase 2b (the remaining 6 writer files), plus — now explicitly
+  named rather than left implicit — closing the disclosed residual gap above (`deleteTrade`,
+  `renameTickerEverywhere`, and the three other `retractRawTransaction` call sites) as part of that same
+  pass, since it's the identical threading pattern applied to the remaining callers.
