@@ -2508,3 +2508,85 @@ no circular dependency introduced), production build clean.
   two documents' price fields) the way `duplicateMatch`'s OCR-noise tolerance does for an active Import
   session. Worth a future look at whether that tolerance should extend to this generic pass too, once real
   usage shows whether stale near-duplicate facts of this shape actually occur.
+
+### Sprint 17 — Reconciliation Sweep: a manual maintenance pass for the duplicate-authority pairs Sprint 16's fix never retroactively touched
+
+Follow-up investigation, prompted by the Diagnostics Center itself contradicting Sprint 16's own summary:
+`TickerAuthorityPanel` kept showing live, `includedInEvaluation: true`, `authorityRank: 0` backfill facts
+coexisting with an already-live `official-broker-excel` fact for the same execution — for ABUK, CSAG,
+ORAS, ORWE, and TMGH — with `isTickerFullyOfficialBrokerExcelSourced` still `false` for all five, despite
+`reconcileDuplicateAuthority` shipping in Sprint 16.
+
+**Root cause, confirmed by re-reading `commitEngine.ts` and `backfillRawTransactions.ts` rather than
+guessing**: `reconcileDuplicateAuthority` only ever runs as a side effect of `commitTicker`, which is only
+reactively triggered by a NEW write for that ticker (`appendAndMaybeCommit`) — exactly as Sprint 16's own
+doc comment says ("never a database-wide sweep"). The one-time, silent `backfillRawTransactionsSilently`
+(`presentation/lib/data.ts`, runs once on every app boot) writes every `source: "backfill"` fact via
+`repos.rawTransactions.append` directly, deliberately bypassing `appendAndMaybeCommit`/`commitTicker`
+entirely (see that module's own doc comment on why the commit-triggering path was judged unsafe for an
+unattended boot trigger). So every backfill/official-broker-excel duplicate pair created at that one boot
+has sat there ever since with `reconcileDuplicateAuthority` never once invoked against it — not a bug in
+the fix's logic (the 8-test suite from Sprint 16 still passes; a fresh duplicate created after a real
+write converges correctly), but a real coverage gap: nothing ever retroactively swept the pairs that
+already existed before the fix shipped. Diagnostics was reporting accurately throughout — it reads the
+same live `rawTransactions` table reconciliation itself operates on, no cache in between.
+
+**The fix — explicitly scoped by the user to a manual, user-initiated maintenance tool, not a second
+automatic sweep**: `reconciliationSweep.ts` (`application/services`), a new `runReconciliationSweep`
+that enumerates every `(portfolioId, ticker)` pair with a live, portfolio-assigned Buy/Sell fact, then
+calls the real, unmodified `commitTicker` for each one — the identical production choke point a genuine
+new write already goes through, so `reconcileDuplicateAuthority` runs with its full `trades`/`allocations`
+access (twin-lot guard included) exactly as it would in normal operation. No new retract/keep decision
+logic exists anywhere in this file: the only new code is read-only, before/after bookkeeping — grouping
+live facts by the same `canonicalKey` reconciliation itself groups by, then diffing per group how many
+of its facts got retracted vs. are still live afterward — purely to produce
+`{tickersScanned, duplicateGroupsFound, factsRetracted, factsSkipped, errors, perTicker}` for the report.
+A group left with exactly one live fact afterward is a clean resolution (0 skipped); a group left with
+more than one live fact (a tie, a twin lot, or a genuinely conflicting execution time) is reported as
+skipped, surfacing exactly the cases `reconcileDuplicateAuthority` deliberately never auto-resolves.
+Per-ticker errors are caught and isolated — one ticker failing does not stop the rest of the sweep.
+Idempotent by construction (a ticker with nothing left to converge reports zero; `commitTicker` is
+already a full delete-and-regenerate rebuild), so safe to run more than once.
+
+Surfaced as a new, explicitly TEMPORARY panel in the Diagnostics Center
+(`presentation/pages/diagnostics/ReconciliationSweepPanel.tsx`, wired into `DiagnosticsPage.tsx` alongside
+the other two TEMPORARY investigation panels) — a single button behind a `confirm()` dialog naming exactly
+what it's about to do, no automatic startup hook, no background job. The report renders as five stat tiles
+plus a per-ticker breakdown table for any ticker with a duplicate group or an error.
+
+**Verified**: `reconciliationSweep.test.ts` (6 tests, synthetic fixtures, same discipline as Sprint 16's
+own suite) covering: convergence of a pre-existing backfill/official-broker-excel pair via the real
+`commitTicker` pipeline; idempotency (a second run reports zero); a genuine tie reported as
+found-but-skipped, never auto-resolved; a ticker with no live facts (or no resolved portfolio) excluded
+from the scan entirely; a mixed group (one clear loser plus two tied co-leaders) correctly reporting the
+loser as retracted and the tied leftover pair as skipped, not as a lone survivor; and per-ticker error
+isolation. Also manually driven end-to-end in a real headless-Chromium session against the real Dexie
+IndexedDB (Playwright, not a script pasted into a console) — seeded the exact ABUK shape from this
+sprint's own bug report (`ABUK|BUY|2026-06-30|14|67.4`, one backfill fact + one official-broker-excel
+fact), ran the sweep, and confirmed `TickerAuthorityPanel`'s own live trace flipped from
+`isTickerFullyOfficialBrokerExcelSourced("ABUK") = false` to `= true` in the same browser session, with
+the sweep panel reporting `1 ticker scanned / 1 duplicate group found / 1 retracted / 0 skipped / 0
+errors`. Full suite: 1049/1050 passing (6 new; the same 1 pre-existing intentional skip as Sprint 16,
+unrelated), `tsc --noEmit` clean, `npm run arch:check` clean, zero browser console errors during the
+manual run.
+
+- **Files modified**: `src/application/services/reconciliationSweep.ts` (new),
+  `src/application/services/reconciliationSweep.test.ts` (new, 6 tests),
+  `src/presentation/pages/diagnostics/ReconciliationSweepPanel.tsx` (new),
+  `src/presentation/pages/DiagnosticsPage.tsx` (wired the new panel in, matching the existing
+  TEMPORARY-panel convention).
+- **Deliberately NOT done, and why**: the sweep was not run against real production data in this session
+  (no access to the user's actual browser/IndexedDB) — this ships the tool, verified against a faithful
+  reproduction of the reported bug shape, for the user to run themselves from Chrome Mobile and decide the
+  outcome of. Whether it graduates into a permanent migration (e.g. wired to run once automatically after
+  this fix ships) or stays a standing manual maintenance tool is an explicitly open, user-owned decision —
+  not made here.
+- **Next recommended sprint**: once the user has run the sweep against production data and confirmed the
+  five reported tickers (and any others) converge cleanly, (1) decide whether to delete the three TEMPORARY
+  Diagnostics Center panels (`TickerAuthorityPanel`, `FactLifecyclePanel`, `ReconciliationSweepPanel`) now
+  that the investigation they were built for is closed, or keep `ReconciliationSweepPanel` as a permanent
+  maintenance surface; (2) if kept permanent, consider whether it should also become part of a future
+  onboarding/migration path for a brand-new install rather than living only in Developer Mode. Still open
+  from Sprint 16: Phase 2b, the Sprint 14/15 diagnostics-coverage gaps, the `ensureLegacyFactsExist`
+  nondeterministic redundant-fact defect, and whether `reconcileDuplicateAuthority`'s exact-canonicalKey
+  matching should ever tolerate near-duplicate values.

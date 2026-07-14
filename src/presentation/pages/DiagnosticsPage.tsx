@@ -6,6 +6,7 @@ import type { DiagnosticEvent } from "@domain/entities/diagnostics/DiagnosticEve
 // their usages below once removed.
 import { TickerAuthorityPanel } from "./diagnostics/TickerAuthorityPanel";
 import { FactLifecyclePanel } from "./diagnostics/FactLifecyclePanel";
+import { ReconciliationSweepPanel } from "./diagnostics/ReconciliationSweepPanel";
 
 const RECENT_EVENT_LIMIT = 200;
 
@@ -47,6 +48,7 @@ export function DiagnosticsPage() {
         <PageHeader title="Diagnostics" description="Developer Mode is on. This is the Diagnostics Center." />
         <TickerAuthorityPanel />
         <FactLifecyclePanel />
+        <ReconciliationSweepPanel />
         {cases === undefined ? (
           <p className="text-sm text-slate-500">Loading…</p>
         ) : cases.length === 0 ? (
