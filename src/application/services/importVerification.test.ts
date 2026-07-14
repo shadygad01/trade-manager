@@ -1,3 +1,4 @@
+
 import { describe, it, expect } from "vitest";
 import { checkTickerMatch, isTickerFullyResolved } from "./importVerification";
 import type { DiagnosticsRecorder } from "@domain/repositories";
@@ -82,7 +83,7 @@ describe("checkTickerMatch", () => {
     expect(result.reason).toBe("no-shares-to-verify");
   });
 
-  it("does NOT auto-match a fully sold-out ticker (buy == sell) with no independent corroboration — the JUFO/SKPC closed-position trap", () => {
+  it("does NOT auto-match a fully sold-out ticker (buy == sell) with no independent corroboration â€” the JUFO/SKPC closed-position trap", () => {
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 50,
@@ -184,7 +185,24 @@ describe("checkTickerMatch", () => {
     expect(result.netShares).toBe(37);
   });
 
-  it("stays broker-excel-verified even when a broker screenshot disagrees — the Excel remains authoritative, the screenshot is only flagged as a secondary-source mismatch", () => {
+  it("never lets an official broker Excel sell create an impossible negative inventory", () => {
+    const result = checkTickerMatch({
+      hasShares: true,
+      pendingBuyShares: 0,
+      pendingSellShares: 46,
+      existingRemainingShares: 42,
+      verifiedUnits: undefined,
+      allPendingFromOfficialBrokerExcel: true,
+    });
+    expect(result).toMatchObject({
+      matched: false,
+      reason: "no-verification",
+      netShares: -4,
+      discrepancySide: "sell",
+    });
+  });
+
+  it("stays broker-excel-verified even when a broker screenshot disagrees â€” the Excel remains authoritative, the screenshot is only flagged as a secondary-source mismatch", () => {
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 10,
@@ -226,7 +244,7 @@ describe("checkTickerMatch", () => {
     expect(result.secondaryMismatch).toBe(false);
   });
 
-  it("prefers broker-excel-verified when both flags are somehow true (impossible in real data — a candidate's source is a single value — but the broker-excel check runs first since it also overrides a disagreeing screenshot, which invoice's own check does not)", () => {
+  it("prefers broker-excel-verified when both flags are somehow true (impossible in real data â€” a candidate's source is a single value â€” but the broker-excel check runs first since it also overrides a disagreeing screenshot, which invoice's own check does not)", () => {
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 10,
@@ -408,11 +426,11 @@ describe("checkTickerMatch", () => {
     expect(result.discrepancySide).toBe("sell");
   });
 
-  it("points at the Buy side when a sell-only batch leaves a positive net — the surplus is in already-recorded buys (the real AMOC shape)", () => {
+  it("points at the Buy side when a sell-only batch leaves a positive net â€” the surplus is in already-recorded buys (the real AMOC shape)", () => {
     // Only Sells pending (80) against 300 already on the ledger: net +220.
     // A pending-rows comparison would blame the Sell side (the only pending
     // rows), but a positive net on a supposedly closed position means EXTRA
-    // shares — i.e. a duplicate/extra buy already committed to the ledger.
+    // shares â€” i.e. a duplicate/extra buy already committed to the ledger.
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 0,
@@ -458,7 +476,7 @@ describe("isTickerFullyResolved", () => {
     ).toBe(false);
   });
 
-  it("is false for a ticker with no buy/sell rows at all (dividend/verification-only) — no 'sell = buy' question to answer", () => {
+  it("is false for a ticker with no buy/sell rows at all (dividend/verification-only) â€” no 'sell = buy' question to answer", () => {
     expect(
       isTickerFullyResolved({
         matched: true,
@@ -539,7 +557,7 @@ describe("isTickerFullyResolved", () => {
     ).toBe(false);
   });
 
-  it("is false when any row — including an added one — is stuck on a row error", () => {
+  it("is false when any row â€” including an added one â€” is stuck on a row error", () => {
     expect(
       isTickerFullyResolved({
         matched: true,
@@ -559,12 +577,12 @@ describe("isTickerFullyResolved", () => {
 describe("checkTickerMatch Verification decision (Diagnostics Center)", () => {
   /**
    * This is the terminal decision function behind the Import UI's "Needs
-   * broker screenshot"/"Mismatch"/"Closed — needs corroborating evidence"
-   * banners — a real, previously-uninstrumented gap: constraintValidation.ts's
+   * broker screenshot"/"Mismatch"/"Closed â€” needs corroborating evidence"
+   * banners â€” a real, previously-uninstrumented gap: constraintValidation.ts's
    * Constraint decision only checks whether already-known facts arithmetically
    * reconcile (satisfied for ABUK: opening 27 + buy 0 - sell 0 = 27), which is
    * a different question from "is there independent corroboration for that
-   * figure" — the question checkTickerMatch alone answers, and the one that
+   * figure" â€” the question checkTickerMatch alone answers, and the one that
    * actually produced the "Needs broker screenshot" banner. Reproduces the
    * exact ABUK shape reported: an open position with no pending rows this
    * batch and no broker holdings verification on file at all.
@@ -607,7 +625,7 @@ describe("checkTickerMatch Verification decision (Diagnostics Center)", () => {
     expect(diagnostics.decisions[0].decision).toBe("Mismatch");
   });
 
-  it("records 'Closed — needs corroborating evidence' for an uncorroborated net-zero position", () => {
+  it("records 'Closed â€” needs corroborating evidence' for an uncorroborated net-zero position", () => {
     const diagnostics = fakeDiagnostics();
     checkTickerMatch({
       hasShares: true,
@@ -618,7 +636,7 @@ describe("checkTickerMatch Verification decision (Diagnostics Center)", () => {
       ticker: "JUFO",
       diagnostics,
     });
-    expect(diagnostics.decisions[0].decision).toBe("Closed — needs corroborating evidence");
+    expect(diagnostics.decisions[0].decision).toBe("Closed â€” needs corroborating evidence");
   });
 
   it("records nothing when diagnostics is not passed (default, zero-cost behavior unchanged)", () => {
@@ -630,6 +648,7 @@ describe("checkTickerMatch Verification decision (Diagnostics Center)", () => {
       verifiedUnits: undefined,
     });
     expect(result.reason).toBe("no-verification");
-    // Nothing to assert on diagnostics — this just proves the call succeeds with no diagnostics arg.
+    // Nothing to assert on diagnostics â€” this just proves the call succeeds with no diagnostics arg.
   });
 });
+
