@@ -1,3 +1,4 @@
+
 import type { Upload, ParsedTradeCandidate } from "@domain/entities/Upload";
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
@@ -26,10 +27,10 @@ import type { AppRepositories } from "./types";
  * Ledger Rebuild Engine.
  *
  * Reconstructs what the ledger's Trades and sell orders SHOULD be, computed
- * exclusively from verified source documents (every parsed Upload —
- * Statements, Invoices, Orders-screen reads, CSV exports — plus Holdings
+ * exclusively from verified source documents (every parsed Upload â€”
+ * Statements, Invoices, Orders-screen reads, CSV exports â€” plus Holdings
  * verification screenshots). The current Trade/TradeAllocation ledger is
- * NEVER read as an input to this reconstruction — only compared against
+ * NEVER read as an input to this reconstruction â€” only compared against
  * afterward, as the "before" side of a diff. This is the inverse of
  * checkTickerMatch's role (which reconciles one Import batch against the
  * ledger as it stands); this instead re-derives the ledger's own contents
@@ -40,13 +41,13 @@ import type { AppRepositories } from "./types";
  * completeCandidateFieldsFromSiblings + suggestDuplicatePendingCandidateKeysToDelete
  * (collapsing repeated reads of the same real execution across documents),
  * findDuplicateBuyMatch/findDuplicateSellMatch (matching a canonical fact
- * against the existing ledger), and — critically — checkTickerMatch itself
+ * against the existing ledger), and â€” critically â€” checkTickerMatch itself
  * (importVerification.ts) for the Holdings/verification decision
  * (diffHoldings), the SAME function Import calls. There is exactly one trust
  * policy in this codebase: a ticker whose complete canonical history is
  * official-broker-excel-sourced (or invoice-sourced) is never required to
  * reconcile against a "My Position" screenshot, and Rebuild must reach that
- * same verdict for the same reason Import does — never its own,
+ * same verdict for the same reason Import does â€” never its own,
  * independently-derived approximation of it. `CanonicalTrade.source`
  * (preserved from each surviving candidate) is what makes this possible:
  * without it, Rebuild had no provenance to feed the trust policy at all and
@@ -57,7 +58,7 @@ import type { AppRepositories } from "./types";
  *
  * Allocation-level rebuilding (WHICH buy lot a sell closed) is out of scope
  * by design: a source document records that N shares of TICKER were sold on
- * a date at a price, never which specific lot(s) absorbed it — that's a
+ * a date at a price, never which specific lot(s) absorbed it â€” that's a
  * human decision this app already always asks for (ADR-002, SellAllocationForm),
  * never inferred by FIFO/average-cost. So sells are reconstructed and diffed
  * only as aggregate per-order facts; applyLedgerRebuild never creates or
@@ -76,18 +77,18 @@ export interface CanonicalTrade {
   executionDate: string;
   executionTime?: string;
   transactionNumber?: string;
-  /** Every Upload whose candidate corroborates this same real execution (after dedup/aggregation) — not just the one survivor row's own file. */
+  /** Every Upload whose candidate corroborates this same real execution (after dedup/aggregation) â€” not just the one survivor row's own file. */
   sourceUploadIds: string[];
-  /** This specific entry's own stable identity (the `key`/`uploadId` it entered canonicalization with) — unlike `key`, this is NEVER shared by two distinct surviving entries, even when their observable fields coincide. See `disambiguateCollidingKeys`. */
+  /** This specific entry's own stable identity (the `key`/`uploadId` it entered canonicalization with) â€” unlike `key`, this is NEVER shared by two distinct surviving entries, even when their observable fields coincide. See `disambiguateCollidingKeys`. */
   entryId: string;
   /**
-   * Which document type this specific real execution was read from — the
+   * Which document type this specific real execution was read from â€” the
    * surviving entry's own `ParsedTradeCandidate.source`, untouched by
    * `completeCandidateFieldsFromSiblings` (which only ever borrows
    * fees/taxes/time/transactionNumber from a sibling, never source itself).
    * This is what lets `diffHoldings` feed the SAME trust-policy decision
    * (`checkTickerMatch`, `importVerification.ts`) that Import already makes
-   * for the identical ticker/source combination — see this module's own doc
+   * for the identical ticker/source combination â€” see this module's own doc
    * comment on why Rebuild must never re-derive a second, independent
    * verification/trust judgment.
    */
@@ -104,7 +105,7 @@ export function canonicalKey(c: { side: "BUY" | "SELL"; ticker: string; date: st
  * entries didn't come from Upload.candidates (e.g. the Ledger Engine, over
  * RawTransactions) can still reuse this exact dedup/aggregation pipeline.
  * `uploadId` on each entry is "whatever backing document/fact this candidate
- * traces back to" — an Upload id for buildCanonicalTrades' own callers, but
+ * traces back to" â€” an Upload id for buildCanonicalTrades' own callers, but
  * just as validly a RawTransaction's own id when there's no separate Upload
  * concept at the caller's layer.
  */
@@ -114,7 +115,7 @@ export function canonicalizeTradeEntries(
   if (allEntries.length === 0) return { buys: [], sells: [] };
 
   // Statement rows that aggregate several other-source executions are
-  // confirmations, not separate real trades — exclude them from
+  // confirmations, not separate real trades â€” exclude them from
   // canonicalization entirely; their shares are already covered by the
   // execution group they summarize.
   const aggregateMatches = findAggregateStatementMatches(allEntries);
@@ -141,15 +142,15 @@ export function canonicalizeTradeEntries(
   const deleteKeys = new Set(suggestDuplicatePendingCandidateKeysToDelete(enrichedEntries));
 
   // Every upload that corroborates the same real execution (its signature
-  // siblings) — but pendingCandidateSignature is deliberately time-blind
+  // siblings) â€” but pendingCandidateSignature is deliberately time-blind
   // (ticker|side|date|shares only), so two genuinely distinct real
   // executions sharing that signature (e.g. two same-price fills minutes
-  // apart — a real, reported case: two 49-share ABUK buys at E£42.40,
+  // apart â€” a real, reported case: two 49-share ABUK buys at EÂ£42.40,
   // 10:32AM and 10:34AM) used to be unioned into the SAME sourceUploadIds
   // set regardless of time. That shared set became each lot's
   // LedgerEvent.sourceTransactionIds (ledgerEngine.ts), which
   // allocationEngine.indexEventsByReference then indexes as an alias map
-  // from "any corroborating real id" to "this one lot" — the union meant
+  // from "any corroborating real id" to "this one lot" â€” the union meant
   // BOTH lots' real ids resolved to whichever lot was indexed first,
   // silently misattributing a Sell's allocation to the wrong lot of the
   // pair even though resolveLotRef (ledgerProjection.ts) had already
@@ -157,7 +158,7 @@ export function canonicalizeTradeEntries(
   // sameCandidateExecution/suggestDuplicatePendingCandidateKeysToDelete
   // already gate this exact signature elsewhere: a sibling only corroborates
   // this entry when neither side's time conflicts with the other's (an
-  // absent time on either side is "unknown," never treated as a conflict —
+  // absent time on either side is "unknown," never treated as a conflict â€”
   // preserving the routine statement+invoice/orders-screen corroboration
   // case, where one side often carries no time at all).
   const entriesBySignature = new Map<string, { uploadId: string; time?: string }[]>();
@@ -203,7 +204,7 @@ export function canonicalizeTradeEntries(
 
 /**
  * Two genuinely distinct real executions (different trades, different
- * RawTransactions) can legitimately share the same observable fields —
+ * RawTransactions) can legitimately share the same observable fields â€”
  * same ticker/side/date/shares/price, e.g. two separate same-price limit
  * orders filled the same day. Before this pass they'd carry the identical
  * `key`, and every downstream consumer that treats `key` as "one real
@@ -212,9 +213,9 @@ export function canonicalizeTradeEntries(
  * absorbing another's, one sell's allocation decision replaying against
  * the wrong sell. Disambiguates every collision by suffixing every member
  * but the lexicographically-first (by `entryId`, so the pick is
- * deterministic and reproducible on every rebuild — never by array/seq
+ * deterministic and reproducible on every rebuild â€” never by array/seq
  * order, which callers aren't guaranteed to supply consistently) with its
- * own `entryId` — unique, so no second collision is possible.
+ * own `entryId` â€” unique, so no second collision is possible.
  */
 function disambiguateCollidingKeys(trades: CanonicalTrade[]): void {
   const groups = new Map<string, CanonicalTrade[]>();
@@ -270,7 +271,7 @@ function diffTradeFields(trade: Trade, canonical: CanonicalTrade): TradeFieldCha
   return changes;
 }
 
-/** companyName/transactionNumber carry no cash implication — safe to correct in place. price/fees/taxes affect cost basis (and therefore cash already debited) and executionTime has a matching timeline event to keep in sync — never auto-applied; surfaced for a manual delete+re-add instead. */
+/** companyName/transactionNumber carry no cash implication â€” safe to correct in place. price/fees/taxes affect cost basis (and therefore cash already debited) and executionTime has a matching timeline event to keep in sync â€” never auto-applied; surfaced for a manual delete+re-add instead. */
 const CASH_SAFE_FIELDS = new Set<TradeFieldChange["field"]>(["companyName", "transactionNumber"]);
 
 export interface TradeToAdd {
@@ -278,14 +279,14 @@ export interface TradeToAdd {
 }
 export interface TradeToRemove {
   trade: Trade;
-  /** Mirrors deleteTrade's own guard — a trade with shares already sold against it can't be auto-removed without corrupting that history. */
+  /** Mirrors deleteTrade's own guard â€” a trade with shares already sold against it can't be auto-removed without corrupting that history. */
   blockedByAllocations: boolean;
 }
 export interface TradeToModify {
   trade: Trade;
   canonical: CanonicalTrade;
   changes: TradeFieldChange[];
-  /** True only when every changed field is cash-safe (see CASH_SAFE_FIELDS) — the only case applyLedgerRebuild will act on. */
+  /** True only when every changed field is cash-safe (see CASH_SAFE_FIELDS) â€” the only case applyLedgerRebuild will act on. */
   autoApplicable: boolean;
 }
 
@@ -321,13 +322,13 @@ export interface LedgerRebuildReport {
   holdingsMismatches: HoldingsMismatch[];
 }
 
-/** Buy-side diff: matches every canonical Buy against the existing ledger (searched across every portfolio, exactly like duplicateDetection's existing cross-portfolio checks), one-to-one — an existing trade already claimed by one canonical match is never matched again. */
+/** Buy-side diff: matches every canonical Buy against the existing ledger (searched across every portfolio, exactly like duplicateDetection's existing cross-portfolio checks), one-to-one â€” an existing trade already claimed by one canonical match is never matched again. */
 function diffBuys(canonicalBuys: CanonicalTrade[], existingTrades: Trade[]): { toAdd: TradeToAdd[]; toModify: TradeToModify[]; matchedTradeIds: Set<string> } {
   const toAdd: TradeToAdd[] = [];
   const toModify: TradeToModify[] = [];
   const matchedTradeIds = new Set<string>();
 
-  // Transaction-number-bearing canonical trades resolve unambiguously —
+  // Transaction-number-bearing canonical trades resolve unambiguously â€”
   // process them first so a shared ticker/date/share-count coincidence never
   // steals a match away from the row with decisive proof.
   const ordered = [...canonicalBuys].sort((a, b) => Number(b.transactionNumber !== undefined) - Number(a.transactionNumber !== undefined));
@@ -388,15 +389,15 @@ function diffSells(
 }
 
 /**
- * Holdings/verification decision: calls checkTickerMatch — the exact same
- * function Import calls for this same decision — rather than comparing
+ * Holdings/verification decision: calls checkTickerMatch â€” the exact same
+ * function Import calls for this same decision â€” rather than comparing
  * calculated-vs-Holdings directly. This is what makes Rebuild produce the
  * same verdict Import would for an identical ticker: a ticker whose complete
  * canonical Buy/Sell history is entirely official-broker-excel (or entirely
  * invoice) sourced is exempted from Holdings reconciliation exactly the way
  * Import already exempts it, via the same `reason` field threaded into
  * buildInventoryFacts/evaluateInventoryConstraint (constraintValidation.ts).
- * No second trust policy is implemented here — every one of these tickers'
+ * No second trust policy is implemented here â€” every one of these tickers'
  * verification outcomes is a single function call shared with Import.
  */
 function diffHoldings(canonicalBuys: CanonicalTrade[], canonicalSells: CanonicalTrade[], verifications: PositionVerification[]): HoldingsMismatch[] {
@@ -439,7 +440,7 @@ function diffHoldings(canonicalBuys: CanonicalTrade[], canonicalSells: Canonical
     });
     const facts = buildInventoryFacts(ticker, status);
     const contradictions = evaluateInventoryConstraint(facts);
-    if (contradictions.length === 0) continue; // satisfied — closed position, exact holdings match, broker-excel/invoice-verified, or no verification to compare against
+    if (contradictions.length === 0) continue; // satisfied â€” closed position, exact holdings match, broker-excel/invoice-verified, or no verification to compare against
     results.push({
       ticker,
       calculatedRemaining: facts.calculatedRemaining,
@@ -486,11 +487,11 @@ export async function dryRunLedgerRebuild(repos: AppRepositories): Promise<Ledge
 }
 
 export interface ApplyLedgerRebuildDecisions {
-  /** CanonicalTrade.key -> portfolio to create it in. A trade left out here is skipped — portfolio placement is never guessed. */
+  /** CanonicalTrade.key -> portfolio to create it in. A trade left out here is skipped â€” portfolio placement is never guessed. */
   addToPortfolioByKey: Record<string, string>;
   /** Trade.id values from tradesToRemove the caller has confirmed removing. Refused (via deleteTrade's own guard) if shares were sold against it. */
   removeTradeIds: string[];
-  /** Trade.id values from tradesToModify the caller has confirmed correcting. Only ever applies a change whose fields are ALL cash-safe (see CASH_SAFE_FIELDS) — anything else is silently skipped even if listed here. */
+  /** Trade.id values from tradesToModify the caller has confirmed correcting. Only ever applies a change whose fields are ALL cash-safe (see CASH_SAFE_FIELDS) â€” anything else is silently skipped even if listed here. */
   modifyTradeIds: string[];
 }
 
@@ -503,12 +504,12 @@ export interface ApplyLedgerRebuildResult {
 
 /**
  * Applies only the subset of a dry run's diff that's safe to automate:
- * creating a missing Buy (once the caller supplies a portfolio — never
+ * creating a missing Buy (once the caller supplies a portfolio â€” never
  * inferred), deleting an extraneous Buy with nothing sold against it (via
  * the existing, cash-safe deleteTrade), and correcting cash-neutral metadata
  * (companyName/transactionNumber) on a matched Buy. Never creates, deletes,
  * or edits a TradeAllocation, and never corrects a cash-affecting field
- * (price/fees/taxes) in place — both require a human decision this app
+ * (price/fees/taxes) in place â€” both require a human decision this app
  * already always asks for elsewhere (ADR-002; the sell allocation UI; a
  * manual delete + re-add for a cash-affecting correction).
  */
@@ -536,6 +537,7 @@ export async function applyLedgerRebuild(
       executionDate: canonical.executionDate,
       executionTime: canonical.executionTime ?? "00:00",
       transactionNumber: canonical.transactionNumber,
+      source: canonical.source,
     });
     added++;
   }
@@ -543,7 +545,7 @@ export async function applyLedgerRebuild(
   for (const tradeId of decisions.removeTradeIds) {
     const entry = report.tradesToRemove.find((r) => r.trade.id === tradeId);
     if (!entry || entry.blockedByAllocations) {
-      skipped.push({ tradeId, reason: "Has shares sold against it — can't be auto-removed." });
+      skipped.push({ tradeId, reason: "Has shares sold against it â€” can't be auto-removed." });
       continue;
     }
     await deleteTrade(repos, tradeId);
@@ -553,7 +555,7 @@ export async function applyLedgerRebuild(
   for (const tradeId of decisions.modifyTradeIds) {
     const entry = report.tradesToModify.find((m) => m.trade.id === tradeId);
     if (!entry || !entry.autoApplicable) {
-      skipped.push({ tradeId, reason: "Change touches price/fees/taxes/time — requires a manual delete + re-add, never auto-applied." });
+      skipped.push({ tradeId, reason: "Change touches price/fees/taxes/time â€” requires a manual delete + re-add, never auto-applied." });
       continue;
     }
     const updated: Trade = { ...entry.trade };
@@ -567,3 +569,4 @@ export async function applyLedgerRebuild(
 
   return { added, removed, modified, skipped };
 }
+
