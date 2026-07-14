@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
@@ -22,6 +21,7 @@ import {
   keysToRaiseToHighConfidence,
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
+  findOfficialBrokerExcelReuploadDuplicateKeys,
   parseTimeToMinutes,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
@@ -328,7 +328,7 @@ export function ImportPage() {
    * destroying the ticker's official-broker-excel provenance (reproduced:
    * an Excel-sourced ticker with nothing left pending immediately reads as
    * "Needs broker screenshot"/"Closed â€” needs corroborating evidence" right
-   * after Confirm, exactly the recurring class of…40112 tokens truncated…late-300">@ {formatMoney(c.price)}</span>
+   …40389 tokens truncated…late-300">@ {formatMoney(c.price)}</span>
           <span className="text-slate-400">{formatDate(c.date)}</span>
           {isLowConfidence ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
