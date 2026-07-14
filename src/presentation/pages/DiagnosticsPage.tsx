@@ -7,6 +7,7 @@ import type { DiagnosticEvent } from "@domain/entities/diagnostics/DiagnosticEve
 import { TickerAuthorityPanel } from "./diagnostics/TickerAuthorityPanel";
 import { FactLifecyclePanel } from "./diagnostics/FactLifecyclePanel";
 import { ReconciliationSweepPanel } from "./diagnostics/ReconciliationSweepPanel";
+import { CanonicalGroupEvidencePanel } from "./diagnostics/CanonicalGroupEvidencePanel";
 
 const RECENT_EVENT_LIMIT = 200;
 
@@ -49,6 +50,7 @@ export function DiagnosticsPage() {
         <TickerAuthorityPanel />
         <FactLifecyclePanel />
         <ReconciliationSweepPanel />
+        <CanonicalGroupEvidencePanel />
         {cases === undefined ? (
           <p className="text-sm text-slate-500">Loading…</p>
         ) : cases.length === 0 ? (
