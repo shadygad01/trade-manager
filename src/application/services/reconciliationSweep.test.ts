@@ -1,3 +1,4 @@
+
 import { beforeEach, describe, expect, it } from "vitest";
 import { runReconciliationSweep, type ReconciliationSweepRepos } from "./reconciliationSweep";
 import {
@@ -7,6 +8,7 @@ import {
   createFakeTradeAllocationRepository,
 } from "@application/testUtils/fakeRepositories";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
+import { createTrade } from "@domain/entities/Trade";
 import { isRetracted } from "./rawTransactionFolds";
 import type { RawTransactionRepository, CommittedLedgerRepository, TradeRepository, TradeAllocationRepository } from "@domain/repositories";
 
@@ -26,8 +28,8 @@ beforeEach(() => {
   repos = { rawTransactions, committedLedger, trades, allocations };
 });
 
-/** Same synthetic-fixture discipline as commitEngine.reconcileDuplicateAuthority.test.ts — proves the sweep is generic, not special-cased to any one real ticker. */
-describe("runReconciliationSweep — manual, user-initiated retroactive pass", () => {
+/** Same synthetic-fixture discipline as commitEngine.reconcileDuplicateAuthority.test.ts â€” proves the sweep is generic, not special-cased to any one real ticker. */
+describe("runReconciliationSweep â€” manual, user-initiated retroactive pass", () => {
   it("converges a pre-existing backfill/official-broker-excel duplicate pair via the real commitTicker pipeline", async () => {
     const payload: BuyExecutionPayload = { ticker: "SWEEP1", shares: 14, price: 67.4, executionDate: "2026-06-30" };
     const backfillFact = await rawTransactions.append(
@@ -53,7 +55,31 @@ describe("runReconciliationSweep — manual, user-initiated retroactive pass", (
     expect(isRetracted(all, excelFact.id)).toBe(false);
   });
 
-  it("is idempotent — a second run over the same data reports zero, nothing left to converge", async () => {
+  it("converges a time-resolved duplicate even when a different twin lot shares its time-blind canonical key", async () => {
+    const earlier: BuyExecutionPayload = {
+      ticker: "SWEEPTIME",
+      shares: 49,
+      price: 42.4,
+      executionDate: "2026-02-01",
+      executionTime: "10:32AM",
+    };
+    await trades.save(createTrade({ id: "trade-earlier", portfolioId: PORTFOLIO, ticker: "SWEEPTIME", shares: 49, entryPrice: 42.4, executionDate: "2026-02-01", executionTime: "10:32" }));
+    await trades.save(createTrade({ id: "trade-later", portfolioId: PORTFOLIO, ticker: "SWEEPTIME", shares: 49, entryPrice: 42.4, executionDate: "2026-02-01", executionTime: "10:34" }));
+    const backfillFact = await rawTransactions.append(
+      createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: PORTFOLIO, ticker: "SWEEPTIME", payload: earlier }),
+    );
+    const excelFact = await rawTransactions.append(
+      createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", portfolioId: PORTFOLIO, ticker: "SWEEPTIME", payload: earlier }),
+    );
+    const report = await runReconciliationSweep(repos);
+
+    expect(report.factsRetracted).toBe(1);
+    const all = await rawTransactions.getAll();
+    expect(isRetracted(all, backfillFact.id)).toBe(true);
+    expect(isRetracted(all, excelFact.id)).toBe(false);
+  });
+
+  it("is idempotent â€” a second run over the same data reports zero, nothing left to converge", async () => {
     const payload: BuyExecutionPayload = { ticker: "SWEEP2", shares: 50, price: 26.5, executionDate: "2026-03-04" };
     await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: PORTFOLIO, ticker: "SWEEP2", payload }));
     await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", portfolioId: PORTFOLIO, ticker: "SWEEP2", payload }));
@@ -112,7 +138,7 @@ describe("runReconciliationSweep — manual, user-initiated retroactive pass", (
     expect(report.perTicker).toEqual([]);
   });
 
-  it("isolates a per-ticker failure — one ticker erroring does not stop the rest of the sweep", async () => {
+  it("isolates a per-ticker failure â€” one ticker erroring does not stop the rest of the sweep", async () => {
     const payloadErr: BuyExecutionPayload = { ticker: "SWEEPERR", shares: 89, price: 22.3, executionDate: "2026-02-02" };
     await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: PORTFOLIO, ticker: "SWEEPERR", payload: payloadErr }));
     await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", portfolioId: PORTFOLIO, ticker: "SWEEPERR", payload: payloadErr }));
@@ -122,7 +148,7 @@ describe("runReconciliationSweep — manual, user-initiated retroactive pass", (
     await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", portfolioId: PORTFOLIO, ticker: "SWEEPOK", payload: payloadOk }));
 
     // SWEEPERR is processed first (fact insertion order = pair enumeration
-    // order for this fake store) — simulates a transient read failure while
+    // order for this fake store) â€” simulates a transient read failure while
     // the sweep is mid-way through that one ticker's own before/after diff.
     let callCount = 0;
     const flakyRawTransactions: RawTransactionRepository = {
@@ -143,3 +169,4 @@ describe("runReconciliationSweep — manual, user-initiated retroactive pass", (
     expect(okResult).toEqual({ portfolioId: PORTFOLIO, ticker: "SWEEPOK", duplicateGroupsFound: 1, factsRetracted: 1, factsSkipped: 0 });
   });
 });
+
