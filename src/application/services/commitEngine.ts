@@ -1,4 +1,6 @@
+
 import type { RawTransactionRepository, CommittedLedgerRepository, DiagnosticsRecorder } from "@domain/repositories";
+import type { Trade } from "@domain/entities/Trade";
 import {
   createRawTransaction,
   type RawTransaction,
@@ -22,19 +24,19 @@ import { timesConflict } from "./duplicateDetection";
 
 /**
  * Commit Engine: the only code path that ever writes to ledgerCache /
- * allocationsCache. There is no separate "rebuild" command — `commitTicker`
+ * allocationsCache. There is no separate "rebuild" command â€” `commitTicker`
  * IS the rebuild, and it always runs in full: delete every cached row for
  * (portfolioId, ticker) and regenerate from scratch, never an incremental
  * patch. `shouldCommit` is the trigger condition a caller evaluates after
  * appending any RawTransaction that touches a ticker: commit only once
  * every Buy/Sell transaction for that ticker has reached a terminal
- * verdict (Verified or Rejected) — a "Needs Review" transaction blocks the
+ * verdict (Verified or Rejected) â€” a "Needs Review" transaction blocks the
  * whole ticker's commit until it's resolved.
  *
  * Scope note: this reads the CURRENT raw-transaction set as-is except for
  * PortfolioAssignment (see resolveCurrentPortfolioId), a Correction's
  * `ticker` patch (see resolveCurrentTicker), and any Retraction (see
- * isRetracted) — those three are resolved/folded before a transaction is
+ * isRetracted) â€” those three are resolved/folded before a transaction is
  * ever considered relevant to a ticker's commit. Folding the REST of the
  * Correction vocabulary (date/price/fees/etc.) into "the current view of a
  * fact" is a later increment, not yet wired in here. Documented rather than
@@ -47,15 +49,15 @@ export interface CommitEngineRepos {
 }
 
 /**
- * docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.2 — `appendAndMaybeCommit` is the
+ * docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.2 â€” `appendAndMaybeCommit` is the
  * single choke point every real execution-fact writer already routes
  * through, so it's also the single place a Writer Trace event is emitted
- * for a `rawTransactions` append (valueSource "reference" — see Part 2.3
- * §A: the row is already permanent and canonical the moment it's appended,
+ * for a `rawTransactions` append (valueSource "reference" â€” see Part 2.3
+ * Â§A: the row is already permanent and canonical the moment it's appended,
  * so nothing beyond its own `id` needs capturing). `WriterContext` is how
  * the TRUE originating caller (TradeService.ensureBuyFact, not
  * commitEngine.ts itself) stays attributable through this shared choke
- * point — every caller that wants accurate Writer Trace attribution passes
+ * point â€” every caller that wants accurate Writer Trace attribution passes
  * its own identity; a caller that passes neither `diagnostics` nor
  * `writerContext` behaves exactly as before this parameter existed.
  */
@@ -70,18 +72,18 @@ const NON_SUBJECT_KINDS = new Set(["PortfolioAssignment", "Correction", "Retract
 
 /**
  * A raw transaction's own `portfolioId` field is set once, at write time,
- * and never changes (immutability) — a LATER portfolio assignment (e.g.
+ * and never changes (immutability) â€” a LATER portfolio assignment (e.g.
  * Import picking a portfolio for a ticker after the fact) is its own
  * separate PortfolioAssignment raw transaction referencing the original by
  * id, not an edit to it. This resolves "what portfolio does this
  * transaction currently belong to", folding in the latest (highest `seq`)
- * PortfolioAssignment targeting it, if any — falling back to the
+ * PortfolioAssignment targeting it, if any â€” falling back to the
  * transaction's own field when none exists.
  *
  * Exported so a caller upgrading which fact represents an execution (see
  * ImportPage.tsx's exact-duplicate auto-skip effect) can carry the OLD
  * fact's resolved portfolio over to the NEW one via `assignPortfolioToFact`
- * before retracting the old one — otherwise the surviving fact stays
+ * before retracting the old one â€” otherwise the surviving fact stays
  * unassigned, `relevantTradeTransactions` excludes it from the next commit,
  * and `projectLegacyTicker` deletes the ticker's real Trade row as "stale"
  * (a real, reproduced bug this export exists to let callers avoid).
@@ -99,12 +101,12 @@ export function resolveCurrentPortfolioId(all: RawTransaction[], transaction: Ra
 // so reconciliation.ts's isTickerFullyOfficialBrokerExcelSourced can fold
 // through a ticker correction too, without this file depending on that one.
 
-/** Exported for lotManager.ts, which needs the identical "what facts currently belong to this ticker" resolution (portfolio/ticker folds, retraction exclusion) but reads ALL of them regardless of import-verification verdict — a Lot Manager action is the user's own direct, deliberate statement, not an OCR read awaiting corroboration. */
+/** Exported for lotManager.ts, which needs the identical "what facts currently belong to this ticker" resolution (portfolio/ticker folds, retraction exclusion) but reads ALL of them regardless of import-verification verdict â€” a Lot Manager action is the user's own direct, deliberate statement, not an OCR read awaiting corroboration. */
 export async function relevantTradeTransactions(repos: CommitEngineRepos, portfolioId: string, ticker: string) {
   const normalizedTicker = normalizeTicker(ticker);
   // Can't use getByPortfolio here: a transaction's OWN portfolioId field may
   // still be undefined even though it's now effectively assigned via a
-  // PortfolioAssignment — resolution has to run over the full set. Bounded
+  // PortfolioAssignment â€” resolution has to run over the full set. Bounded
   // by the same small-N assumption the rest of this system already accepts.
   const all = await repos.rawTransactions.getAll();
   return all.filter((t) => {
@@ -118,7 +120,7 @@ export async function relevantTradeTransactions(repos: CommitEngineRepos, portfo
 
 /**
  * `commitTicker`/`shouldCommit` always verify the COMPLETE relevant
- * transaction set for a ticker together, as one batch — never an
+ * transaction set for a ticker together, as one batch â€” never an
  * incremental "just this new row" check against a prior baseline. So unlike
  * a caller that's verifying one new pending transaction against already-
  * settled history, there is no "shares already on the ledger before this
@@ -126,7 +128,7 @@ export async function relevantTradeTransactions(repos: CommitEngineRepos, portfo
  * current holdings as that baseline would double-count (the cache reflects
  * a PRIOR commit computed from a subset of these same transactions), which
  * is exactly what caused a full-history wipe on re-commit before this was
- * fixed — caught by commitEngine.test.ts's re-commit test, not by review.
+ * fixed â€” caught by commitEngine.test.ts's re-commit test, not by review.
  */
 const NO_EXISTING_POSITIONS: never[] = [];
 
@@ -137,14 +139,14 @@ export async function shouldCommit(repos: CommitEngineRepos, portfolioId: string
   // The FULL relevant set goes to verifyAll, not just Buy/Sell: the engine
   // itself only ever produces verdicts for Buy/Sell rows, but it reads
   // PositionVerificationCapture/OrderEvidenceCapture facts as corroboration
-  // — without them here, a broker screenshot that reconciles a ticker
+  // â€” without them here, a broker screenshot that reconciles a ticker
   // exactly could never terminal-ize its commit (Phase 9.8 fix; before it,
   // only closed-position/invoice/cross-verified paths ever fired here).
   const verdicts = verifyAll({ transactions: relevant, positions: NO_EXISTING_POSITIONS });
   return [...verdicts.values()].every((v) => v.verdict !== "Needs Review");
 }
 
-/** Verdict counts as one short string, e.g. "2 Verified, 1 Needs Review" — never the verdicts/evidence themselves (docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.7/2.3: a decision record's inputSummary/outputSummary are counts and labels, never a copy of the business objects they summarize). */
+/** Verdict counts as one short string, e.g. "2 Verified, 1 Needs Review" â€” never the verdicts/evidence themselves (docs/DIAGNOSTICS_CENTER_SPEC.md Part 5.7/2.3: a decision record's inputSummary/outputSummary are counts and labels, never a copy of the business objects they summarize). */
 function summarizeVerdicts(verdicts: Map<string, { verdict: string }>): string {
   const counts = new Map<string, number>();
   for (const v of verdicts.values()) counts.set(v.verdict, (counts.get(v.verdict) ?? 0) + 1);
@@ -163,8 +165,8 @@ export async function commitTicker(
 
   // Phase 9.8: when the caller's repos bundle carries the legacy tables (the
   // app's real singleton always does; bare CommitEngineRepos test bundles
-  // don't), the commit ALSO projects its output onto Trade/TradeAllocation —
-  // the tables the UI reads — making the legacy ledger a derived view that
+  // don't), the commit ALSO projects its output onto Trade/TradeAllocation â€”
+  // the tables the UI reads â€” making the legacy ledger a derived view that
   // auto-corrects whenever better historical facts reach a terminal verdict.
   // Gap-backfill runs FIRST so any legacy row that predates its fact writer
   // gets a fact before projection could ever mistake it for stale data; if
@@ -176,13 +178,13 @@ export async function commitTicker(
     try {
       await ensureLegacyFactsExist(projection, portfolioId, normalizedTicker);
     } catch (err) {
-      console.error("ensureLegacyFactsExist failed — skipping legacy projection for this commit:", err);
+      console.error("ensureLegacyFactsExist failed â€” skipping legacy projection for this commit:", err);
       projection = undefined;
     }
   }
 
   // Converges any live facts of this ticker left duplicated by a writer
-  // other than Import's own duplicateMatch/upgradeFact path — most notably
+  // other than Import's own duplicateMatch/upgradeFact path â€” most notably
   // ensureLegacyFactsExist just above, which has no reconciliation step of
   // its own. Runs before verification reads the fact set, so a converged
   // ticker's Verification/Replay/Allocation decisions this same commit never
@@ -191,7 +193,7 @@ export async function commitTicker(
   try {
     await reconcileDuplicateAuthority(projection ?? repos, normalizedTicker);
   } catch (err) {
-    console.error("reconcileDuplicateAuthority failed — continuing commit with facts as-is:", err);
+    console.error("reconcileDuplicateAuthority failed â€” continuing commit with facts as-is:", err);
   }
 
   const relevant = await relevantTradeTransactions(repos, portfolioId, normalizedTicker);
@@ -245,7 +247,7 @@ export async function commitTicker(
     inputSummary: `${events.length} ledger events, ${decisionTransactions.length} allocation decisions`,
     outputSummary:
       allocations.length === 0 && decisionTransactions.length > 0
-        ? "0 allocations produced from a nonzero number of decisions — at least one decision's referenced lot could not be resolved"
+        ? "0 allocations produced from a nonzero number of decisions â€” at least one decision's referenced lot could not be resolved"
         : `${allocations.length} allocations produced`,
     factSeqCursor,
   });
@@ -254,13 +256,13 @@ export async function commitTicker(
   // just below: a real, reproduced bug under concurrent commits (many
   // tickers committing at once, or two commits for the same ticker firing
   // in close succession) is a transient Dexie write-contention error here
-  // (bulkDelete/bulkAdd on ledgerCache/allocationsCache) — before this fix,
+  // (bulkDelete/bulkAdd on ledgerCache/allocationsCache) â€” before this fix,
   // that error propagated all the way up through this function's own
   // caller (recordBuy/recordSell/retractRawTransaction/assignPortfolioToFact
   // etc., none of which catch it), silently aborting the CALLER's own
   // bookkeeping (e.g. recordSell never reaching its own addedKeys update,
   // permanently stranding a Sell row on "still pending") and skipping
-  // projectLegacyTicker below entirely — even though events/allocations
+  // projectLegacyTicker below entirely â€” even though events/allocations
   // were already computed and don't depend on this cache write succeeding.
   try {
     await repos.committedLedger.commitTicker({ portfolioId, ticker: normalizedTicker, events, allocations });
@@ -271,7 +273,7 @@ export async function commitTicker(
   // Projection only ever runs on a TERMINAL verdict set. commitTicker is
   // also force-called on Retraction/Correction regardless of shouldCommit
   // (to clear a stale cache), and in that path a still-Needs-Review fact
-  // produces no lot — projecting then would delete a legitimate legacy row
+  // produces no lot â€” projecting then would delete a legitimate legacy row
   // merely because its corroboration hasn't arrived yet. An empty set is
   // terminal (everything retracted IS a settled state); an undecided one is
   // not.
@@ -288,13 +290,13 @@ export async function commitTicker(
 /**
  * The reactive trigger: append a raw transaction, then commit its ticker if
  * that just made the whole ticker's verification state terminal. This is
- * the ONLY place a commit is ever triggered — no scheduled job, no manual
+ * the ONLY place a commit is ever triggered â€” no scheduled job, no manual
  * "rebuild" button, matching the Ledger rewrite's "no rebuild command"
  * rule. Every writer should call this instead of `rawTransactions.append`
  * directly once it's ready to participate in the new architecture.
  *
  * A PortfolioAssignment's own envelope carries no portfolioId/ticker (it
- * targets another row by id) — its trigger check has to look up what it
+ * targets another row by id) â€” its trigger check has to look up what it
  * just assigned instead. Any other transaction with no portfolioId (e.g.
  * everything Import writes today, before an assignment exists) or no
  * ticker has nothing to commit yet: a correct, expected no-op, not a gap.
@@ -327,7 +329,7 @@ export async function appendAndMaybeCommit(
     }
   } else if (appended.kind === "Correction") {
     // A ticker correction moves its target between two tickers' relevant
-    // sets — unlike the shouldCommit-gated branches below, both the ticker
+    // sets â€” unlike the shouldCommit-gated branches below, both the ticker
     // it just left and the ticker it just joined must re-derive their cache
     // immediately (never left stale), regardless of whether every other
     // pending row on either ticker has reached a terminal verdict yet.
@@ -371,7 +373,7 @@ export async function appendAndMaybeCommit(
 
 /**
  * Assigns every still-unassigned raw transaction for `ticker` to
- * `portfolioId` — one PortfolioAssignment fact per target, never a batch
+ * `portfolioId` â€” one PortfolioAssignment fact per target, never a batch
  * edit, so each stays independently traceable. This is what Import's
  * existing per-ticker portfolio picker calls once the user resolves which
  * portfolio a ticker's extracted rows belong to; it's the only place a
@@ -405,25 +407,25 @@ export async function assignPortfolio(
 }
 
 /**
- * Assigns exactly ONE fact to `portfolioId` — the single-target counterpart
+ * Assigns exactly ONE fact to `portfolioId` â€” the single-target counterpart
  * to `assignPortfolio`'s ticker-wide sweep, for a caller that just
  * adopted/created that one specific fact and has no business touching any
  * of its ticker's OTHER still-pending siblings.
  *
  * Real, reproduced bug this exists to fix: `ensureBuyFact`/`ensureSellFacts`
- * used to call the ticker-wide `assignPortfolio` here instead — harmless for
+ * used to call the ticker-wide `assignPortfolio` here instead â€” harmless for
  * a ticker with a single Buy/Sell, but for a ticker with TWO OR MORE
  * still-pending Buys in the same commit batch (e.g. two Excel-sourced Buys
  * imported together), assigning the FIRST one's fact swept up the SECOND
  * one's still-unprocessed fact too (it looked "unassigned", same as any
- * genuine gap `assignPortfolio` exists to close) — which reactively fired
+ * genuine gap `assignPortfolio` exists to close) â€” which reactively fired
  * `appendAndMaybeCommit`'s own commit trigger for the second fact BEFORE its
  * own `recordBuy` call had run, materializing a legacy Trade for it straight
  * from the raw fact via `projectLegacyTicker`. That phantom Trade then raced
  * the second candidate's own, genuine `recordBuy` call moments later,
  * producing two Trade rows for one real execution, and the genuine
  * candidate's own RawTransaction fact got auto-skipped/retracted as an
- * apparent "exact duplicate" of the phantom — permanently losing its
+ * apparent "exact duplicate" of the phantom â€” permanently losing its
  * official-broker-excel provenance the same shape as the single-Buy race
  * this same investigation found and fixed in `ImportPage.tsx`. Scoping the
  * assignment to exactly the fact just adopted/created closes this off at
@@ -448,7 +450,7 @@ export async function assignPortfolioToFact(
 }
 
 /**
- * Retracts one raw transaction — used when the pre-migration UI deletes or
+ * Retracts one raw transaction â€” used when the pre-migration UI deletes or
  * voids a fact directly (e.g. TradeService.deleteTrade), so the new
  * architecture's next commit for that ticker can't resurrect something the
  * user just removed. `targetId` must be the RawTransaction's own id, not a
@@ -474,8 +476,8 @@ export async function retractRawTransaction(
  * never covers: those only ever reconcile a fact against a NEW candidate
  * actively being extracted in an Import session, comparing it against the
  * legacy Trade/TradeAllocation projection. Any OTHER writer that appends a
- * live execution fact outside that flow — e.g. `ensureLegacyFactsExist`
- * (ledgerProjection.ts) reactively gap-filling a legacy Trade — never passes
+ * live execution fact outside that flow â€” e.g. `ensureLegacyFactsExist`
+ * (ledgerProjection.ts) reactively gap-filling a legacy Trade â€” never passes
  * through that check at all, so two live facts describing the identical
  * execution (same canonicalKey) can coexist indefinitely with nothing to
  * converge them, regardless of which one was appended first, which ticker,
@@ -485,14 +487,14 @@ export async function retractRawTransaction(
  *
  * Deliberately scoped to one (already-resolved) ticker per call, run from
  * `commitTicker` right after `ensureLegacyFactsExist`, never a
- * database-wide sweep — the same "no unattended full-portfolio rewrite"
+ * database-wide sweep â€” the same "no unattended full-portfolio rewrite"
  * safety boundary this codebase's BF-1 Validation Design established. A
- * genuine tie (`authorityRank` equal — e.g. two "manual" facts) is never
+ * genuine tie (`authorityRank` equal â€” e.g. two "manual" facts) is never
  * resolved automatically, mirroring `higherAuthority`'s own "ties favor
  * neither" rule; only a STRICTLY higher-ranked survivor triggers anything.
  *
  * canonicalKey alone (ticker/date/shares/price) is NOT sufficient proof two
- * facts describe the SAME execution — crossTransactionIsolation.test.ts's
+ * facts describe the SAME execution â€” crossTransactionIsolation.test.ts's
  * whole "twin lot" suite exists because two genuinely DISTINCT real
  * executions routinely share that exact value (e.g. two same-price
  * same-day orders). A first version of this function ignored that and
@@ -507,30 +509,28 @@ export async function retractRawTransaction(
  * That alone still isn't enough: a SECOND real, reproduced defect (same
  * test, same investigation) showed `ensureLegacyFactsExist` can itself
  * nondeterministically mint a redundant gap-fill fact for one twin lot even
- * while its own already-adopted extraction-time fact is still live — a
+ * while its own already-adopted extraction-time fact is still live â€” a
  * pre-existing Gap Filling behavior, out of this fix's scope to correct
  * (see docs/ROADMAP.md Sprint 16). When that happens, the redundant fact's
  * `executionTime` can coincidentally match its sibling's, defeating the
- * `timesConflict` check alone. The second, decisive guard: when trades
- * access is available (it always is from `commitTicker`'s own real call
- * site), a canonicalKey legitimately claimed by TWO OR MORE live `Trade`
- * rows is a twin-lot-eligible key by definition — skip the whole group
- * unconditionally, regardless of what `timesConflict` found, since this
- * generic pass has no way to safely disambiguate which fact belongs to
- * which trade in that shape. Only ever converges the unambiguous case this
- * was built for: exactly one real trade, two facts describing it.
+ * `timesConflict` check alone. The second guard therefore consults the
+ * legacy Trades when they are available (they always are from
+ * `commitTicker`): a group is skipped only when its facts are compatible
+ * with MORE THAN ONE same-value Trade. This preserves the twin-lot safety
+ * boundary without throwing away a safe convergence merely because another
+ * same-value Trade exists at a different, conflicting time.
  *
  * Buy-side: a Buy fact is never referenced by another fact's id, so a plain
  * retraction is the whole fix (mirrors `upgradeFact`'s own BUY branch).
  * Sell-side: also re-points a live SellAllocationDecision referencing the
- * losing fact at the survivor instead of leaving it dangling — the same
+ * losing fact at the survivor instead of leaving it dangling â€” the same
  * swap provenanceRepair.ts's own `upgradeSellExecutionFact` performs for
  * its narrower ("manual"-only) historical case, inlined here rather than
  * imported to avoid a circular dependency (provenanceRepair.ts already
  * imports this file for `retractRawTransaction`/`appendAndMaybeCommit`).
  *
- * Every write below goes straight to `repos.rawTransactions.append` —
- * never `retractRawTransaction`/`appendAndMaybeCommit` — for the exact
+ * Every write below goes straight to `repos.rawTransactions.append` â€”
+ * never `retractRawTransaction`/`appendAndMaybeCommit` â€” for the exact
  * reason `ensureLegacyFactsExist`'s own doc comment states: this runs
  * INSIDE `commitTicker`, and `appendAndMaybeCommit` reactively re-triggers
  * `commitTicker` on every append. A real, reproduced regression caught this
@@ -539,7 +539,7 @@ export async function retractRawTransaction(
  * own `projectLegacyTicker` run and transiently deleted a still-open Trade
  * row before its own Sell could reference it. Diagnostics tracing is
  * intentionally skipped here for the same reason `ensureLegacyFactsExist`
- * has none — there is no `WriterContext`-carrying choke point available at
+ * has none â€” there is no `WriterContext`-carrying choke point available at
  * this recursion depth that doesn't reintroduce the same hazard.
  */
 export async function reconcileDuplicateAuthority(
@@ -549,20 +549,20 @@ export async function reconcileDuplicateAuthority(
   const normalized = normalizeTicker(ticker);
   let convergedCount = 0;
 
-  // A canonicalKey legitimately claimed by 2+ live Trades is twin-lot-
-  // eligible by definition — see this function's own doc comment for why
-  // that alone rules out automatic reconciliation for the whole key,
-  // independent of what the timesConflict check below finds.
-  let buyKeysWithMultipleTrades: Set<string> | undefined;
+  // Keep the actual Trade times, rather than only their number. A
+  // time-resolved pair of facts can safely converge even when a different
+  // twin lot shares its time-blind canonicalKey.
+  let buysByKey: Map<string, Trade[]> | undefined;
   if (repos.trades) {
     const allTrades = await repos.trades.getAll();
-    const countByKey = new Map<string, number>();
+    buysByKey = new Map<string, Trade[]>();
     for (const t of allTrades) {
       if (normalizeTicker(t.ticker) !== normalized) continue;
       const key = canonicalKey({ side: "BUY", ticker: normalized, date: t.executionDate, shares: t.shares, price: t.entryPrice });
-      countByKey.set(key, (countByKey.get(key) ?? 0) + 1);
+      const matches = buysByKey.get(key) ?? [];
+      matches.push(t);
+      buysByKey.set(key, matches);
     }
-    buyKeysWithMultipleTrades = new Set([...countByKey.entries()].filter(([, count]) => count >= 2).map(([key]) => key));
   }
 
   for (const kind of ["BuyExecution", "SellExecution"] as const) {
@@ -591,16 +591,25 @@ export async function reconcileDuplicateAuthority(
 
     for (const [key, facts] of byKey.entries()) {
       if (facts.length <= 1) continue;
-      if (kind === "BuyExecution" && buyKeysWithMultipleTrades?.has(key)) continue;
 
       const timeOf = (t: RawTransaction) => (t.payload as BuyExecutionPayload | SellExecutionPayload).executionTime;
       const hasConflictingTwin = facts.some((a, i) => facts.some((b, j) => i < j && timesConflict(timeOf(a), timeOf(b))));
-      if (hasConflictingTwin) continue; // at least one pair is provably a distinct real execution — never merge this group.
+      if (hasConflictingTwin) continue; // at least one pair is provably a distinct real execution â€” never merge this group.
+
+      if (kind === "BuyExecution") {
+        const compatibleTrades = (buysByKey?.get(key) ?? []).filter((trade) =>
+          facts.every((fact) => !timesConflict(timeOf(fact), trade.executionTime)),
+        );
+        // Two compatible legacy trades means the facts still cannot be
+        // tied to one business execution safely (including an unknown-time
+        // backfill), so retain the conservative twin-lot behavior.
+        if (compatibleTrades.length >= 2) continue;
+      }
 
       const best = facts.reduce((a, b) => (authorityRank(b.source) > authorityRank(a.source) ? b : a));
       for (const loser of facts) {
         if (loser.id === best.id) continue;
-        if (authorityRank(loser.source) >= authorityRank(best.source)) continue; // tie — never auto-resolved.
+        if (authorityRank(loser.source) >= authorityRank(best.source)) continue; // tie â€” never auto-resolved.
 
         await repos.rawTransactions.append(
           createRawTransaction({
@@ -645,8 +654,8 @@ export async function reconcileDuplicateAuthority(
 
 /**
  * Corrects every still-live raw transaction currently resolving to
- * `oldTicker` (Buy/Sell executions, evidence, verifications, dividends —
- * anything ticker-bearing) over to `newTicker` — the raw-transaction twin of
+ * `oldTicker` (Buy/Sell executions, evidence, verifications, dividends â€”
+ * anything ticker-bearing) over to `newTicker` â€” the raw-transaction twin of
  * TradeService.renameTickerEverywhere, so a ticker rename in the
  * pre-migration UI doesn't leave this architecture's copy permanently
  * orphaned under the old, now-corrected-away ticker.
@@ -680,3 +689,4 @@ export async function renameRawTransactionsTicker(
   }
   return targets.length;
 }
+
