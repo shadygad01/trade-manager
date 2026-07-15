@@ -44,6 +44,8 @@ export interface ImportSessionState {
   addedTradeIds: Record<string, string>;
   /** Sell entry key -> the TradeAllocation ids its "Allocate Sell" created — the Sell-side twin of addedTradeIds, excluding a committed sell's own allocations from its duplicate check (see ImportPage's duplicateMatch). */
   addedAllocationIds: Record<string, string[]>;
+  /** Raw fact ids actually written by the current import recorder. Skip/discard may retract only these ids. */
+  recordedRawFactKeys: string[];
   tickerPortfolio: Record<string, string>;
   uploadSeq: number;
   filesProcessed: number;
@@ -64,6 +66,7 @@ function emptyState(): ImportSessionState {
     dismissedKeys: [],
     addedTradeIds: {},
     addedAllocationIds: {},
+    recordedRawFactKeys: [],
     tickerPortfolio: {},
     uploadSeq: 0,
     filesProcessed: 0,

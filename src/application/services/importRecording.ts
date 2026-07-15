@@ -75,7 +75,7 @@ export function candidateSource(candidate: ParsedTradeCandidate): RawTransaction
   return candidate.source ?? "statement";
 }
 
-export async function recordImportedRawTransactions(repos: ImportRecordingRepos, input: ImportRecordingInput): Promise<void> {
+export async function recordImportedRawTransactions(repos: ImportRecordingRepos, input: ImportRecordingInput): Promise<string[]> {
   const { sourceUploadId, candidates, verifications, dividends, orderEvidences, cancelledOrders } = input;
   const facts: Omit<RawTransaction, "seq">[] = [];
 
@@ -239,10 +239,15 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
     facts.push(createRawTransaction({ kind: "CancelledOrder", source: cancelledOrder.source ?? "statement", sourceUploadId, ticker, payload }));
   }
 
-  if (facts.length === 0) return;
+  if (facts.length === 0) return [];
   if (repos.rawTransactions.appendMany) {
     await repos.rawTransactions.appendMany(facts);
-    return;
+    return facts
+      .filter((fact) => fact.kind === "BuyExecution" || fact.kind === "SellExecution" || fact.kind === "OrderEvidenceCapture")
+      .map((fact) => fact.id);
   }
   for (const fact of facts) await appendAndMaybeCommit(repos, fact);
+  return facts
+    .filter((fact) => fact.kind === "BuyExecution" || fact.kind === "SellExecution" || fact.kind === "OrderEvidenceCapture")
+    .map((fact) => fact.id);
 }

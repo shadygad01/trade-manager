@@ -157,6 +157,20 @@ describe("isTickerFullyOfficialBrokerExcelSourced", () => {
     expect(isTickerFullyOfficialBrokerExcelSourced([fact, retraction], "COMI")).toBe(false);
   });
 
+  it("does not reopen the screenshot gate when a matching lower-authority backfill is the only live twin of a retracted official fact", () => {
+    const official = buyFact({ id: "official", source: "official-broker-excel", executionTime: "10:32" });
+    const backfill = buyFact({ id: "backfill", source: "backfill", executionTime: "10:32" });
+    const retraction = {
+      ...createRawTransaction({
+        kind: "Retraction",
+        source: "manual",
+        payload: { targetId: official.id, reason: "Duplicate cleanup" },
+      }),
+      seq: 3,
+    };
+    expect(isTickerFullyOfficialBrokerExcelSourced([official, backfill, retraction], "COMI")).toBe(true);
+  });
+
   // Systemic audit finding: a fact's own `ticker` field is immutable — a
   // ticker rename/correction (TradeService.renameTickerEverywhere) is its
   // own separate Correction fact, never an edit in place. Reading

@@ -126,7 +126,12 @@ function verificationContentKey(v: { ticker: string; units: number; avgCost?: nu
  * not harmful.
  */
 function retractRawTransactionKeys(keys: Iterable<string>) {
+  const recordedRawFactKeys = new Set(importSession.getState().recordedRawFactKeys);
   for (const key of keys) {
+    // A duplicate candidate may be skipped without writing a new fact. Its
+    // session key can still equal an older fact id, so retracting blindly
+    // would delete the already-trusted official fact (the ACAMD failure).
+    if (!recordedRawFactKeys.has(key)) continue;
     retractRawTransaction(repos, key, undefined, diagnostics).catch((err) => {
       console.error("retractRawTransaction failed (shadow write, non-fatal):", err);
     });
@@ -779,7 +784,7 @@ export function ImportPage() {
           // working Import flow, which the localStorage pending pool below
           // remains the actual source of truth for.
           try {
-            await recordImportedRawTransactions(repos, {
+            const recordedFactKeys = await recordImportedRawTransactions(repos, {
               sourceUploadId: upload.id,
               candidates: newCandidates,
               verifications: result.verifications,
@@ -787,6 +792,12 @@ export function ImportPage() {
               orderEvidences: newOrderEvidenceEntries,
               cancelledOrders: result.cancelledOrders,
             });
+            if (recordedFactKeys.length > 0) {
+              importSession.update((prev) => ({
+                ...prev,
+                recordedRawFactKeys: [...new Set([...prev.recordedRawFactKeys, ...recordedFactKeys])],
+              }));
+            }
           } catch (err) {
             console.error("recordImportedRawTransactions failed (shadow write, non-fatal):", err);
           }
@@ -1504,6 +1515,7 @@ export function ImportPage() {
           acceptedKeys: prev.acceptedKeys.filter((k) => !droppedKeys.has(k)),
           skippedKeys: prev.skippedKeys.filter((k) => !droppedKeys.has(k)),
           dismissedKeys: prev.dismissedKeys.filter((k) => !droppedKeys.has(k)),
+          recordedRawFactKeys: prev.recordedRawFactKeys.filter((k) => !droppedKeys.has(k)),
           addedTradeIds: Object.fromEntries(Object.entries(prev.addedTradeIds).filter(([k]) => !droppedKeys.has(k))),
           addedAllocationIds: Object.fromEntries(Object.entries(prev.addedAllocationIds).filter(([k]) => !droppedKeys.has(k))),
           tickerPortfolio,

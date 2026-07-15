@@ -4,10 +4,6 @@ import { diagnosticCaseRepository, diagnosticEventRepository } from "@presentati
 import type { DiagnosticEvent } from "@domain/entities/diagnostics/DiagnosticEvent";
 // TEMPORARY — see each panel's own doc comment. Delete these imports and
 // their usages below once removed.
-import { TickerAuthorityPanel } from "./diagnostics/TickerAuthorityPanel";
-import { FactLifecyclePanel } from "./diagnostics/FactLifecyclePanel";
-import { ReconciliationSweepPanel } from "./diagnostics/ReconciliationSweepPanel";
-import { CanonicalGroupEvidencePanel } from "./diagnostics/CanonicalGroupEvidencePanel";
 
 const RECENT_EVENT_LIMIT = 200;
 
@@ -47,10 +43,6 @@ export function DiagnosticsPage() {
     <div className="space-y-8">
       <div>
         <PageHeader title="Diagnostics" description="Developer Mode is on. This is the Diagnostics Center." />
-        <TickerAuthorityPanel />
-        <FactLifecyclePanel />
-        <ReconciliationSweepPanel />
-        <CanonicalGroupEvidencePanel />
         {cases === undefined ? (
           <p className="text-sm text-slate-500">Loading…</p>
         ) : cases.length === 0 ? (

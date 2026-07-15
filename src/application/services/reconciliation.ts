@@ -13,11 +13,17 @@ import { timesConflict } from "./duplicateDetection";
 const OFFICIAL_BROKER_EXCEL_RANK = authorityRank("official-broker-excel");
 
 /** A lower-authority fact with a live, higher-authority twin for the same time-resolved execution is redundant evidence. The durable authority sweep retracts it later; the read-side trust policy must not request a broker screenshot in the meantime. */
-function isShadowedByHigherAuthorityTwin(all: RawTransaction[], fact: RawTransaction, ticker: string): boolean {
+function hasHigherAuthorityTwin(
+  all: RawTransaction[],
+  fact: RawTransaction,
+  ticker: string,
+  options?: { requireRetracted?: boolean; requireKnownTimes?: boolean },
+): boolean {
   if (fact.kind !== "BuyExecution" && fact.kind !== "SellExecution") return false;
   const payload = fact.payload as BuyExecutionPayload | SellExecutionPayload;
   return all.some((candidate) => {
-    if (candidate.id === fact.id || candidate.kind !== fact.kind || isRetracted(all, candidate.id)) return false;
+    if (candidate.id === fact.id || candidate.kind !== fact.kind) return false;
+    if (options?.requireRetracted ? !isRetracted(all, candidate.id) : isRetracted(all, candidate.id)) return false;
     const resolvedTicker = resolveCurrentTicker(all, candidate);
     if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== ticker) return false;
     const candidatePayload = candidate.payload as BuyExecutionPayload | SellExecutionPayload;
@@ -25,14 +31,31 @@ function isShadowedByHigherAuthorityTwin(all: RawTransaction[], fact: RawTransac
       candidatePayload.executionDate === payload.executionDate &&
       candidatePayload.shares === payload.shares &&
       candidatePayload.price === payload.price &&
-      payload.executionTime !== undefined &&
-      candidatePayload.executionTime !== undefined &&
-      payload.executionTime !== "00:00" &&
-      candidatePayload.executionTime !== "00:00" &&
+      (!options?.requireKnownTimes ||
+        (payload.executionTime !== undefined &&
+          candidatePayload.executionTime !== undefined &&
+          payload.executionTime !== "00:00" &&
+          candidatePayload.executionTime !== "00:00")) &&
       !timesConflict(candidatePayload.executionTime, payload.executionTime) &&
       authorityRank(candidate.source) > authorityRank(fact.source)
     );
   });
+}
+
+function isShadowedByHigherAuthorityTwin(all: RawTransaction[], fact: RawTransaction, ticker: string): boolean {
+  return hasHigherAuthorityTwin(all, fact, ticker, { requireKnownTimes: true });
+}
+
+/**
+ * A prior import can leave an immutable higher-authority fact retracted while
+ * its exact lower-authority migration twin remains live.  The execution is
+ * still covered by the broker document in the fact log; treating the orphaned
+ * backfill as an uncovered execution would incorrectly reopen the screenshot
+ * gate (the ACAMD/ACAMD class of bug).  Conflicting known execution times are
+ * still kept separate by `timesConflict`.
+ */
+function isCoveredByRetractedHigherAuthorityTwin(all: RawTransaction[], fact: RawTransaction, ticker: string): boolean {
+  return hasHigherAuthorityTwin(all, fact, ticker, { requireRetracted: true });
 }
 
 /**
@@ -66,13 +89,17 @@ export function isTickerFullyOfficialBrokerExcelSourced(rawTransactions: RawTran
     if (t.kind !== "BuyExecution" && t.kind !== "SellExecution") return false;
     if (isRetracted(rawTransactions, t.id)) return false;
     const resolvedTicker = resolveCurrentTicker(rawTransactions, t);
-    return (
-      resolvedTicker !== undefined &&
-      normalizeTicker(resolvedTicker) === normalized &&
-      !isShadowedByHigherAuthorityTwin(rawTransactions, t, normalized)
-    );
+    return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalized;
   });
-  return live.length > 0 && live.every((t) => authorityRank(t.source) >= OFFICIAL_BROKER_EXCEL_RANK);
+  return (
+    live.length > 0 &&
+    live.every(
+      (t) =>
+        authorityRank(t.source) >= OFFICIAL_BROKER_EXCEL_RANK ||
+        isShadowedByHigherAuthorityTwin(rawTransactions, t, normalized) ||
+        isCoveredByRetractedHigherAuthorityTwin(rawTransactions, t, normalized),
+    )
+  );
 }
 
 export interface PositionReconciliation {
