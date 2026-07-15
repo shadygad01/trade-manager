@@ -13,7 +13,6 @@ import {
   retractRawTransaction,
   renameRawTransactionsTicker,
   assignPortfolioToFact,
-  resolveCurrentPortfolioId,
   appendAndMaybeCommit,
   type CommitEngineRepos,
 } from "./commitEngine";
@@ -97,7 +96,10 @@ export async function recordBuyBatch(
     const portfolio = await repos.portfolios.getById(portfolioId);
     if (!portfolio) throw new Error(`Portfolio not found: ${portfolioId}`);
     portfolios.set(portfolioId, portfolio);
-    tradesByPortfolio.set(portfolioId, await repos.trades.getByPortfolio(portfolioId));
+    const portfolioTrades = repos.trades.getByPortfolio
+      ? await repos.trades.getByPortfolio(portfolioId)
+      : (await repos.trades.getAll()).filter((trade) => trade.portfolioId === portfolioId);
+    tradesByPortfolio.set(portfolioId, portfolioTrades);
   }
 
   const rawRepos = repos.rawTransactions && repos.committedLedger ? (repos as AppRepositories & CommitEngineRepos) : undefined;
@@ -196,15 +198,11 @@ export async function recordBuyBatch(
       factSeqByTradeId.set(trade.id, undefined);
     } else {
       factSeqByTradeId.set(trade.id, liveMatch.seq);
-      if (resolveCurrentPortfolioId(allFacts, liveMatch) === undefined) {
-        const assignment = createRawTransaction({
-          kind: "PortfolioAssignment",
-          source: "manual",
-          payload: { targetId: liveMatch.id, portfolioId: trade.portfolioId },
-        });
-        factsToAppend.push(assignment);
-        allFacts.push({ ...assignment, seq: 0 });
-      }
+      // A pre-existing extraction fact is intentionally left unassigned here.
+      // ImportPage's single trailing assignPortfolio sweep assigns all such
+      // facts together after the bulk write; doing it in both places creates
+      // duplicate PortfolioAssignment envelopes in lightweight adapters and
+      // needlessly adds another append to the hot path.
     }
     results.push({ trade });
   }
