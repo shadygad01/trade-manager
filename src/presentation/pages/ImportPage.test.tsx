@@ -1,4 +1,3 @@
-
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -39,7 +38,7 @@ describe("Smart Allocate chronology", () => {
   });
 });
 
-describe("TickerGroupCard â€” invoice-sourced Buy needs no separate broker screenshot", () => {
+describe("TickerGroupCard — invoice-sourced Buy needs no separate broker screenshot", () => {
   it("shows 'Verified by invoice' and lets the row proceed straight to Ready, with no Mismatch/blocked messaging", () => {
     render(
       <TickerGroupCard
@@ -70,15 +69,15 @@ describe("TickerGroupCard â€” invoice-sourced Buy needs no separate broker 
       />,
     );
     expect(screen.getByText("Verified by invoice")).toBeInTheDocument();
-    expect(screen.getByText("Ready â€” click Confirm above")).toBeInTheDocument();
+    expect(screen.getByText("Ready — click Confirm above")).toBeInTheDocument();
     expect(screen.queryByText(/Mismatch/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No broker "My Position" screenshot/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Blocked â€” needs verification")).not.toBeInTheDocument();
+    expect(screen.queryByText("Blocked — needs verification")).not.toBeInTheDocument();
   });
 });
 
-describe("TickerGroupCard â€” cross-verified (an OCR screenshot corroborated by an independent invoice, the ORHD case)", () => {
-  it("shows 'Verified â€” two documents agree' and lets the rows proceed straight to Ready", () => {
+describe("TickerGroupCard — cross-verified (an OCR screenshot corroborated by an independent invoice, the ORHD case)", () => {
+  it("shows 'Verified — two documents agree' and lets the rows proceed straight to Ready", () => {
     render(
       <TickerGroupCard
         ticker="ORHD"
@@ -107,14 +106,14 @@ describe("TickerGroupCard â€” cross-verified (an OCR screenshot corroborate
         mergeSuggestion={undefined}
       />,
     );
-    expect(screen.getByText("Verified â€” two documents agree")).toBeInTheDocument();
-    expect(screen.getAllByText("Ready â€” click Confirm above").length).toBe(2);
+    expect(screen.getByText("Verified — two documents agree")).toBeInTheDocument();
+    expect(screen.getAllByText("Ready — click Confirm above").length).toBe(2);
     expect(screen.queryByText(/Mismatch/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Blocked â€” needs verification")).not.toBeInTheDocument();
+    expect(screen.queryByText("Blocked — needs verification")).not.toBeInTheDocument();
   });
 });
 
-describe("TickerGroupCard â€” a pending Sell exceeding the ledger's available shares (the SKPC shortfall case)", () => {
+describe("TickerGroupCard — a pending Sell exceeding the ledger's available shares (the SKPC shortfall case)", () => {
   it("badges 'Missing buy history' and explains the shortfall instead of asking for a My Position screenshot", () => {
     render(
       <TickerGroupCard
@@ -157,12 +156,12 @@ describe("TickerGroupCard â€” a pending Sell exceeding the ledger's availab
     expect(screen.getByText(/70 short/)).toBeInTheDocument();
   });
 
-  it("renders the banner's pending-sell/pending-buy figures directly from matchStatus (checkTickerMatch's own echoed inputs), not a locally re-derived count â€” the single canonical source after the display/engine drift fix", () => {
+  it("renders the banner's pending-sell/pending-buy figures directly from matchStatus (checkTickerMatch's own echoed inputs), not a locally re-derived count — the single canonical source after the display/engine drift fix", () => {
     render(
       <TickerGroupCard
         ticker="SKPC"
         // Two Sell rows extracted (82 + 82 = 164), but "s2" is an
-        // exact-duplicate already auto-skipped by the engine â€” the ONLY
+        // exact-duplicate already auto-skipped by the engine — the ONLY
         // number that may legitimately reach this banner is whatever
         // checkTickerMatch itself computed and echoed onto matchStatus
         // (82), since TickerGroupCard no longer re-derives this figure
@@ -204,7 +203,7 @@ describe("TickerGroupCard â€” a pending Sell exceeding the ledger's availab
   });
 });
 
-describe("TickerGroupCard â€” 'Recorded on the ledger' panel (find/delete an already-committed duplicate without leaving Import)", () => {
+describe("TickerGroupCard — 'Recorded on the ledger' panel (find/delete an already-committed duplicate without leaving Import)", () => {
   const existingTrades = [
     { id: "t-open", ticker: "SKPC", shares: 500, remainingShares: 500, entryPrice: 2.79, executionDate: "2023-01-11", executionTime: "10:34", portfolioId: "p-smc", fees: 0, taxes: 0, strategyTags: [], createdAt: "" },
     { id: "t-partially-sold", ticker: "SKPC", shares: 200, remainingShares: 50, entryPrice: 2.9, executionDate: "2023-01-05", executionTime: "10:33", portfolioId: "p-smc", fees: 0, taxes: 0, strategyTags: [], createdAt: "" },
@@ -247,7 +246,7 @@ describe("TickerGroupCard â€” 'Recorded on the ledger' panel (find/delete a
     expect(screen.getByText(/Recorded on the ledger/)).toBeInTheDocument();
     const deleteButtons = screen.getAllByTitle("Delete this trade and refund its cost");
     expect(deleteButtons).toHaveLength(1); // only the untouched (500 sh) lot is deletable
-    expect(screen.getByTitle("Has shares sold against it â€” can't be deleted")).toBeInTheDocument();
+    expect(screen.getByTitle("Has shares sold against it — can't be deleted")).toBeInTheDocument();
 
     await user.click(deleteButtons[0]);
     expect(onDeleteExistingTrade).toHaveBeenCalledWith("t-open");
@@ -322,7 +321,7 @@ describe("TickerGroupCard â€” 'Recorded on the ledger' panel (find/delete a
   });
 });
 
-describe("TickerGroupCard â€” no-verification banner surfaces the current net share total", () => {
+describe("TickerGroupCard — no-verification banner surfaces the current net share total", () => {
   it("shows the exact net so a user chasing a closed position can tell how far it is from 0", () => {
     render(
       <TickerGroupCard
@@ -474,7 +473,774 @@ describe("TickerGroupCard â€” no-verification banner surfaces the current n
         mergeSuggestion={undefined}
       />,
     );
-    expect(screen.getByText(/account for 500 shares of that net â€” discarding them brings it to…7654 tokens truncated…}
+    expect(screen.getByText(/account for 500 shares of that net — discarding them brings it to 250/)).toBeInTheDocument();
+  });
+
+  it("with a Buy-side surplus but zero pending buy rows, points at the ALREADY-RECORDED buys and shows the net arithmetic", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number): CandidateEntry {
+      return { key, candidate: { ticker: "AMOC", side, shares, price: 8, date: "2023-02-13", confidence: "medium" } };
+    }
+    render(
+      <TickerGroupCard
+        ticker="AMOC"
+        group={{
+          buys: [],
+          sells: [entry("s1", "SELL", 30), entry("s2", "SELL", 50)],
+          verifications: [],
+          dividends: [],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "no-verification",
+          netShares: 220,
+          existingRemainingShares: 300,
+          pendingBuyShares: 0,
+          pendingSellShares: 80,
+          discrepancySide: "buy",
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/300 already recorded on the ledger \+ 0 pending buys − 80 pending sells = 220/)).toBeInTheDocument();
+    expect(screen.getByText(/most likely in Buy transactions ALREADY RECORDED on the ledger/)).toBeInTheDocument();
+    expect(screen.queryByText(/Likely in Sell side/)).not.toBeInTheDocument();
+  });
+
+  it("on an unsolvable mismatch, states the exact gap and points at a misread share count or missing transaction (the real ABUK shape)", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number): CandidateEntry {
+      return { key, candidate: { ticker: "ABUK", side, shares, price: 40, date: "2023-02-07", confidence: "high" } };
+    }
+    render(
+      <TickerGroupCard
+        ticker="ABUK"
+        group={{
+          buys: [],
+          sells: [entry("s1", "SELL", 198), entry("s2", "SELL", 600), entry("s3", "SELL", 150)],
+          verifications: [],
+          dividends: [],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "mismatch",
+          netShares: 67,
+          existingRemainingShares: 1015,
+          verifiedUnits: 27,
+          discrepancySide: "buy",
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/The gap is exactly 40 shares too many/)).toBeInTheDocument();
+    expect(screen.getByText(/INSIDE one row's share count/)).toBeInTheDocument();
+  });
+
+  it("with more pending rows than the solver's exhaustive-search cap, softens the wording instead of falsely claiming no subset exists", () => {
+    function entry(key: string, side: "BUY" | "SELL", shares: number): CandidateEntry {
+      return { key, candidate: { ticker: "ABUK", side, shares, price: 40, date: "2023-02-07", confidence: "high" } };
+    }
+    const sells = Array.from({ length: 17 }, (_, i) => entry(`s${i}`, "SELL", 10 + i));
+    render(
+      <TickerGroupCard
+        ticker="ABUK"
+        group={{ buys: [], sells, verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "mismatch",
+          netShares: 67,
+          existingRemainingShares: 1015,
+          verifiedUnits: 27,
+          discrepancySide: "buy",
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/too many rows for the automatic subset check/)).toBeInTheDocument();
+    expect(screen.queryByText(/no combination of removable pending rows/)).not.toBeInTheDocument();
+  });
+});
+
+describe("TickerGroupCard — portfolio picker for a brand-new ticker in more than one portfolio", () => {
+  it("does not silently pre-select the first portfolio — shows an honest placeholder instead", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [buyEntry("b1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId=""
+        portfolioResolved={false}
+        matchStatus={{ matched: true, reason: "closed-position", netShares: 0 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(screen.getByText("Select a portfolio…")).toBeInTheDocument();
+    expect(screen.getByText(/This ticker is new to more than one of your portfolios/)).toBeInTheDocument();
+    expect(screen.getAllByText("Waiting for portfolio").length).toBeGreaterThan(0);
+  });
+
+  it("picking a portfolio the user wants actually fires onPortfolioChange, even though it's the first option in the list", async () => {
+    const user = userEvent.setup();
+    const onPortfolioChange = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [buyEntry("b1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId=""
+        portfolioResolved={false}
+        matchStatus={{ matched: true, reason: "closed-position", netShares: 0 }}
+        distributing={false}
+        onPortfolioChange={onPortfolioChange}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    const select = screen.getByRole("combobox");
+    await user.selectOptions(select, "smc test");
+    expect(onPortfolioChange).toHaveBeenCalledWith("p-smc");
+  });
+
+  it("blocks Allocate Sell until a portfolio is actually picked, even when the ticker's share count already matches", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [sellEntry("s1")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId=""
+        portfolioResolved={false}
+        matchStatus={{ matched: true, reason: "matched", netShares: 82, verifiedUnits: 82 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Allocate Sell" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("title", "Pick a portfolio above first.");
+  });
+
+  it("once resolved, shows the picked portfolio selected and enables Allocate Sell", () => {
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [sellEntry("s1")], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 82, verifiedUnits: 82 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    const select = screen.getByRole("combobox") as HTMLSelectElement;
+    expect(select.value).toBe("p-smc");
+    expect(screen.queryByText("Select a portfolio…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Allocate Sell" })).not.toBeDisabled();
+  });
+});
+
+describe("TickerGroupCard — within-batch duplicate candidates (the PHAR mismatch case)", () => {
+  it("flags a still-pending Buy suggested as a within-batch duplicate, and Discard removes just that row", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
+    const keep = buyEntry("keep");
+    const dupe = buyEntry("dupe");
+    render(
+      <TickerGroupCard
+        ticker="PHAR"
+        group={{ buys: [keep, dupe], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 60, verifiedUnits: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set(["dupe"])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={onDiscardPending}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Suspected duplicate")).toBeInTheDocument();
+    const discardButton = screen.getByRole("button", { name: /Discard/ });
+    await user.click(discardButton);
+    expect(onDiscardPending).toHaveBeenCalledWith(dupe);
+  });
+
+  it("flags a still-pending Sell suggested as a within-batch duplicate, and Discard removes just that row", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
+    const dupe = sellEntry("s-dupe");
+    render(
+      <TickerGroupCard
+        ticker="PHAR"
+        group={{ buys: [], sells: [dupe], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 82, verifiedUnits: 82 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set(["s-dupe"])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={onDiscardPending}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Suspected duplicate")).toBeInTheDocument();
+    const discardButton = screen.getByTitle("Discard this duplicate row — it was never committed, so there's nothing to refund");
+    await user.click(discardButton);
+    expect(onDiscardPending).toHaveBeenCalledWith(dupe);
+  });
+
+  it("shows Discard (not a redundant 'Suspected duplicate' badge) for a lone pending row that duplicates a trade already committed to the ledger (the ARCC case)", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
+    const arcc = buyEntry("arcc-1");
+    render(
+      <TickerGroupCard
+        ticker="ARCC"
+        group={{ buys: [arcc], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 84, verifiedUnits: 42 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => ({ matchType: "possible", matchedId: "existing-trade-1" })}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set(["arcc-1"])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={onDiscardPending}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Possible duplicate")).toBeInTheDocument();
+    expect(screen.queryByText("Suspected duplicate")).not.toBeInTheDocument();
+    const discardButton = screen.getByRole("button", { name: /Discard/ });
+    await user.click(discardButton);
+    expect(onDiscardPending).toHaveBeenCalledWith(arcc);
+  });
+
+  it("does not show a Suspected duplicate badge or Discard button for a clean (non-flagged) row", () => {
+    render(
+      <TickerGroupCard
+        ticker="PHAR"
+        group={{ buys: [buyEntry("clean")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 30, verifiedUnits: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.queryByText("Suspected duplicate")).not.toBeInTheDocument();
+    expect(screen.queryByText("Discard")).not.toBeInTheDocument();
+  });
+
+  it("lets the user manually remove any unflagged pending row on an otherwise-unresolvable Mismatch (the ORHD case)", async () => {
+    const user = userEvent.setup();
+    const onDiscardPending = vi.fn();
+    const entry = buyEntry("orhd-suspect");
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [entry], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 99, verifiedUnits: 74 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={onDiscardPending}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.queryByText("Suspected duplicate")).not.toBeInTheDocument();
+    const removeButton = screen.getByTitle(/remove this row from the pending list/i);
+    await user.click(removeButton);
+    expect(onDiscardPending).toHaveBeenCalledWith(entry);
+  });
+});
+
+describe("TickerGroupCard — a bulk re-upload the ledger already accounts for (the EAST/ORAS mismatch case)", () => {
+  it("offers to discard every pending row at once when the ledger alone already reconciles with the broker", async () => {
+    const user = userEvent.setup();
+    const onDiscardAllPending = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="EAST"
+        group={{
+          buys: [buyEntry("e1"), buyEntry("e2"), buyEntry("e3"), buyEntry("e4"), buyEntry("e5")],
+          sells: [],
+          verifications: [],
+          dividends: [],
+        }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 350, verifiedUnits: 175, alreadyFullyRecorded: true }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={onDiscardAllPending}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/already matches the broker's count on its own/)).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Discard all pending for EAST" });
+    await user.click(button);
+    expect(onDiscardAllPending).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the plain Mismatch banner (no bulk-discard offer) for a genuine mismatch the ledger doesn't already explain", () => {
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [buyEntry("o1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 99, verifiedUnits: 74 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={{ multiple: false, names: ["long invest"] }}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/upload an Orders screenshot to confirm the exact transaction count/)).toBeInTheDocument();
+    expect(screen.queryByText("Discard all pending for ORHD")).not.toBeInTheDocument();
+  });
+
+  it("offers to replace an opening-balance placeholder with the batch's real dated rows instead of discarding them (the CSAG case)", async () => {
+    const user = userEvent.setup();
+    const onReplacePlaceholder = vi.fn();
+    const onDiscardAllPending = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="CSAG"
+        group={{ buys: [buyEntry("real-1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{
+          matched: false,
+          reason: "mismatch",
+          netShares: 408,
+          existingRemainingShares: 204,
+          verifiedUnits: 204,
+          alreadyFullyRecorded: true,
+        }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        placeholderReplacement
+        onReplacePlaceholder={onReplacePlaceholder}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={onDiscardAllPending}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/recorded position is an opening-balance placeholder/)).toBeInTheDocument();
+    expect(screen.queryByText("Discard all pending for CSAG")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Replace placeholder with real rows" }));
+    expect(onReplacePlaceholder).toHaveBeenCalledTimes(1);
+    expect(onDiscardAllPending).not.toHaveBeenCalled();
+  });
+});
+
+describe("TickerGroupCard — mismatch auto-reconcile suggestion (the ORHD 99-vs-74 case)", () => {
+  it("highlights the solver's suggested rows and removes exactly them on one click", async () => {
+    const user = userEvent.setup();
+    const onDiscardPendingKeys = vi.fn();
+    const keep = buyEntry("keep");
+    const remove = buyEntry("remove");
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [keep, remove], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "mismatch", netShares: 60, verifiedUnits: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        reconcileSuggestion={{ keysToRemove: ["remove"], alternatives: 1, rankedByAvgCost: true }}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardPendingKeys={onDiscardPendingKeys}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/lands closest to the broker's avg cost/)).toBeInTheDocument();
+    expect(screen.getByText(/1 other combination would also reconcile/)).toBeInTheDocument();
+    expect(screen.getByText("Suggested removal")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Remove suggested row/ }));
+    expect(onDiscardPendingKeys).toHaveBeenCalledWith(["remove"]);
+  });
+
+  it("badges a pending row that looks like another ticker's transaction read under a wrong ticker guess (the HRHO/Delta Sugar case)", () => {
+    render(
+      <TickerGroupCard
+        ticker="HRHO"
+        group={{ buys: [buyEntry("phantom")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: false, reason: "no-verification", netShares: 30 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        wrongTickerHints={new Map([["phantom", "SUGR"]])}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText("Likely SUGR's transaction")).toBeInTheDocument();
+  });
+});
+
+describe("TickerGroupCard — reconciliation transparency and company-name-fallback rename", () => {
+  it("shows the existing + batch = broker breakdown when a verified count includes invisible ledger shares (the ORHD 20+54=74 case)", () => {
+    render(
+      <TickerGroupCard
+        ticker="ORHD"
+        group={{ buys: [buyEntry("b1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-long"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 74, existingRemainingShares: 20, verifiedUnits: 74 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={vi.fn()}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+      />,
+    );
+    expect(screen.getByText(/20 already on the ledger \+ 54 in this batch = 74/)).toBeInTheDocument();
+  });
+
+  it("offers a one-click rename when the group's 'ticker' is a known company name (the DELTA SUGAR case)", async () => {
+    const user = userEvent.setup();
+    const onRenameTicker = vi.fn();
+    render(
+      <TickerGroupCard
+        ticker="DELTA SUGAR"
+        group={{ buys: [buyEntry("d1")], sells: [], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "closed-position", netShares: 0 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set()}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={() => undefined}
+        addedTradeIds={{}}
+        suspectedDuplicateKeys={new Set()}
+        onDeleteAutoAdded={vi.fn()}
+        onDiscardPending={vi.fn()}
+        onDiscardAllPending={vi.fn()}
+        onConfirmTicker={vi.fn()}
+        onAllocateSell={vi.fn()}
+        onRenameTicker={onRenameTicker}
+        existingPortfolioHint={undefined}
+        mergeSuggestion={undefined}
+        knownTickerSuggestion="SUGR"
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Rename to SUGR" }));
+    expect(onRenameTicker).toHaveBeenCalledWith("SUGR");
+  });
+
+  it("excludes a committed sell's own allocations from its duplicate check (the MEDINET Added+Duplicate case)", () => {
+    const duplicateMatch = vi.fn(() => undefined);
+    const entry = sellEntry("s1");
+    render(
+      <TickerGroupCard
+        ticker="SKPC"
+        group={{ buys: [], sells: [entry], verifications: [], dividends: [] }}
+        portfolios={PORTFOLIOS}
+        portfolioId="p-smc"
+        portfolioResolved
+        matchStatus={{ matched: true, reason: "matched", netShares: 0, verifiedUnits: 0 }}
+        distributing={false}
+        onPortfolioChange={vi.fn()}
+        addedKeys={new Set(["s1"])}
+        acceptedKeys={new Set()}
+        skippedKeys={new Set()}
+        dismissedKeys={new Set()}
+        rowErrors={{}}
+        duplicateMatch={duplicateMatch}
         addedTradeIds={{}}
         addedAllocationIds={{ s1: ["alloc-1", "alloc-2"] }}
         suspectedDuplicateKeys={new Set()}
@@ -494,7 +1260,7 @@ describe("TickerGroupCard â€” no-verification banner surfaces the current n
   });
 });
 
-describe("TickerGroupCard â€” per-ticker Confirm (the ORWE case: verified but blocked by an unrelated stuck ticker)", () => {
+describe("TickerGroupCard — per-ticker Confirm (the ORWE case: verified but blocked by an unrelated stuck ticker)", () => {
   it("shows a Confirm {ticker} button once matched and portfolio-resolved, independent of any other ticker", async () => {
     const user = userEvent.setup();
     const onConfirmTicker = vi.fn();
@@ -564,7 +1330,7 @@ describe("TickerGroupCard â€” per-ticker Confirm (the ORWE case: verified b
   });
 });
 
-describe("TickerGroupCard â€” an added Buy never shows a false self-duplicate badge", () => {
+describe("TickerGroupCard — an added Buy never shows a false self-duplicate badge", () => {
   it("passes the row's own committed trade id to duplicateMatch, so a successful commit excludes itself from the comparison", () => {
     const duplicateMatch = vi.fn(() => undefined);
     const added = buyEntry("added-1");
@@ -602,7 +1368,7 @@ describe("TickerGroupCard â€” an added Buy never shows a false self-duplica
   });
 });
 
-describe("TickerGroupCard â€” Orders timeline evidence", () => {
+describe("TickerGroupCard — Orders timeline evidence", () => {
   function orderEvidenceEntry(key: string, overrides: Partial<OrderEvidenceEntry["evidence"]> = {}): OrderEvidenceEntry {
     return {
       key,
@@ -620,7 +1386,7 @@ describe("TickerGroupCard â€” Orders timeline evidence", () => {
     };
   }
 
-  it("shows 'Verified â€” matches Orders history' plus the evidence rows, with the corroborated Buy badged", () => {
+  it("shows 'Verified — matches Orders history' plus the evidence rows, with the corroborated Buy badged", () => {
     render(
       <TickerGroupCard
         ticker="SKPC"
@@ -657,11 +1423,11 @@ describe("TickerGroupCard â€” Orders timeline evidence", () => {
         mergeSuggestion={undefined}
       />,
     );
-    expect(screen.getByText("Verified â€” matches Orders history")).toBeInTheDocument();
+    expect(screen.getByText("Verified — matches Orders history")).toBeInTheDocument();
     expect(screen.getByText("Matches Orders history")).toBeInTheDocument();
-    expect(screen.getByText("Ready â€” click Confirm above")).toBeInTheDocument();
+    expect(screen.getByText("Ready — click Confirm above")).toBeInTheDocument();
     expect(screen.getByText("Fulfilled")).toBeInTheDocument();
-    // Cancelled orders never render during manual review â€” a struck-through
+    // Cancelled orders never render during manual review — a struck-through
     // BUY/SELL line still reads like a transaction and invites recording
     // something that never executed.
     expect(screen.queryByText("Cancelled")).not.toBeInTheDocument();
@@ -713,7 +1479,7 @@ describe("TickerGroupCard â€” Orders timeline evidence", () => {
     expect(onDiscardOrderEvidence).toHaveBeenCalledWith(expect.objectContaining({ key: "skpc-o1" }));
   });
 
-  it("also badges the unconfirmed row on a no-verification ticker (e.g. a closed position with no My Position screen to ever upload) â€” not just on a mismatch", () => {
+  it("also badges the unconfirmed row on a no-verification ticker (e.g. a closed position with no My Position screen to ever upload) — not just on a mismatch", () => {
     render(
       <TickerGroupCard
         ticker="SKPC"
@@ -755,7 +1521,7 @@ describe("TickerGroupCard â€” Orders timeline evidence", () => {
   });
 });
 
-describe("TickerGroupCard â€” constraint validation layer (facts first, diagnosis only after a contradiction)", () => {
+describe("TickerGroupCard — constraint validation layer (facts first, diagnosis only after a contradiction)", () => {
   it("reports the constraint as satisfied, with no Contradiction/Diagnosis text, for a matched ticker", () => {
     render(
       <TickerGroupCard
@@ -794,8 +1560,8 @@ describe("TickerGroupCard â€” constraint validation layer (facts first, dia
       />,
     );
     expect(screen.getByText("Constraint check")).toBeInTheDocument();
-    expect(screen.getByText("Facts reconcile â€” no contradiction")).toBeInTheDocument();
-    expect(screen.getByText(/Opening 0 \+ Buy 30 âˆ’ Sell 0 = Calculated 30/)).toBeInTheDocument();
+    expect(screen.getByText("Facts reconcile — no contradiction")).toBeInTheDocument();
+    expect(screen.getByText(/Opening 0 \+ Buy 30 − Sell 0 = Calculated 30/)).toBeInTheDocument();
     expect(screen.queryByText("Diagnosis (after contradiction, never before)")).not.toBeInTheDocument();
   });
 
@@ -876,7 +1642,7 @@ describe("TickerGroupCard â€” constraint validation layer (facts first, dia
   });
 });
 
-describe("TickerGroupCard â€” closed-position recovery plan (the SKPC case: buy 82 == sell 82, no independent corroboration)", () => {
+describe("TickerGroupCard — closed-position recovery plan (the SKPC case: buy 82 == sell 82, no independent corroboration)", () => {
   const skpcMatchStatus = {
     matched: false,
     reason: "closed-position" as const,
@@ -915,9 +1681,9 @@ describe("TickerGroupCard â€” closed-position recovery plan (the SKPC case:
         mergeSuggestion={undefined}
       />,
     );
-    expect(screen.getByText("Closed â€” needs corroborating evidence")).toBeInTheDocument();
-    expect(screen.queryByText("Sold out â€” no screenshot needed")).not.toBeInTheDocument();
-    // No Confirm button either â€” matched is false, so nothing commits yet.
+    expect(screen.getByText("Closed — needs corroborating evidence")).toBeInTheDocument();
+    expect(screen.queryByText("Sold out — no screenshot needed")).not.toBeInTheDocument();
+    // No Confirm button either — matched is false, so nothing commits yet.
     expect(screen.queryByRole("button", { name: /Confirm/ })).not.toBeInTheDocument();
   });
 
@@ -954,7 +1720,7 @@ describe("TickerGroupCard â€” closed-position recovery plan (the SKPC case:
     expect(screen.queryByText(/My Position/)).not.toBeInTheDocument();
   });
 
-  it("shows no recovery plan once independently corroborated (matched: true) â€” nothing left to recover", () => {
+  it("shows no recovery plan once independently corroborated (matched: true) — nothing left to recover", () => {
     render(
       <TickerGroupCard
         ticker="SKPC"
@@ -986,4 +1752,3 @@ describe("TickerGroupCard â€” closed-position recovery plan (the SKPC case:
     expect(screen.queryByText(/Closes this gap:/)).not.toBeInTheDocument();
   });
 });
-
