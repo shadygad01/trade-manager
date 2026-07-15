@@ -113,7 +113,7 @@ describe("findDuplicateBuyMatch", () => {
 
   it("never matches two rows carrying different transaction numbers, even when ticker/date/shares/price all coincide", () => {
     // Two genuinely separate real buys (same stock, same day, same share
-    // count, near-identical price) â€” the exact false-positive a
+    // count, near-identical price) — the exact false-positive a
     // price/date/shares-only heuristic can't tell apart from a re-import.
     const trade = createTrade({
       id: "t1",
@@ -166,7 +166,7 @@ describe("findDuplicateBuyMatch", () => {
       shares: 100,
       entryPrice: 50,
       executionDate: "2026-06-01",
-      executionTime: "00:00", // never OCR'd â€” the placeholder ImportPage falls back to, not a real midnight execution
+      executionTime: "00:00", // never OCR'd — the placeholder ImportPage falls back to, not a real midnight execution
     });
     expect(findDuplicateBuyMatch(buyCandidate({ time: "14:30" }), [tradeNoTime])).toEqual({
       matchType: "exact",
@@ -191,9 +191,9 @@ describe("findDuplicateBuyMatch", () => {
   });
 
   // Real, reported bug: a manually-recorded trade's executionTime comes from
-  // an `<input type="time">` field â€” always 24-hour "HH:MM" (e.g. "12:51").
+  // an `<input type="time">` field — always 24-hour "HH:MM" (e.g. "12:51").
   // Every parser's candidate.time instead prints 12-hour with an AM/PM suffix
-  // (e.g. "12:51PM"). Same real clock time, different raw strings â€” before
+  // (e.g. "12:51PM"). Same real clock time, different raw strings — before
   // this fix, timesConflict compared them as plain strings and always
   // reported a conflict, so a broker Excel re-import of an already
   // manually-recorded historical trade was never recognized as a duplicate:
@@ -219,7 +219,7 @@ describe("findDuplicateBuyMatch", () => {
   });
 });
 
-describe("findDuplicateSellMatch â€” legacy allocations without sellGroupId", () => {
+describe("findDuplicateSellMatch — legacy allocations without sellGroupId", () => {
   it("re-unifies a sell split across lots by date+price so re-imports still match", () => {
     const base = {
       portfolioId: "p1",
@@ -452,7 +452,259 @@ describe("suggestDuplicateDividendIdsToDelete", () => {
 describe("suggestDuplicatePendingCandidateKeysToDelete", () => {
   it("collapses a real PHAR-shaped batch: two same-shares/date/side groups, each read three times at different prices/confidence, down to the single best-priced read per group", () => {
     const entries = [
-  …3897 tokens truncated…-14", source: "orders-screen" as const }) },
+      { key: "b1", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.72, date: "2026-04-15", confidence: "high" as const }) },
+      { key: "b2", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.36, date: "2026-04-15", confidence: "medium" as const }) },
+      { key: "b3", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.30, date: "2026-03-02", confidence: "medium" as const }) },
+      { key: "b4", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.56, date: "2026-03-02", confidence: "high" as const }) },
+      { key: "b5", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.36, date: "2026-04-15", confidence: "medium" as const }) },
+      { key: "b6", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.30, date: "2026-03-02", confidence: "medium" as const }) },
+    ];
+    // Keeps the highest-priced Buy in each group (b1 @86.72, b4 @78.56); everything else is a suggested duplicate.
+    expect(new Set(suggestDuplicatePendingCandidateKeysToDelete(entries))).toEqual(new Set(["b2", "b3", "b5", "b6"]));
+  });
+
+  it("keeps the lower-priced read for duplicate Sells, mirroring the opposite priority the app uses for Buys", () => {
+    const entries = [
+      { key: "s1", candidate: buyCandidate({ side: "SELL", ticker: "COMI", shares: 50, price: 42.1, date: "2026-05-01" }) },
+      { key: "s2", candidate: buyCandidate({ side: "SELL", ticker: "COMI", shares: 50, price: 42.5, date: "2026-05-01" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["s2"]);
+  });
+
+  it("does not flag candidates that differ in ticker, side, date, or shares", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ ticker: "COMI", shares: 10, date: "2026-05-01" }) },
+      { key: "b", candidate: buyCandidate({ ticker: "HRHO", shares: 10, date: "2026-05-01" }) },
+      { key: "c", candidate: buyCandidate({ ticker: "COMI", shares: 10, date: "2026-05-02" }) },
+      { key: "d", candidate: buyCandidate({ ticker: "COMI", shares: 20, date: "2026-05-01" }) },
+      { key: "e", candidate: buyCandidate({ ticker: "COMI", side: "SELL", shares: 10, date: "2026-05-01" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("returns nothing for a single candidate", () => {
+    const entries = [{ key: "a", candidate: buyCandidate() }];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("does NOT suggest deleting a same-signature sibling whose price sits clearly apart — possibly a different real trade", () => {
+    // Same ticker/side/date/shares but 50.00 vs 46.00 (~8% apart): two
+    // distinct same-day orders, not two reads of one execution. A false
+    // merge loses a real trade; leaving both pending just waits for the user.
+    const entries = [
+      { key: "a", candidate: buyCandidate({ price: 50.0 }) },
+      { key: "b", candidate: buyCandidate({ price: 46.0 }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("keeps the invoice-sourced read as survivor even when the price heuristic favors the other read", () => {
+    // Buy heuristic alone would keep the higher-priced statement read —
+    // but the invoice's labeled price + fees are ground truth.
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.2, source: "statement" }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice", fees: 4.32 }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["st"]);
+  });
+
+  it("does NOT merge two genuinely different invoice-sourced trades that happen to share ticker/side/date/shares and a close price, when their transaction numbers differ", () => {
+    // Two real, separate buys of the same stock on the same day for the same
+    // share count at a similar price — exactly the false-positive the price
+    // heuristic alone would wrongly collapse into one. A defined, differing
+    // transaction number is ground truth that they are NOT the same order.
+    const entries = [
+      { key: "inv1", candidate: buyCandidate({ price: 50.1, source: "invoice", transactionNumber: "N000000000001" }) },
+      { key: "inv2", candidate: buyCandidate({ price: 50.0, source: "invoice", transactionNumber: "N000000000002" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("merges two reads sharing the same transaction number even when their price gap exceeds the normal sibling tolerance", () => {
+    const entries = [
+      { key: "inv1", candidate: buyCandidate({ price: 50.0, source: "invoice", transactionNumber: "N000000000001" }) },
+      // >2% apart — outside SIBLING_DUPLICATE_PRICE_TOLERANCE — but the
+      // matching transaction number proves it's the same real order (e.g. a
+      // re-read of the same invoice with one OCR digit dropped).
+      { key: "inv2", candidate: buyCandidate({ price: 48.0, source: "invoice", transactionNumber: "N000000000001" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["inv2"]);
+  });
+
+  it("does NOT flag two same-signature Buys as duplicates when both carry a real, differing execution time (the RMDA case: two genuine same-day, same-price buys 28 minutes apart)", () => {
+    const entries = [
+      { key: "b1", candidate: buyCandidate({ ticker: "RMDA", price: 2.94, date: "2023-01-05", shares: 500, time: "10:33AM" }) },
+      { key: "b2", candidate: buyCandidate({ ticker: "RMDA", price: 2.94, date: "2023-01-05", shares: 500, time: "10:05AM" }) },
+    ];
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
+  });
+
+  it("still flags a same-signature pair as a duplicate when only one side carries a time (the routine statement+orders-screen pairing case)", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" }) }, // statement rows never carry a time
+      { key: "os", candidate: buyCandidate({ price: 50.0, source: "orders-screen", time: "10:33AM" }) },
+    ];
+    // "st" sorts first (tied price, stable sort keeps array order) and
+    // survives; "os" — missing a time on the OTHER side, so the new time
+    // guard doesn't apply — is still flagged as the duplicate to delete.
+    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["os"]);
+  });
+});
+
+describe("completeCandidateFieldsFromSiblings", () => {
+  it("copies missing fees/taxes/time from a price-close sibling of a different source, never overwriting present values", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32, time: "10:30" }) },
+    ];
+    const completions = completeCandidateFieldsFromSiblings(entries);
+    expect(completions.get("st")).toEqual({ fees: 4.32, time: "10:30", confidence: "high" });
+    // "inv" has no missing fields to backfill, but is itself corroborated by
+    // "st" (a different-source, same-execution sibling), so it also gets its
+    // confidence raised — corroboration is symmetric, not one-directional.
+    expect(completions.get("inv")).toEqual({ confidence: "high" });
+  });
+
+  it("prefers the invoice-sourced donor when several siblings carry the same field", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const }) },
+      { key: "os", candidate: buyCandidate({ price: 50.0, source: "orders-screen" as const, fees: 9.99 }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32 }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ fees: 4.32, confidence: "high" });
+  });
+
+  it("raises confidence to high when a different-source sibling corroborates the same execution, but never lowers it", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const, confidence: "low" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, confidence: "high" as const }) },
+    ];
+    const completions = completeCandidateFieldsFromSiblings(entries);
+    expect(completions.get("st")).toEqual({ confidence: "high" });
+    expect(completions.has("inv")).toBe(false);
+  });
+
+  it("never completes from a sibling whose price sits clearly apart (possibly a different real trade)", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 46.0, source: "invoice" as const, fees: 4.32 }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).size).toBe(0);
+  });
+
+  it("never enriches a legacy untyped candidate — its real document type is unknowable", () => {
+    const entries = [
+      { key: "old", candidate: buyCandidate({ price: 50.0 }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32 }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).has("old")).toBe(false);
+  });
+
+  it("never completes from a same-source sibling or an untyped legacy one", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ source: "statement" as const }) },
+      { key: "b", candidate: buyCandidate({ source: "statement" as const, fees: 4.32 }) },
+      { key: "c", candidate: buyCandidate({ fees: 9.99 }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).size).toBe(0);
+  });
+
+  it("backfills transactionNumber from an invoice sibling onto a statement row that never prints one", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, transactionNumber: "N000248458443" }) },
+    ];
+    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ transactionNumber: "N000248458443", confidence: "high" });
+  });
+
+  it("never overwrites a statement row's own transaction number with a sibling's different one", () => {
+    // Extremely unlikely in practice (a statement never actually prints an
+    // ID), but the "strictly additive, never overwrite" contract must hold
+    // for every field, not just the ones already covered.
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const, transactionNumber: "OWN" }) },
+      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, transactionNumber: "OTHER" }) },
+    ];
+    const completions = completeCandidateFieldsFromSiblings(entries);
+    expect(completions.has("st")).toBe(false);
+  });
+});
+
+describe("findCrossSourceVerifiedKeys", () => {
+  it("flags both sides of a pair where one candidate is an invoice and the other isn't (ORHD-shaped: OCR screenshot corroborated by an invoice)", () => {
+    const screenshotRead = { key: "s1", candidate: buyCandidate({ ticker: "ORHD", shares: 10, price: 23.13, date: "2026-01-14" }) };
+    const invoiceRead = {
+      key: "i1",
+      candidate: buyCandidate({ ticker: "ORHD", shares: 10, price: 23.2, date: "2026-01-14", source: "invoice" }),
+    };
+    const unrelated = { key: "u1", candidate: buyCandidate({ ticker: "ORHD", shares: 25, price: 22.77, date: "2026-01-15" }) };
+    const verified = findCrossSourceVerifiedKeys([screenshotRead, invoiceRead, unrelated]);
+    expect(verified).toEqual(new Set(["s1", "i1"]));
+  });
+
+  it("does not flag two candidates that are both invoices or both non-invoice (no cross-source corroboration)", () => {
+    const twoInvoices = [
+      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "invoice" as const }) },
+      { key: "b", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "invoice" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(twoInvoices)).toEqual(new Set());
+
+    const twoScreenshots = [
+      { key: "c", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
+      { key: "d", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(twoScreenshots)).toEqual(new Set());
+  });
+
+  it("does not flag a lone invoice-sourced candidate with no non-invoice sibling to corroborate", () => {
+    const entries = [{ key: "a", candidate: buyCandidate({ source: "invoice" as const }) }];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+
+  it("ignores ticker/side/date/shares mismatches — only an exact signature match cross-verifies", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
+      { key: "b", candidate: buyCandidate({ shares: 11, date: "2026-01-14", source: "invoice" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+
+  it("flags any pair of two DIFFERENT document types — statement + orders screenshot, no invoice involved", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+      { key: "os", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "orders-screen" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set(["st", "os"]));
+  });
+
+  it("flags a CSV export paired with a statement read", () => {
+    const entries = [
+      { key: "csv", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "csv" as const }) },
+      { key: "st", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set(["csv", "st"]));
+  });
+
+  it("never pairs two reads of the same document type — two statements are a re-upload, not independent confirmation", () => {
+    const entries = [
+      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+      { key: "b", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+
+  it("does not cross-verify two documents that share a signature but disagree on price — possibly two different real trades", () => {
+    const entries = [
+      { key: "st", candidate: buyCandidate({ price: 50.0, shares: 10, date: "2026-01-14", source: "statement" as const }) },
+      { key: "inv", candidate: buyCandidate({ price: 46.0, shares: 10, date: "2026-01-14", source: "invoice" as const }) },
+    ];
+    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
+  });
+
+  it("never pairs a legacy untyped candidate (pre-source session) with a typed non-invoice one — its real type is unknowable", () => {
+    const entries = [
+      { key: "old", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
+      { key: "new", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "orders-screen" as const }) },
     ];
     expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
   });
@@ -484,7 +736,7 @@ describe("findAggregateStatementMatches", () => {
   });
 
   it("prefers the smallest exact matching group when more than one subset would sum exactly", () => {
-    // 8,000 could be 5,000+3,000 or 4,000+4,000+... â€” a lone 8,000 row must
+    // 8,000 could be 5,000+3,000 or 4,000+4,000+... — a lone 8,000 row must
     // win over any multi-row combination if one exists in the pool.
     const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
     const solo = { key: "solo", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
@@ -494,7 +746,7 @@ describe("findAggregateStatementMatches", () => {
     expect(result.get("st")).toEqual(["solo"]);
   });
 
-  it("leaves a Statement row unmatched when no exact combination exists â€” never guesses a partial/approximate sum", () => {
+  it("leaves a Statement row unmatched when no exact combination exists — never guesses a partial/approximate sum", () => {
     const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
     const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
     const o2 = { key: "o2", candidate: buyCandidate({ shares: 2500, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
@@ -510,7 +762,7 @@ describe("findAggregateStatementMatches", () => {
     expect(result.has("st")).toBe(false);
   });
 
-  it("requires the same side â€” a Sell Statement row never matches Buy executions even with an exact share sum", () => {
+  it("requires the same side — a Sell Statement row never matches Buy executions even with an exact share sum", () => {
     const statement = {
       key: "st",
       candidate: buyCandidate({ side: "SELL" as const, shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }),
@@ -521,7 +773,7 @@ describe("findAggregateStatementMatches", () => {
     expect(result.has("st")).toBe(false);
   });
 
-  it("requires the same day â€” an exact share sum on a different date never matches", () => {
+  it("requires the same day — an exact share sum on a different date never matches", () => {
     const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
     const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-15", source: "orders-screen" as const }) };
     const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
@@ -529,7 +781,7 @@ describe("findAggregateStatementMatches", () => {
     expect(result.has("st")).toBe(false);
   });
 
-  it("never uses another Statement row as an execution â€” a Statement only ever aggregates higher-detail sources", () => {
+  it("never uses another Statement row as an execution — a Statement only ever aggregates higher-detail sources", () => {
     const statement = { key: "st1", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
     const otherStatement = { key: "st2", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
     const result = findAggregateStatementMatches([statement, otherStatement]);
@@ -544,14 +796,14 @@ describe("findAggregateStatementMatches", () => {
     expect(result.has("st")).toBe(false);
   });
 
-  it("never lets two different Statement rows aggregate the same execution â€” each execution is consumed once", () => {
+  it("never lets two different Statement rows aggregate the same execution — each execution is consumed once", () => {
     const st1 = { key: "st1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
     const st2 = { key: "st2", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
     const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
     const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
     const result = findAggregateStatementMatches([st1, st2, o1, o2]);
     // st1 (5,000) is processed first (smallest-shares-first) and claims o1
-    // outright â€” st2 (8,000) is left with only o2 (3,000) in the pool, which
+    // outright — st2 (8,000) is left with only o2 (3,000) in the pool, which
     // can't sum to 8,000, so it's correctly unmatched rather than reusing o1.
     expect(result.get("st1")).toEqual(["o1"]);
     expect(result.has("st2")).toBe(false);
@@ -565,7 +817,7 @@ describe("findAggregateStatementMatches", () => {
     const result = findAggregateStatementMatches([statement, o1, o2, o3]);
     const matchedKeys = result.get("st")!;
     // Every key returned actually belongs to the execution pool, never to the
-    // Statement row itself â€” committing the matched group plus skipping the
+    // Statement row itself — committing the matched group plus skipping the
     // Statement row accounts for exactly 10,000 shares once, not twice.
     expect(matchedKeys).not.toContain("st");
     const totalMatchedShares = matchedKeys
@@ -586,7 +838,7 @@ describe("keysToRaiseToHighConfidence", () => {
     expect(keysToRaiseToHighConfidence(entries, new Set(["a"]))).toEqual(["a"]);
   });
 
-  it("does not re-raise a row already at high confidence â€” avoids a no-op state write", () => {
+  it("does not re-raise a row already at high confidence — avoids a no-op state write", () => {
     const entries = [{ key: "a", candidate: buyCandidate({ confidence: "high" as const }) }];
     expect(keysToRaiseToHighConfidence(entries, new Set(["a"]))).toEqual([]);
   });
@@ -626,7 +878,7 @@ describe("findWrongTickerCandidateKeys", () => {
     expect(hints.get("hrho-1")).toBe("SUGR");
   });
 
-  it("does not flag when the prices are unrelated â€” same shares/date on different tickers is a coincidence without price proximity", () => {
+  it("does not flag when the prices are unrelated — same shares/date on different tickers is a coincidence without price proximity", () => {
     const coincidence = {
       key: "hrho-1",
       candidate: buyCandidate({ ticker: "HRHO", shares: 8, price: 24.9, date: "2026-01-06", confidence: "low" as const }),
@@ -634,7 +886,7 @@ describe("findWrongTickerCandidateKeys", () => {
     expect(findWrongTickerCandidateKeys([coincidence], [sugarTrade], []).size).toBe(0);
   });
 
-  it("does not flag a high-confidence pending read against a committed trade â€” an anchored ticker match is trusted", () => {
+  it("does not flag a high-confidence pending read against a committed trade — an anchored ticker match is trusted", () => {
     const anchored = {
       key: "hrho-1",
       candidate: buyCandidate({ ticker: "HRHO", shares: 8, price: 46.66, date: "2026-01-06", confidence: "high" as const }),
@@ -656,7 +908,7 @@ describe("findWrongTickerCandidateKeys", () => {
     expect(hints.has("sugr-1")).toBe(false);
   });
 
-  it("flags neither of an equal-confidence pending pair â€” no basis to pick which ticker is the wrong guess", () => {
+  it("flags neither of an equal-confidence pending pair — no basis to pick which ticker is the wrong guess", () => {
     const a = { key: "a", candidate: buyCandidate({ ticker: "SUGR", shares: 6, price: 46.48, date: "2026-01-11", confidence: "low" as const }) };
     const b = { key: "b", candidate: buyCandidate({ ticker: "HRHO", shares: 6, price: 45.92, date: "2026-01-11", confidence: "low" as const }) };
     expect(findWrongTickerCandidateKeys([a, b], [], []).size).toBe(0);
@@ -711,7 +963,7 @@ describe("findDateMisreadDuplicateHints", () => {
     expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
   });
 
-  it("does not flag an exact date match â€” that's the normal exact-duplicate path's job, not this one", () => {
+  it("does not flag an exact date match — that's the normal exact-duplicate path's job, not this one", () => {
     const committed = createTrade({
       id: "t1",
       portfolioId: "p1",
@@ -725,7 +977,7 @@ describe("findDateMisreadDuplicateHints", () => {
     expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
   });
 
-  it("does not flag dates differing in more than one digit position â€” too far from a single OCR misread to be safe", () => {
+  it("does not flag dates differing in more than one digit position — too far from a single OCR misread to be safe", () => {
     const committed = createTrade({
       id: "t1",
       portfolioId: "p1",
@@ -753,7 +1005,7 @@ describe("findDateMisreadDuplicateHints", () => {
     expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
   });
 
-  it("does not flag when the price genuinely differs â€” not the same execution", () => {
+  it("does not flag when the price genuinely differs — not the same execution", () => {
     const committed = createTrade({
       id: "t1",
       portfolioId: "p1",
@@ -802,4 +1054,3 @@ describe("findOfficialBrokerExcelReuploadDuplicateKeys", () => {
     expect(findOfficialBrokerExcelReuploadDuplicateKeys(entries, new Set(["first"]))).toEqual([]);
   });
 });
-
