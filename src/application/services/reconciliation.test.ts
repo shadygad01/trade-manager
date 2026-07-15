@@ -233,6 +233,20 @@ describe("isTickerOfficialBrokerExcelCoveredByCandidates", () => {
       ),
     ).toBe(false);
   });
+
+  it("recognizes a fully official closed workbook when legacy raw facts are absent", () => {
+    expect(
+      isTickerOfficialBrokerExcelCoveredByCandidates(
+        [],
+        "ADPC",
+        [
+          { ticker: "ADPC", side: "BUY", shares: 500, price: 1.8, date: "2022-11-27", source: "official-broker-excel" },
+          { ticker: "ADPC", side: "SELL", shares: 500, price: 1.86, date: "2022-11-28", source: "official-broker-excel" },
+        ],
+        0,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("suggestDuplicateTradeIds", () => {

@@ -2011,12 +2011,15 @@ export function ImportPage() {
       ].map((entry) => entry.candidate);
       const allSessionCandidatesFromOfficialBrokerExcel =
         sessionCandidatesForTicker.length > 0 && sessionCandidatesForTicker.every((candidate) => candidate.source === "official-broker-excel");
+      const existingRemainingShares = existingTrades
+        .filter((t) => normalizeTicker(t.ticker) === ticker)
+        .reduce((sum, t) => sum + t.remainingShares, 0);
       const allPendingFromOfficialBrokerExcel =
         remainingBuysAndSells.length > 0
           ? remainingBuysAndSells.every((e) => e.candidate.source === "official-broker-excel")
           : isTickerFullyOfficialBrokerExcelSourced(existingRawTransactions, ticker) ||
             (allSessionCandidatesFromOfficialBrokerExcel &&
-              isTickerOfficialBrokerExcelCoveredByCandidates(existingRawTransactions, ticker, sessionCandidatesForTicker));
+              isTickerOfficialBrokerExcelCoveredByCandidates(existingRawTransactions, ticker, sessionCandidatesForTicker, existingRemainingShares));
       const allPendingSelfVerified =
         remainingBuysAndSells.length > 0 &&
         remainingBuysAndSells.every(
@@ -2036,10 +2039,6 @@ export function ImportPage() {
             aggregateConfirmedKeys.has(e.key) ||
             orderConfirmedKeys.has(e.key),
         );
-      const existingRemainingShares = existingTrades
-        .filter((t) => normalizeTicker(t.ticker) === ticker)
-        .reduce((sum, t) => sum + t.remainingShares, 0);
-
       const verificationCandidates = [
         ...existingVerifications.filter((v) => normalizeTicker(v.ticker) === ticker),
         ...group.verifications.map((e) => e.verification),
