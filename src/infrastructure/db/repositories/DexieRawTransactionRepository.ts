@@ -21,6 +21,14 @@ export class DexieRawTransactionRepository implements RawTransactionRepository {
     return this.db.rawTransactions.get(id);
   }
 
+  async getRevision(): Promise<number> {
+    return (await this.db.rawTransactions.orderBy("seq").last())?.seq ?? 0;
+  }
+
+  async getControlFacts(): Promise<RawTransaction[]> {
+    return this.db.rawTransactions.where("kind").anyOf("PortfolioAssignment", "Correction", "Retraction").toArray();
+  }
+
   /**
    * The only write path onto this table — no update/delete exists anywhere
    * on this class, matching RawTransactionRepository's interface exactly.

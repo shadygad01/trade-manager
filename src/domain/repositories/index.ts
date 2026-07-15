@@ -111,6 +111,10 @@ export interface RawTransactionRepository {
   getByPortfolio(portfolioId: string): Promise<RawTransaction[]>;
   getByTicker(ticker: string): Promise<RawTransaction[]>;
   getById(id: string): Promise<RawTransaction | undefined>;
+  /** Monotonic change token used to keep targeted live queries reactive to append-only writes. */
+  getRevision?(): Promise<number>;
+  /** Lifecycle/control facts have no ticker of their own; fetch them alongside targeted execution rows. */
+  getControlFacts?(): Promise<RawTransaction[]>;
   /** Assigns `seq` atomically and persists the row. The only way a RawTransaction ever reaches storage. */
   append(transaction: Omit<RawTransaction, "seq">): Promise<RawTransaction>;
   /**

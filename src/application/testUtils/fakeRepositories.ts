@@ -196,6 +196,12 @@ export function createFakeRawTransactionRepository(seed: RawTransaction[] = []):
     async getById(id) {
       return store.get(id);
     },
+    async getRevision() {
+      return nextSeq;
+    },
+    async getControlFacts() {
+      return [...store.values()].filter((t) => t.kind === "PortfolioAssignment" || t.kind === "Correction" || t.kind === "Retraction");
+    },
     async append(transaction) {
       nextSeq += 1;
       const record = { ...transaction, seq: nextSeq };

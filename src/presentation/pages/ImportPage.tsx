@@ -254,7 +254,18 @@ export function ImportPage() {
   // the official broker Excel export (see tickerMatchStatuses below, and
   // reconciliation.ts's own doc comment on isTickerFullyOfficialBrokerExcelSourced).
   const existingRawTransactionsRaw = useLiveQuery(
-    () => queryByTickers(repos.rawTransactions),
+    async () => {
+      const rows = await queryByTickers(repos.rawTransactions);
+      const controls = await repos.rawTransactions.getControlFacts?.();
+      // Retraction/assignment facts intentionally have no ticker of their
+      // own. Reading the append-only sequence token keeps this targeted query
+      // reactive when such a fact changes the selected ticker's folded view,
+      // without falling back to a full raw-transaction table scan.
+      await repos.rawTransactions.getRevision?.();
+      if (!controls || controls.length === 0) return rows;
+      const seen = new Set(rows.map((row) => row.id));
+      return [...rows, ...controls.filter((control) => !seen.has(control.id))];
+    },
     [pendingTickerKey],
   );
   const existingRawTransactions = existingRawTransactionsRaw ?? [];
