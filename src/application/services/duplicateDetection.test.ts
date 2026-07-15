@@ -360,697 +360,4 @@ describe("findDuplicateSellMatch", () => {
       transactionNumber: "N000248458443",
     });
     const candidate = buyCandidate({ side: "SELL", transactionNumber: "N000248458443" });
-    expect(findDuplicateSellMatch(candidate, [allocation])).toEqual({ matchType: "exact", matchedId: "a1", matchedPrice: 999 });
-  });
-
-  it("never matches two sell orders carrying different transaction numbers, even at the same date/shares/price", () => {
-    const allocation = createTradeAllocation({
-      id: "a1",
-      sellGroupId: "sg1",
-      portfolioId: "p1",
-      tradeId: "t1",
-      ticker: "COMI",
-      sharesClosed: 100,
-      exitPrice: 50,
-      executionDate: "2026-06-01",
-      executionTime: "11:00",
-      transactionNumber: "N000000000001",
-    });
-    const candidate = buyCandidate({ side: "SELL", price: 50, transactionNumber: "N000000000002" });
-    expect(findDuplicateSellMatch(candidate, [allocation])).toBeUndefined();
-  });
-});
-
-describe("buildExistingDividendKeys / isDividendAlreadyRecorded", () => {
-  it("flags a dividend matching an already-recorded Dividend event by ticker/date/amount", () => {
-    const events = [
-      createTimelineEvent({
-        id: "e1",
-        portfolioId: "p1",
-        type: "Dividend",
-        timestamp: "2026-04-15T00:00",
-        ticker: "comi.ca",
-        amount: 114,
-      }),
-    ];
-    const keys = buildExistingDividendKeys(events);
-    expect(isDividendAlreadyRecorded({ ticker: "COMI", date: "2026-04-15", amount: 114 }, keys)).toBe(true);
-  });
-
-  it("ignores non-Dividend events and events with no ticker/amount", () => {
-    const events = [
-      createTimelineEvent({ id: "e1", portfolioId: "p1", type: "Buy", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: -114 }),
-      createTimelineEvent({ id: "e2", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", amount: 114 }),
-      createTimelineEvent({ id: "e3", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", ticker: "COMI" }),
-    ];
-    const keys = buildExistingDividendKeys(events);
-    expect(isDividendAlreadyRecorded({ ticker: "COMI", date: "2026-04-15", amount: 114 }, keys)).toBe(false);
-  });
-
-  it("does not flag a dividend with a different amount, date, or ticker", () => {
-    const events = [
-      createTimelineEvent({ id: "e1", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: 114 }),
-    ];
-    const keys = buildExistingDividendKeys(events);
-    expect(isDividendAlreadyRecorded({ ticker: "COMI", date: "2026-04-15", amount: 50 }, keys)).toBe(false);
-    expect(isDividendAlreadyRecorded({ ticker: "COMI", date: "2026-05-15", amount: 114 }, keys)).toBe(false);
-    expect(isDividendAlreadyRecorded({ ticker: "HRHO", date: "2026-04-15", amount: 114 }, keys)).toBe(false);
-  });
-});
-
-describe("suggestDuplicateDividendIdsToDelete", () => {
-  it("suggests every event but the first in a same-ticker/date/amount group", () => {
-    const events = [
-      createTimelineEvent({ id: "e1", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: 114 }),
-      createTimelineEvent({ id: "e2", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: 114 }),
-      createTimelineEvent({ id: "e3", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: 114 }),
-    ];
-    expect(suggestDuplicateDividendIdsToDelete(events)).toEqual(["e2", "e3"]);
-  });
-
-  it("does not flag dividends that differ in ticker, date, or amount", () => {
-    const events = [
-      createTimelineEvent({ id: "e1", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: 114 }),
-      createTimelineEvent({ id: "e2", portfolioId: "p1", type: "Dividend", timestamp: "2026-05-15T00:00", ticker: "COMI", amount: 114 }),
-      createTimelineEvent({ id: "e3", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", ticker: "HRHO", amount: 114 }),
-      createTimelineEvent({ id: "e4", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: 50 }),
-    ];
-    expect(suggestDuplicateDividendIdsToDelete(events)).toEqual([]);
-  });
-
-  it("ignores non-Dividend events and dividends with no ticker", () => {
-    const events = [
-      createTimelineEvent({ id: "e1", portfolioId: "p1", type: "Buy", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: 114 }),
-      createTimelineEvent({ id: "e2", portfolioId: "p1", type: "Buy", timestamp: "2026-04-15T00:00", ticker: "COMI", amount: 114 }),
-      createTimelineEvent({ id: "e3", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", amount: 114 }),
-      createTimelineEvent({ id: "e4", portfolioId: "p1", type: "Dividend", timestamp: "2026-04-15T00:00", amount: 114 }),
-    ];
-    expect(suggestDuplicateDividendIdsToDelete(events)).toEqual([]);
-  });
-});
-
-describe("suggestDuplicatePendingCandidateKeysToDelete", () => {
-  it("collapses a real PHAR-shaped batch: two same-shares/date/side groups, each read three times at different prices/confidence, down to the single best-priced read per group", () => {
-    const entries = [
-      { key: "b1", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.72, date: "2026-04-15", confidence: "high" as const }) },
-      { key: "b2", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.36, date: "2026-04-15", confidence: "medium" as const }) },
-      { key: "b3", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.30, date: "2026-03-02", confidence: "medium" as const }) },
-      { key: "b4", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.56, date: "2026-03-02", confidence: "high" as const }) },
-      { key: "b5", candidate: buyCandidate({ ticker: "PHAR", shares: 12, price: 86.36, date: "2026-04-15", confidence: "medium" as const }) },
-      { key: "b6", candidate: buyCandidate({ ticker: "PHAR", shares: 19, price: 78.30, date: "2026-03-02", confidence: "medium" as const }) },
-    ];
-    // Keeps the highest-priced Buy in each group (b1 @86.72, b4 @78.56); everything else is a suggested duplicate.
-    expect(new Set(suggestDuplicatePendingCandidateKeysToDelete(entries))).toEqual(new Set(["b2", "b3", "b5", "b6"]));
-  });
-
-  it("keeps the lower-priced read for duplicate Sells, mirroring the opposite priority the app uses for Buys", () => {
-    const entries = [
-      { key: "s1", candidate: buyCandidate({ side: "SELL", ticker: "COMI", shares: 50, price: 42.1, date: "2026-05-01" }) },
-      { key: "s2", candidate: buyCandidate({ side: "SELL", ticker: "COMI", shares: 50, price: 42.5, date: "2026-05-01" }) },
-    ];
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["s2"]);
-  });
-
-  it("does not flag candidates that differ in ticker, side, date, or shares", () => {
-    const entries = [
-      { key: "a", candidate: buyCandidate({ ticker: "COMI", shares: 10, date: "2026-05-01" }) },
-      { key: "b", candidate: buyCandidate({ ticker: "HRHO", shares: 10, date: "2026-05-01" }) },
-      { key: "c", candidate: buyCandidate({ ticker: "COMI", shares: 10, date: "2026-05-02" }) },
-      { key: "d", candidate: buyCandidate({ ticker: "COMI", shares: 20, date: "2026-05-01" }) },
-      { key: "e", candidate: buyCandidate({ ticker: "COMI", side: "SELL", shares: 10, date: "2026-05-01" }) },
-    ];
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
-  });
-
-  it("returns nothing for a single candidate", () => {
-    const entries = [{ key: "a", candidate: buyCandidate() }];
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
-  });
-
-  it("does NOT suggest deleting a same-signature sibling whose price sits clearly apart â€” possibly a different real trade", () => {
-    // Same ticker/side/date/shares but 50.00 vs 46.00 (~8% apart): two
-    // distinct same-day orders, not two reads of one execution. A false
-    // merge loses a real trade; leaving both pending just waits for the user.
-    const entries = [
-      { key: "a", candidate: buyCandidate({ price: 50.0 }) },
-      { key: "b", candidate: buyCandidate({ price: 46.0 }) },
-    ];
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
-  });
-
-  it("keeps the invoice-sourced read as survivor even when the price heuristic favors the other read", () => {
-    // Buy heuristic alone would keep the higher-priced statement read â€”
-    // but the invoice's labeled price + fees are ground truth.
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.2, source: "statement" }) },
-      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice", fees: 4.32 }) },
-    ];
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["st"]);
-  });
-
-  it("does NOT merge two genuinely different invoice-sourced trades that happen to share ticker/side/date/shares and a close price, when their transaction numbers differ", () => {
-    // Two real, separate buys of the same stock on the same day for the same
-    // share count at a similar price â€” exactly the false-positive the price
-    // heuristic alone would wrongly collapse into one. A defined, differing
-    // transaction number is ground truth that they are NOT the same order.
-    const entries = [
-      { key: "inv1", candidate: buyCandidate({ price: 50.1, source: "invoice", transactionNumber: "N000000000001" }) },
-      { key: "inv2", candidate: buyCandidate({ price: 50.0, source: "invoice", transactionNumber: "N000000000002" }) },
-    ];
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
-  });
-
-  it("merges two reads sharing the same transaction number even when their price gap exceeds the normal sibling tolerance", () => {
-    const entries = [
-      { key: "inv1", candidate: buyCandidate({ price: 50.0, source: "invoice", transactionNumber: "N000000000001" }) },
-      // >2% apart â€” outside SIBLING_DUPLICATE_PRICE_TOLERANCE â€” but the
-      // matching transaction number proves it's the same real order (e.g. a
-      // re-read of the same invoice with one OCR digit dropped).
-      { key: "inv2", candidate: buyCandidate({ price: 48.0, source: "invoice", transactionNumber: "N000000000001" }) },
-    ];
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["inv2"]);
-  });
-
-  it("does NOT flag two same-signature Buys as duplicates when both carry a real, differing execution time (the RMDA case: two genuine same-day, same-price buys 28 minutes apart)", () => {
-    const entries = [
-      { key: "b1", candidate: buyCandidate({ ticker: "RMDA", price: 2.94, date: "2023-01-05", shares: 500, time: "10:33AM" }) },
-      { key: "b2", candidate: buyCandidate({ ticker: "RMDA", price: 2.94, date: "2023-01-05", shares: 500, time: "10:05AM" }) },
-    ];
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual([]);
-  });
-
-  it("still flags a same-signature pair as a duplicate when only one side carries a time (the routine statement+orders-screen pairing case)", () => {
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" }) }, // statement rows never carry a time
-      { key: "os", candidate: buyCandidate({ price: 50.0, source: "orders-screen", time: "10:33AM" }) },
-    ];
-    // "st" sorts first (tied price, stable sort keeps array order) and
-    // survives; "os" â€” missing a time on the OTHER side, so the new time
-    // guard doesn't apply â€” is still flagged as the duplicate to delete.
-    expect(suggestDuplicatePendingCandidateKeysToDelete(entries)).toEqual(["os"]);
-  });
-});
-
-describe("completeCandidateFieldsFromSiblings", () => {
-  it("copies missing fees/taxes/time from a price-close sibling of a different source, never overwriting present values", () => {
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const }) },
-      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32, time: "10:30" }) },
-    ];
-    const completions = completeCandidateFieldsFromSiblings(entries);
-    expect(completions.get("st")).toEqual({ fees: 4.32, time: "10:30", confidence: "high" });
-    // "inv" has no missing fields to backfill, but is itself corroborated by
-    // "st" (a different-source, same-execution sibling), so it also gets its
-    // confidence raised â€” corroboration is symmetric, not one-directional.
-    expect(completions.get("inv")).toEqual({ confidence: "high" });
-  });
-
-  it("prefers the invoice-sourced donor when several siblings carry the same field", () => {
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const }) },
-      { key: "os", candidate: buyCandidate({ price: 50.0, source: "orders-screen" as const, fees: 9.99 }) },
-      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32 }) },
-    ];
-    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ fees: 4.32, confidence: "high" });
-  });
-
-  it("raises confidence to high when a different-source sibling corroborates the same execution, but never lowers it", () => {
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const, confidence: "low" as const }) },
-      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, confidence: "high" as const }) },
-    ];
-    const completions = completeCandidateFieldsFromSiblings(entries);
-    expect(completions.get("st")).toEqual({ confidence: "high" });
-    expect(completions.has("inv")).toBe(false);
-  });
-
-  it("never completes from a sibling whose price sits clearly apart (possibly a different real trade)", () => {
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.0, source: "statement" as const }) },
-      { key: "inv", candidate: buyCandidate({ price: 46.0, source: "invoice" as const, fees: 4.32 }) },
-    ];
-    expect(completeCandidateFieldsFromSiblings(entries).size).toBe(0);
-  });
-
-  it("never enriches a legacy untyped candidate â€” its real document type is unknowable", () => {
-    const entries = [
-      { key: "old", candidate: buyCandidate({ price: 50.0 }) },
-      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, fees: 4.32 }) },
-    ];
-    expect(completeCandidateFieldsFromSiblings(entries).has("old")).toBe(false);
-  });
-
-  it("never completes from a same-source sibling or an untyped legacy one", () => {
-    const entries = [
-      { key: "a", candidate: buyCandidate({ source: "statement" as const }) },
-      { key: "b", candidate: buyCandidate({ source: "statement" as const, fees: 4.32 }) },
-      { key: "c", candidate: buyCandidate({ fees: 9.99 }) },
-    ];
-    expect(completeCandidateFieldsFromSiblings(entries).size).toBe(0);
-  });
-
-  it("backfills transactionNumber from an invoice sibling onto a statement row that never prints one", () => {
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const }) },
-      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, transactionNumber: "N000248458443" }) },
-    ];
-    expect(completeCandidateFieldsFromSiblings(entries).get("st")).toEqual({ transactionNumber: "N000248458443", confidence: "high" });
-  });
-
-  it("never overwrites a statement row's own transaction number with a sibling's different one", () => {
-    // Extremely unlikely in practice (a statement never actually prints an
-    // ID), but the "strictly additive, never overwrite" contract must hold
-    // for every field, not just the ones already covered.
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.1, source: "statement" as const, transactionNumber: "OWN" }) },
-      { key: "inv", candidate: buyCandidate({ price: 50.0, source: "invoice" as const, transactionNumber: "OTHER" }) },
-    ];
-    const completions = completeCandidateFieldsFromSiblings(entries);
-    expect(completions.has("st")).toBe(false);
-  });
-});
-
-describe("findCrossSourceVerifiedKeys", () => {
-  it("flags both sides of a pair where one candidate is an invoice and the other isn't (ORHD-shaped: OCR screenshot corroborated by an invoice)", () => {
-    const screenshotRead = { key: "s1", candidate: buyCandidate({ ticker: "ORHD", shares: 10, price: 23.13, date: "2026-01-14" }) };
-    const invoiceRead = {
-      key: "i1",
-      candidate: buyCandidate({ ticker: "ORHD", shares: 10, price: 23.2, date: "2026-01-14", source: "invoice" }),
-    };
-    const unrelated = { key: "u1", candidate: buyCandidate({ ticker: "ORHD", shares: 25, price: 22.77, date: "2026-01-15" }) };
-    const verified = findCrossSourceVerifiedKeys([screenshotRead, invoiceRead, unrelated]);
-    expect(verified).toEqual(new Set(["s1", "i1"]));
-  });
-
-  it("does not flag two candidates that are both invoices or both non-invoice (no cross-source corroboration)", () => {
-    const twoInvoices = [
-      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "invoice" as const }) },
-      { key: "b", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "invoice" as const }) },
-    ];
-    expect(findCrossSourceVerifiedKeys(twoInvoices)).toEqual(new Set());
-
-    const twoScreenshots = [
-      { key: "c", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
-      { key: "d", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
-    ];
-    expect(findCrossSourceVerifiedKeys(twoScreenshots)).toEqual(new Set());
-  });
-
-  it("does not flag a lone invoice-sourced candidate with no non-invoice sibling to corroborate", () => {
-    const entries = [{ key: "a", candidate: buyCandidate({ source: "invoice" as const }) }];
-    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
-  });
-
-  it("ignores ticker/side/date/shares mismatches â€” only an exact signature match cross-verifies", () => {
-    const entries = [
-      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
-      { key: "b", candidate: buyCandidate({ shares: 11, date: "2026-01-14", source: "invoice" as const }) },
-    ];
-    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
-  });
-
-  it("flags any pair of two DIFFERENT document types â€” statement + orders screenshot, no invoice involved", () => {
-    const entries = [
-      { key: "st", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
-      { key: "os", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "orders-screen" as const }) },
-    ];
-    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set(["st", "os"]));
-  });
-
-  it("flags a CSV export paired with a statement read", () => {
-    const entries = [
-      { key: "csv", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "csv" as const }) },
-      { key: "st", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
-    ];
-    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set(["csv", "st"]));
-  });
-
-  it("never pairs two reads of the same document type â€” two statements are a re-upload, not independent confirmation", () => {
-    const entries = [
-      { key: "a", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
-      { key: "b", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "statement" as const }) },
-    ];
-    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
-  });
-
-  it("does not cross-verify two documents that share a signature but disagree on price â€” possibly two different real trades", () => {
-    const entries = [
-      { key: "st", candidate: buyCandidate({ price: 50.0, shares: 10, date: "2026-01-14", source: "statement" as const }) },
-      { key: "inv", candidate: buyCandidate({ price: 46.0, shares: 10, date: "2026-01-14", source: "invoice" as const }) },
-    ];
-    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
-  });
-
-  it("never pairs a legacy untyped candidate (pre-source session) with a typed non-invoice one â€” its real type is unknowable", () => {
-    const entries = [
-      { key: "old", candidate: buyCandidate({ shares: 10, date: "2026-01-14" }) },
-      { key: "new", candidate: buyCandidate({ shares: 10, date: "2026-01-14", source: "orders-screen" as const }) },
-    ];
-    expect(findCrossSourceVerifiedKeys(entries)).toEqual(new Set());
-  });
-});
-
-describe("findAggregateStatementMatches", () => {
-  it("Case 1: a Statement row matches exactly one same-day execution of the identical share count", () => {
-    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const order = { key: "o1", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([statement, order]);
-    expect(result.get("st")).toEqual(["o1"]);
-  });
-
-  it("Case 2: a Statement row aggregates two executions whose shares sum exactly (8,000 = 5,000 + 3,000)", () => {
-    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([statement, o1, o2]);
-    expect(new Set(result.get("st"))).toEqual(new Set(["o1", "o2"]));
-  });
-
-  it("Case 2: a Statement row aggregates three executions whose shares sum exactly (10,000 = 2,000 + 3,000 + 5,000)", () => {
-    const statement = { key: "st", candidate: buyCandidate({ shares: 10000, price: 6.5, date: "2026-02-01", source: "statement" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 2000, price: 6.5, date: "2026-02-01", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 6.5, date: "2026-02-01", source: "invoice" as const }) };
-    const o3 = { key: "o3", candidate: buyCandidate({ shares: 5000, price: 6.5, date: "2026-02-01", source: "csv" as const }) };
-    const result = findAggregateStatementMatches([statement, o1, o2, o3]);
-    expect(new Set(result.get("st"))).toEqual(new Set(["o1", "o2", "o3"]));
-  });
-
-  it("prefers the smallest exact matching group when more than one subset would sum exactly", () => {
-    // 8,000 could be 5,000+3,000 or 4,000+4,000+... â€” a lone 8,000 row must
-    // win over any multi-row combination if one exists in the pool.
-    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const solo = { key: "solo", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([statement, solo, o1, o2]);
-    expect(result.get("st")).toEqual(["solo"]);
-  });
-
-  it("leaves a Statement row unmatched when no exact combination exists â€” never guesses a partial/approximate sum", () => {
-    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 2500, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([statement, o1, o2]);
-    expect(result.has("st")).toBe(false);
-  });
-
-  it("rejects a subset that sums exactly but whose weighted-average price disagrees with the Statement row", () => {
-    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 5.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 5.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([statement, o1, o2]);
-    expect(result.has("st")).toBe(false);
-  });
-
-  it("requires the same side â€” a Sell Statement row never matches Buy executions even with an exact share sum", () => {
-    const statement = {
-      key: "st",
-      candidate: buyCandidate({ side: "SELL" as const, shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }),
-    };
-    const o1 = { key: "o1", candidate: buyCandidate({ side: "BUY" as const, shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ side: "BUY" as const, shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([statement, o1, o2]);
-    expect(result.has("st")).toBe(false);
-  });
-
-  it("requires the same day â€” an exact share sum on a different date never matches", () => {
-    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-15", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([statement, o1, o2]);
-    expect(result.has("st")).toBe(false);
-  });
-
-  it("never uses another Statement row as an execution â€” a Statement only ever aggregates higher-detail sources", () => {
-    const statement = { key: "st1", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const otherStatement = { key: "st2", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const result = findAggregateStatementMatches([statement, otherStatement]);
-    expect(result.has("st1")).toBe(false);
-  });
-
-  it("skips a Statement row already resolved by direct 1:1 cross-source verification (alreadyVerifiedKeys)", () => {
-    const statement = { key: "st", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([statement, o1, o2], new Set(["st"]));
-    expect(result.has("st")).toBe(false);
-  });
-
-  it("never lets two different Statement rows aggregate the same execution â€” each execution is consumed once", () => {
-    const st1 = { key: "st1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const st2 = { key: "st2", candidate: buyCandidate({ shares: 8000, price: 8.0, date: "2026-01-14", source: "statement" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 5000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 8.0, date: "2026-01-14", source: "orders-screen" as const }) };
-    const result = findAggregateStatementMatches([st1, st2, o1, o2]);
-    // st1 (5,000) is processed first (smallest-shares-first) and claims o1
-    // outright â€” st2 (8,000) is left with only o2 (3,000) in the pool, which
-    // can't sum to 8,000, so it's correctly unmatched rather than reusing o1.
-    expect(result.get("st1")).toEqual(["o1"]);
-    expect(result.has("st2")).toBe(false);
-  });
-
-  it("no candidate is ever double-counted: a Statement row plus its matched group never produce more committed trades than the underlying executions", () => {
-    const statement = { key: "st", candidate: buyCandidate({ shares: 10000, price: 6.5, date: "2026-02-01", source: "statement" as const }) };
-    const o1 = { key: "o1", candidate: buyCandidate({ shares: 2000, price: 6.5, date: "2026-02-01", source: "orders-screen" as const }) };
-    const o2 = { key: "o2", candidate: buyCandidate({ shares: 3000, price: 6.5, date: "2026-02-01", source: "invoice" as const }) };
-    const o3 = { key: "o3", candidate: buyCandidate({ shares: 5000, price: 6.5, date: "2026-02-01", source: "csv" as const }) };
-    const result = findAggregateStatementMatches([statement, o1, o2, o3]);
-    const matchedKeys = result.get("st")!;
-    // Every key returned actually belongs to the execution pool, never to the
-    // Statement row itself â€” committing the matched group plus skipping the
-    // Statement row accounts for exactly 10,000 shares once, not twice.
-    expect(matchedKeys).not.toContain("st");
-    const totalMatchedShares = matchedKeys
-      .map((k) => [o1, o2, o3].find((e) => e.key === k)!.candidate.shares)
-      .reduce((a, b) => a + b, 0);
-    expect(totalMatchedShares).toBe(statement.candidate.shares);
-  });
-});
-
-describe("keysToRaiseToHighConfidence", () => {
-  it("raises a low-confidence row that's in the corroborated set", () => {
-    const entries = [{ key: "a", candidate: buyCandidate({ confidence: "low" as const }) }];
-    expect(keysToRaiseToHighConfidence(entries, new Set(["a"]))).toEqual(["a"]);
-  });
-
-  it("raises a medium-confidence row that's in the corroborated set", () => {
-    const entries = [{ key: "a", candidate: buyCandidate({ confidence: "medium" as const }) }];
-    expect(keysToRaiseToHighConfidence(entries, new Set(["a"]))).toEqual(["a"]);
-  });
-
-  it("does not re-raise a row already at high confidence â€” avoids a no-op state write", () => {
-    const entries = [{ key: "a", candidate: buyCandidate({ confidence: "high" as const }) }];
-    expect(keysToRaiseToHighConfidence(entries, new Set(["a"]))).toEqual([]);
-  });
-
-  it("leaves a low-confidence row alone when it isn't in the corroborated set", () => {
-    const entries = [{ key: "a", candidate: buyCandidate({ confidence: "low" as const }) }];
-    expect(keysToRaiseToHighConfidence(entries, new Set())).toEqual([]);
-  });
-
-  it("only raises the corroborated rows out of a mixed batch", () => {
-    const entries = [
-      { key: "a", candidate: buyCandidate({ confidence: "low" as const }) },
-      { key: "b", candidate: buyCandidate({ confidence: "medium" as const }) },
-      { key: "c", candidate: buyCandidate({ confidence: "low" as const }) },
-    ];
-    expect(keysToRaiseToHighConfidence(entries, new Set(["a", "b"]))).toEqual(["a", "b"]);
-  });
-});
-
-describe("findWrongTickerCandidateKeys", () => {
-  const sugarTrade = createTrade({
-    id: "t-sugr",
-    portfolioId: "p1",
-    ticker: "SUGR",
-    shares: 8,
-    entryPrice: 47.09,
-    executionDate: "2026-01-06",
-    executionTime: "10:00",
-  });
-
-  it("flags a low-confidence pending Buy matching another ticker's committed trade at a near-identical price (the HRHO/Delta Sugar case)", () => {
-    const phantom = {
-      key: "hrho-1",
-      candidate: buyCandidate({ ticker: "HRHO", shares: 8, price: 46.66, date: "2026-01-06", confidence: "low" as const }),
-    };
-    const hints = findWrongTickerCandidateKeys([phantom], [sugarTrade], []);
-    expect(hints.get("hrho-1")).toBe("SUGR");
-  });
-
-  it("does not flag when the prices are unrelated â€” same shares/date on different tickers is a coincidence without price proximity", () => {
-    const coincidence = {
-      key: "hrho-1",
-      candidate: buyCandidate({ ticker: "HRHO", shares: 8, price: 24.9, date: "2026-01-06", confidence: "low" as const }),
-    };
-    expect(findWrongTickerCandidateKeys([coincidence], [sugarTrade], []).size).toBe(0);
-  });
-
-  it("does not flag a high-confidence pending read against a committed trade â€” an anchored ticker match is trusted", () => {
-    const anchored = {
-      key: "hrho-1",
-      candidate: buyCandidate({ ticker: "HRHO", shares: 8, price: 46.66, date: "2026-01-06", confidence: "high" as const }),
-    };
-    expect(findWrongTickerCandidateKeys([anchored], [sugarTrade], []).size).toBe(0);
-  });
-
-  it("flags the strictly-lower-confidence copy of a pending pair under two different tickers, never the better one", () => {
-    const real = {
-      key: "sugr-1",
-      candidate: buyCandidate({ ticker: "SUGR", shares: 6, price: 46.48, date: "2026-01-11", confidence: "high" as const }),
-    };
-    const phantom = {
-      key: "hrho-2",
-      candidate: buyCandidate({ ticker: "HRHO", shares: 6, price: 45.92, date: "2026-01-11", confidence: "low" as const }),
-    };
-    const hints = findWrongTickerCandidateKeys([real, phantom], [], []);
-    expect(hints.get("hrho-2")).toBe("SUGR");
-    expect(hints.has("sugr-1")).toBe(false);
-  });
-
-  it("flags neither of an equal-confidence pending pair â€” no basis to pick which ticker is the wrong guess", () => {
-    const a = { key: "a", candidate: buyCandidate({ ticker: "SUGR", shares: 6, price: 46.48, date: "2026-01-11", confidence: "low" as const }) };
-    const b = { key: "b", candidate: buyCandidate({ ticker: "HRHO", shares: 6, price: 45.92, date: "2026-01-11", confidence: "low" as const }) };
-    expect(findWrongTickerCandidateKeys([a, b], [], []).size).toBe(0);
-  });
-
-  it("flags a pending Sell matching another ticker's committed allocation the same way", () => {
-    const allocation = createTradeAllocation({
-      id: "a1",
-      sellGroupId: "sg1",
-      tradeId: "t-sugr",
-      portfolioId: "p1",
-      ticker: "SUGR",
-      sharesClosed: 22,
-      exitPrice: 50.42,
-      executionDate: "2026-01-27",
-      executionTime: "10:00",
-    });
-    const phantomSell = {
-      key: "hrho-s1",
-      candidate: buyCandidate({ ticker: "HRHO", side: "SELL" as const, shares: 22, price: 50.1, date: "2026-01-27", confidence: "low" as const }),
-    };
-    const hints = findWrongTickerCandidateKeys([phantomSell], [], [allocation]);
-    expect(hints.get("hrho-s1")).toBe("SUGR");
-  });
-});
-
-describe("findDateMisreadDuplicateHints", () => {
-  it("flags a pending Buy whose day was likely misread by one digit against an already-committed trade (the real RMDA case: 11 Jan vs 01 Jan)", () => {
-    const committed = createTrade({
-      id: "t1",
-      portfolioId: "p1",
-      ticker: "RMDA",
-      shares: 500,
-      entryPrice: 2.79,
-      executionDate: "2023-01-11",
-      executionTime: "10:34",
-    });
-    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 2.79, date: "2023-01-01" }) };
-    const hints = findDateMisreadDuplicateHints([pending], [committed], []);
-    expect(hints.get("p1")).toBe("2023-01-11");
-  });
-
-  it("never applies an OCR date-misread warning to a native broker Excel row", () => {
-    const committed = createTrade({
-      id: "t1", portfolioId: "p1", ticker: "ADPC", shares: 500, entryPrice: 1.8,
-      executionDate: "2022-11-27", executionTime: "14:29",
-    });
-    const pending = {
-      key: "excel-24-nov",
-      candidate: buyCandidate({ ticker: "ADPC", shares: 500, price: 1.79, date: "2022-11-24", time: "01:20PM", source: "official-broker-excel" }),
-    };
-    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
-  });
-
-  it("does not flag an exact date match â€” that's the normal exact-duplicate path's job, not this one", () => {
-    const committed = createTrade({
-      id: "t1",
-      portfolioId: "p1",
-      ticker: "RMDA",
-      shares: 500,
-      entryPrice: 2.79,
-      executionDate: "2023-01-11",
-      executionTime: "10:34",
-    });
-    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 2.79, date: "2023-01-11" }) };
-    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
-  });
-
-  it("does not flag dates differing in more than one digit position â€” too far from a single OCR misread to be safe", () => {
-    const committed = createTrade({
-      id: "t1",
-      portfolioId: "p1",
-      ticker: "RMDA",
-      shares: 500,
-      entryPrice: 2.79,
-      executionDate: "2023-01-11",
-      executionTime: "10:34",
-    });
-    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 2.79, date: "2023-01-22" }) };
-    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
-  });
-
-  it("does not flag a different month/year even if the day looks similar", () => {
-    const committed = createTrade({
-      id: "t1",
-      portfolioId: "p1",
-      ticker: "RMDA",
-      shares: 500,
-      entryPrice: 2.79,
-      executionDate: "2023-01-11",
-      executionTime: "10:34",
-    });
-    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 2.79, date: "2023-02-11" }) };
-    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
-  });
-
-  it("does not flag when the price genuinely differs â€” not the same execution", () => {
-    const committed = createTrade({
-      id: "t1",
-      portfolioId: "p1",
-      ticker: "RMDA",
-      shares: 500,
-      entryPrice: 2.79,
-      executionDate: "2023-01-11",
-      executionTime: "10:34",
-    });
-    const pending = { key: "p1", candidate: buyCandidate({ ticker: "RMDA", shares: 500, price: 3.5, date: "2023-01-01" }) };
-    expect(findDateMisreadDuplicateHints([pending], [committed], []).size).toBe(0);
-  });
-
-  it("flags a pending Sell against a committed allocation the same way", () => {
-    const allocation = createTradeAllocation({
-      id: "a1",
-      sellGroupId: "sg1",
-      tradeId: "t1",
-      portfolioId: "p1",
-      ticker: "RMDA",
-      sharesClosed: 500,
-      exitPrice: 2.8,
-      executionDate: "2023-01-17",
-      executionTime: "13:26",
-    });
-    const pending = { key: "s1", candidate: buyCandidate({ ticker: "RMDA", side: "SELL" as const, shares: 500, price: 2.8, date: "2023-01-07" }) };
-    const hints = findDateMisreadDuplicateHints([pending], [], [allocation]);
-    expect(hints.get("s1")).toBe("2023-01-17");
-  });
-});
-
-describe("findOfficialBrokerExcelReuploadDuplicateKeys", () => {
-  it("removes a re-uploaded official Excel execution already resolved in the same session", () => {
-    const entries = [
-      { key: "recorded", candidate: buyCandidate({ ticker: "ADPC", shares: 500, price: 1.68, date: "2022-11-07", time: "10:40AM", source: "official-broker-excel" }) },
-      { key: "reupload", candidate: buyCandidate({ ticker: "ADPC", shares: 500, price: 1.68, date: "2022-11-07", time: "10:40", source: "official-broker-excel" }) },
-    ];
-    expect(findOfficialBrokerExcelReuploadDuplicateKeys(entries, new Set(["recorded"]))).toEqual(["reupload"]);
-  });
-
-  it("keeps genuine same-value official fills when their execution times differ", () => {
-    const entries = [
-      { key: "first", candidate: buyCandidate({ ticker: "ADPC", shares: 500, price: 1.68, date: "2022-11-07", time: "10:40AM", source: "official-broker-excel" }) },
-      { key: "second", candidate: buyCandidate({ ticker: "ADPC", shares: 500, price: 1.68, date: "2022-11-07", time: "11:50AM", source: "official-broker-excel" }) },
-    ];
-    expect(findOfficialBrokerExcelReuploadDuplicateKeys(entries, new Set(["first"]))).toEqual([]);
-  });
-});
+    expect(findDuplicateSellMatch(candidate, [allocation])).toEqual({ matchType: "exact", matchedId: "a1", matcóŽ÷¶‰žËkºwµç@ÔÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼È€ôì­•äè€‰¼Èˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¥‘”è€‰	Udˆ…Ì½¹ÍÐ°Í¡…É•Ìè€ÌÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐÉ•ÍÕ±Ð€ô™¥¹‘É•…Ñ•MÑ…Ñ•µ•¹Ñ5…Ñ¡•Ì¡mÍÑ…Ñ•µ•¹Ð°¼Ä°¼Ét¤ì4(€€€•áÁ•Ð¡É•ÍÕ±Ð¹¡…Ì ‰ÍÐˆ¤¤¹Ñ½	”¡™…±Í”¤ì4(€ô¤ì4(4(€¥Ð ‰É•ÅÕ¥É•ÌÑ¡”Í…µ”‘…äƒŠP…¸•á…ÐÍ¡…É”ÍÕ´½¸„‘¥™™•É•¹Ð‘…Ñ”¹•Ù•Èµ…Ñ¡•Ìˆ°€ ¤€ôøì4(€€€½¹ÍÐÍÑ…Ñ•µ•¹Ð€ôì­•äè€‰ÍÐˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€àÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰ÍÑ…Ñ•µ•¹Ðˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼Ä€ôì­•äè€‰¼Äˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÔÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÔˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼È€ôì­•äè€‰¼Èˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÌÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐÉ•ÍÕ±Ð€ô™¥¹‘É•…Ñ•MÑ…Ñ•µ•¹Ñ5…Ñ¡•Ì¡mÍÑ…Ñ•µ•¹Ð°¼Ä°¼Ét¤ì4(€€€•áÁ•Ð¡É•ÍÕ±Ð¹¡…Ì ‰ÍÐˆ¤¤¹Ñ½	”¡™…±Í”¤ì4(€ô¤ì4(4(€¥Ð ‰¹•Ù•ÈÕÍ•Ì…¹½Ñ¡•ÈMÑ…Ñ•µ•¹ÐÉ½Ü…Ì…¸•á•ÕÑ¥½¸ƒŠP„MÑ…Ñ•µ•¹Ð½¹±ä•Ù•È…É•…Ñ•Ì¡¥¡•Èµ‘•Ñ…¥°Í½ÕÉ•Ìˆ°€ ¤€ôøì4(€€€½¹ÍÐÍÑ…Ñ•µ•¹Ð€ôì­•äè€‰ÍÐÄˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€àÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰ÍÑ…Ñ•µ•¹Ðˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ½Ñ¡•ÉMÑ…Ñ•µ•¹Ð€ôì­•äè€‰ÍÐÈˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€àÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰ÍÑ…Ñ•µ•¹Ðˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐÉ•ÍÕ±Ð€ô™¥¹‘É•…Ñ•MÑ…Ñ•µ•¹Ñ5…Ñ¡•Ì¡mÍÑ…Ñ•µ•¹Ð°½Ñ¡•ÉMÑ…Ñ•µ•¹Ñt¤ì4(€€€•áÁ•Ð¡É•ÍÕ±Ð¹¡…Ì ‰ÍÐÄˆ¤¤¹Ñ½	”¡™…±Í”¤ì4(€ô¤ì4(4(€¥Ð ‰Í­¥ÁÌ„MÑ…Ñ•µ•¹ÐÉ½Ü…±É•…‘äÉ•Í½±Ù•‰ä‘¥É•Ð€ÄèÄÉ½ÍÌµÍ½ÕÉ”Ù•É¥™¥…Ñ¥½¸€¡…±É•…‘åY•É¥™¥•‘-•åÌ¤ˆ°€ ¤€ôøì4(€€€½¹ÍÐÍÑ…Ñ•µ•¹Ð€ôì­•äè€‰ÍÐˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€àÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰ÍÑ…Ñ•µ•¹Ðˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼Ä€ôì­•äè€‰¼Äˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÔÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼È€ôì­•äè€‰¼Èˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÌÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐÉ•ÍÕ±Ð€ô™¥¹‘É•…Ñ•MÑ…Ñ•µ•¹Ñ5…Ñ¡•Ì¡mÍÑ…Ñ•µ•¹Ð°¼Ä°¼Ét°¹•ÜM•Ð¡l‰ÍÐ‰t¤¤ì4(€€€•áÁ•Ð¡É•ÍÕ±Ð¹¡…Ì ‰ÍÐˆ¤¤¹Ñ½	”¡™…±Í”¤ì4(€ô¤ì4(4(€¥Ð ‰¹•Ù•È±•ÑÌÑÝ¼‘¥™™•É•¹ÐMÑ…Ñ•µ•¹ÐÉ½ÝÌ…É•…Ñ”Ñ¡”Í…µ”•á•ÕÑ¥½¸ƒŠP•… •á•ÕÑ¥½¸¥Ì½¹ÍÕµ•½¹”ˆ°€ ¤€ôøì4(€€€½¹ÍÐÍÐÄ€ôì­•äè€‰ÍÐÄˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÔÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰ÍÑ…Ñ•µ•¹Ðˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐÍÐÈ€ôì­•äè€‰ÍÐÈˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€àÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰ÍÑ…Ñ•µ•¹Ðˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼Ä€ôì­•äè€‰¼Äˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÔÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼È€ôì­•äè€‰¼Èˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÌÀÀÀ°ÁÉ¥”è€à¸À°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÐˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐÉ•ÍÕ±Ð€ô™¥¹‘É•…Ñ•MÑ…Ñ•µ•¹Ñ5…Ñ¡•Ì¡mÍÐÄ°ÍÐÈ°¼Ä°¼Ét¤ì4(€€€€¼¼ÍÐÄ€ Ô°ÀÀÀ¤¥ÌÁÉ½•ÍÍ•™¥ÉÍÐ€¡Íµ…±±•ÍÐµÍ¡…É•Ìµ™¥ÉÍÐ¤…¹±…¥µÌ¼Ä4(€€€€¼¼½ÕÑÉ¥¡ÐƒŠPÍÐÈ€ à°ÀÀÀ¤¥Ì±•™ÐÝ¥Ñ ½¹±ä¼È€ Ì°ÀÀÀ¤¥¸Ñ¡”Á½½°°Ý¡¥ 4(€€€€¼¼…¸ÐÍÕ´Ñ¼€à°ÀÀÀ°Í¼¥ÐÌ½ÉÉ•Ñ±äÕ¹µ…Ñ¡•É…Ñ¡•ÈÑ¡…¸É•ÕÍ¥¹œ¼Ä¸4(€€€•áÁ•Ð¡É•ÍÕ±Ð¹•Ð ‰ÍÐÄˆ¤¤¹Ñ½ÅÕ…°¡l‰¼Ä‰t¤ì4(€€€•áÁ•Ð¡É•ÍÕ±Ð¹¡…Ì ‰ÍÐÈˆ¤¤¹Ñ½	”¡™…±Í”¤ì4(€ô¤ì4(4(€¥Ð ‰¹¼…¹‘¥‘…Ñ”¥Ì•Ù•È‘½Õ‰±”µ½Õ¹Ñ•è„MÑ…Ñ•µ•¹ÐÉ½ÜÁ±ÕÌ¥ÑÌµ…Ñ¡•É½ÕÀ¹•Ù•ÈÁÉ½‘Õ”µ½É”½µµ¥ÑÑ•ÑÉ…‘•ÌÑ¡…¸Ñ¡”Õ¹‘•É±å¥¹œ•á•ÕÑ¥½¹Ìˆ°€ ¤€ôøì4(€€€½¹ÍÐÍÑ…Ñ•µ•¹Ð€ôì­•äè€‰ÍÐˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÄÀÀÀÀ°ÁÉ¥”è€Ø¸Ô°‘…Ñ”è€ˆÈÀÈØ´ÀÈ´ÀÄˆ°Í½ÕÉ”è€‰ÍÑ…Ñ•µ•¹Ðˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼Ä€ôì­•äè€‰¼Äˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÈÀÀÀ°ÁÉ¥”è€Ø¸Ô°‘…Ñ”è€ˆÈÀÈØ´ÀÈ´ÀÄˆ°Í½ÕÉ”è€‰½É‘•ÉÌµÍÉ••¸ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼È€ôì­•äè€‰¼Èˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÌÀÀÀ°ÁÉ¥”è€Ø¸Ô°‘…Ñ”è€ˆÈÀÈØ´ÀÈ´ÀÄˆ°Í½ÕÉ”è€‰¥¹Ù½¥”ˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐ¼Ì€ôì­•äè€‰¼Ìˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÍ¡…É•Ìè€ÔÀÀÀ°ÁÉ¥”è€Ø¸Ô°‘…Ñ”è€ˆÈÀÈØ´ÀÈ´ÀÄˆ°Í½ÕÉ”è€‰ÍØˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐÉ•ÍÕ±Ð€ô™¥¹‘É•…Ñ•MÑ…Ñ•µ•¹Ñ5…Ñ¡•Ì¡mÍÑ…Ñ•µ•¹Ð°¼Ä°¼È°¼Ít¤ì4(€€€½¹ÍÐµ…Ñ¡•‘-•åÌ€ôÉ•ÍÕ±Ð¹•Ð ‰ÍÐˆ¤„ì4(€€€€¼¼Ù•Éä­•äÉ•ÑÕÉ¹•…ÑÕ…±±ä‰•±½¹ÌÑ¼Ñ¡”•á•ÕÑ¥½¸Á½½°°¹•Ù•ÈÑ¼Ñ¡”4(€€€€¼¼MÑ…Ñ•µ•¹ÐÉ½Ü¥ÑÍ•±˜ƒŠP½µµ¥ÑÑ¥¹œÑ¡”µ…Ñ¡•É½ÕÀÁ±ÕÌÍ­¥ÁÁ¥¹œÑ¡”4(€€€€¼¼MÑ…Ñ•µ•¹ÐÉ½Ü…½Õ¹ÑÌ™½È•á…Ñ±ä€ÄÀ°ÀÀÀÍ¡…É•Ì½¹”°¹½ÐÑÝ¥”¸4(€€€•áÁ•Ð¡µ…Ñ¡•‘-•åÌ¤¹¹½Ð¹Ñ½½¹Ñ…¥¸ ‰ÍÐˆ¤ì4(€€€½¹ÍÐÑ½Ñ…±5…Ñ¡•‘M¡…É•Ì€ôµ…Ñ¡•‘-•åÌ4(€€€€€€¹µ…À ¡¬¤€ôøm¼Ä°¼È°¼Ít¹™¥¹ ¡”¤€ôø”¹­•ä€ôôô¬¤„¹…¹‘¥‘…Ñ”¹Í¡…É•Ì¤4(€€€€€€¹É•‘Õ” ¡„°ˆ¤€ôø„€¬ˆ°€À¤ì4(€€€•áÁ•Ð¡Ñ½Ñ…±5…Ñ¡•‘M¡…É•Ì¤¹Ñ½	”¡ÍÑ…Ñ•µ•¹Ð¹…¹‘¥‘…Ñ”¹Í¡…É•Ì¤ì4(€ô¤ì4)ô¤ì4(4)‘•ÍÉ¥‰” ‰­•åÍQ½I…¥Í•Q½!¥¡½¹™¥‘•¹”ˆ°€ ¤€ôøì4(€¥Ð ‰É…¥Í•Ì„±½Üµ½¹™¥‘•¹”É½ÜÑ¡…ÐÌ¥¸Ñ¡”½ÉÉ½‰½É…Ñ•Í•Ðˆ°€ ¤€ôøì4(€€€½¹ÍÐ•¹ÑÉ¥•Ì€ômì­•äè€‰„ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ì½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤õtì4(€€€•áÁ•Ð¡­•åÍQ½I…¥Í•Q½!¥¡½¹™¥‘•¹”¡•¹ÑÉ¥•Ì°¹•ÜM•Ð¡l‰„‰t¤¤¤¹Ñ½ÅÕ…°¡l‰„‰t¤ì4(€ô¤ì4(4(€¥Ð ‰É…¥Í•Ì„µ•‘¥Õ´µ½¹™¥‘•¹”É½ÜÑ¡…ÐÌ¥¸Ñ¡”½ÉÉ½‰½É…Ñ•Í•Ðˆ°€ ¤€ôøì4(€€€½¹ÍÐ•¹ÑÉ¥•Ì€ômì­•äè€‰„ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ì½¹™¥‘•¹”è€‰µ•‘¥Õ´ˆ…Ì½¹ÍÐô¤õtì4(€€€•áÁ•Ð¡­•åÍQ½I…¥Í•Q½!¥¡½¹™¥‘•¹”¡•¹ÑÉ¥•Ì°¹•ÜM•Ð¡l‰„‰t¤¤¤¹Ñ½ÅÕ…°¡l‰„‰t¤ì4(€ô¤ì4(4(€¥Ð ‰‘½•Ì¹½ÐÉ”µÉ…¥Í”„É½Ü…±É•…‘ä…Ð¡¥ ½¹™¥‘•¹”ƒŠP…Ù½¥‘Ì„¹¼µ½ÀÍÑ…Ñ”ÝÉ¥Ñ”ˆ°€ ¤€ôøì4(€€€½¹ÍÐ•¹ÑÉ¥•Ì€ômì­•äè€‰„ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ì½¹™¥‘•¹”è€‰¡¥ ˆ…Ì½¹ÍÐô¤õtì4(€€€•áÁ•Ð¡­•åÍQ½I…¥Í•Q½!¥¡½¹™¥‘•¹”¡•¹ÑÉ¥•Ì°¹•ÜM•Ð¡l‰„‰t¤¤¤¹Ñ½ÅÕ…°¡mt¤ì4(€ô¤ì4(4(€¥Ð ‰±•…Ù•Ì„±½Üµ½¹™¥‘•¹”É½Ü…±½¹”Ý¡•¸¥Ð¥Í¸Ð¥¸Ñ¡”½ÉÉ½‰½É…Ñ•Í•Ðˆ°€ ¤€ôøì4(€€€½¹ÍÐ•¹ÑÉ¥•Ì€ômì­•äè€‰„ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ì½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤õtì4(€€€•áÁ•Ð¡­•åÍQ½I…¥Í•Q½!¥¡½¹™¥‘•¹”¡•¹ÑÉ¥•Ì°¹•ÜM•Ð ¤¤¤¹Ñ½ÅÕ…°¡mt¤ì4(€ô¤ì4(4(€¥Ð ‰½¹±äÉ…¥Í•ÌÑ¡”½ÉÉ½‰½É…Ñ•É½ÝÌ½ÕÐ½˜„µ¥á•‰…Ñ ˆ°€ ¤€ôøì4(€€€½¹ÍÐ•¹ÑÉ¥•Ì€ôl4(€€€€€ì­•äè€‰„ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ì½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤ô°4(€€€€€ì­•äè€‰ˆˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ì½¹™¥‘•¹”è€‰µ•‘¥Õ´ˆ…Ì½¹ÍÐô¤ô°4(€€€€€ì­•äè€‰Œˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ì½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤ô°4(€€€tì4(€€€•áÁ•Ð¡­•åÍQ½I…¥Í•Q½!¥¡½¹™¥‘•¹”¡•¹ÑÉ¥•Ì°¹•ÜM•Ð¡l‰„ˆ°€‰ˆ‰t¤¤¤¹Ñ½ÅÕ…°¡l‰„ˆ°€‰ˆ‰t¤ì4(€ô¤ì4)ô¤ì4(4)‘•ÍÉ¥‰” ‰™¥¹‘]É½¹Q¥­•É…¹‘¥‘…Ñ•-•åÌˆ°€ ¤€ôøì4(€½¹ÍÐÍÕ…ÉQÉ…‘”€ôÉ•…Ñ•QÉ…‘”¡ì4(€€€¥è€‰ÐµÍÕÈˆ°4(€€€Á½ÉÑ™½±¥½%è€‰ÀÄˆ°4(€€€Ñ¥­•Èè€‰MUHˆ°4(€€€Í¡…É•Ìè€à°4(€€€•¹ÑÉåAÉ¥”è€ÐÜ¸Àä°4(€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈØ´ÀÄ´ÀØˆ°4(€€€•á•ÕÑ¥½¹Q¥µ”è€ˆÄÀèÀÀˆ°4(€ô¤ì4(4(€¥Ð ‰™±…Ì„±½Üµ½¹™¥‘•¹”Á•¹‘¥¹œ	Õäµ…Ñ¡¥¹œ…¹½Ñ¡•ÈÑ¥­•ÈÌ½µµ¥ÑÑ•ÑÉ…‘”…Ð„¹•…Èµ¥‘•¹Ñ¥…°ÁÉ¥”€¡Ñ¡”!I!<½•±Ñ„MÕ…È…Í”¤ˆ°€ ¤€ôøì4(€€€½¹ÍÐÁ¡…¹Ñ½´€ôì4(€€€€€­•äè€‰¡É¡¼´Äˆ°4(€€€€€…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰!I!<ˆ°Í¡…É•Ìè€à°ÁÉ¥”è€ÐØ¸ØØ°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÀØˆ°½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤°4(€€€ôì4(€€€½¹ÍÐ¡¥¹ÑÌ€ô™¥¹‘]É½¹Q¥­•É…¹‘¥‘…Ñ•-•åÌ¡mÁ¡…¹Ñ½µt°mÍÕ…ÉQÉ…‘•t°mt¤ì4(€€€•áÁ•Ð¡¡¥¹ÑÌ¹•Ð ‰¡É¡¼´Äˆ¤¤¹Ñ½	” ‰MUHˆ¤ì4(€ô¤ì4(4(€¥Ð ‰‘½•Ì¹½Ð™±…œÝ¡•¸Ñ¡”ÁÉ¥•Ì…É”Õ¹É•±…Ñ•ƒŠPÍ…µ”Í¡…É•Ì½‘…Ñ”½¸‘¥™™•É•¹ÐÑ¥­•ÉÌ¥Ì„½¥¹¥‘•¹”Ý¥Ñ¡½ÕÐÁÉ¥”ÁÉ½á¥µ¥Ñäˆ°€ ¤€ôøì4(€€€½¹ÍÐ½¥¹¥‘•¹”€ôì4(€€€€€­•äè€‰¡É¡¼´Äˆ°4(€€€€€…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰!I!<ˆ°Í¡…É•Ìè€à°ÁÉ¥”è€ÈÐ¸ä°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÀØˆ°½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤°4(€€€ôì4(€€€•áÁ•Ð¡™¥¹‘]É½¹Q¥­•É…¹‘¥‘…Ñ•-•åÌ¡m½¥¹¥‘•¹•t°mÍÕ…ÉQÉ…‘•t°mt¤¹Í¥é”¤¹Ñ½	” À¤ì4(€ô¤ì4(4(€¥Ð ‰‘½•Ì¹½Ð™±…œ„¡¥ µ½¹™¥‘•¹”Á•¹‘¥¹œÉ•………¥¹ÍÐ„½µµ¥ÑÑ•ÑÉ…‘”ƒŠP…¸…¹¡½É•Ñ¥­•Èµ…Ñ ¥ÌÑÉÕÍÑ•ˆ°€ ¤€ôøì4(€€€½¹ÍÐ…¹¡½É•€ôì4(€€€€€­•äè€‰¡É¡¼´Äˆ°4(€€€€€…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰!I!<ˆ°Í¡…É•Ìè€à°ÁÉ¥”è€ÐØ¸ØØ°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÀØˆ°½¹™¥‘•¹”è€‰¡¥ ˆ…Ì½¹ÍÐô¤°4(€€€ôì4(€€€•áÁ•Ð¡™¥¹‘]É½¹Q¥­•É…¹‘¥‘…Ñ•-•åÌ¡m…¹¡½É•‘t°mÍÕ…ÉQÉ…‘•t°mt¤¹Í¥é”¤¹Ñ½	” À¤ì4(€ô¤ì4(4(€¥Ð ‰™±…ÌÑ¡”ÍÑÉ¥Ñ±äµ±½Ý•Èµ½¹™¥‘•¹”½Áä½˜„Á•¹‘¥¹œÁ…¥ÈÕ¹‘•ÈÑÝ¼‘¥™™•É•¹ÐÑ¥­•ÉÌ°¹•Ù•ÈÑ¡”‰•ÑÑ•È½¹”ˆ°€ ¤€ôøì4(€€€½¹ÍÐÉ•…°€ôì4(€€€€€­•äè€‰ÍÕÈ´Äˆ°4(€€€€€…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰MUHˆ°Í¡…É•Ìè€Ø°ÁÉ¥”è€ÐØ¸Ðà°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÄˆ°½¹™¥‘•¹”è€‰¡¥ ˆ…Ì½¹ÍÐô¤°4(€€€ôì4(€€€½¹ÍÐÁ¡…¹Ñ½´€ôì4(€€€€€­•äè€‰¡É¡¼´Èˆ°4(€€€€€…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰!I!<ˆ°Í¡…É•Ìè€Ø°ÁÉ¥”è€ÐÔ¸äÈ°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÄˆ°½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤°4(€€€ôì4(€€€½¹ÍÐ¡¥¹ÑÌ€ô™¥¹‘]É½¹Q¥­•É…¹‘¥‘…Ñ•-•åÌ¡mÉ•…°°Á¡…¹Ñ½µt°mt°mt¤ì4(€€€•áÁ•Ð¡¡¥¹ÑÌ¹•Ð ‰¡É¡¼´Èˆ¤¤¹Ñ½	” ‰MUHˆ¤ì4(€€€•áÁ•Ð¡¡¥¹ÑÌ¹¡…Ì ‰ÍÕÈ´Äˆ¤¤¹Ñ½	”¡™…±Í”¤ì4(€ô¤ì4(4(€¥Ð ‰™±…Ì¹•¥Ñ¡•È½˜…¸•ÅÕ…°µ½¹™¥‘•¹”Á•¹‘¥¹œÁ…¥ÈƒŠP¹¼‰…Í¥ÌÑ¼Á¥¬Ý¡¥ Ñ¥­•È¥ÌÑ¡”ÝÉ½¹œÕ•ÍÌˆ°€ ¤€ôøì4(€€€½¹ÍÐ„€ôì­•äè€‰„ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰MUHˆ°Í¡…É•Ìè€Ø°ÁÉ¥”è€ÐØ¸Ðà°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÄˆ°½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤ôì4(€€€½¹ÍÐˆ€ôì­•äè€‰ˆˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰!I!<ˆ°Í¡…É•Ìè€Ø°ÁÉ¥”è€ÐÔ¸äÈ°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÄÄˆ°½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤ôì4(€€€•áÁ•Ð¡™¥¹‘]É½¹Q¥­•É…¹‘¥‘…Ñ•-•åÌ¡m„°‰t°mt°mt¤¹Í¥é”¤¹Ñ½	” À¤ì4(€ô¤ì4(4(€¥Ð ‰™±…Ì„Á•¹‘¥¹œM•±°µ…Ñ¡¥¹œ…¹½Ñ¡•ÈÑ¥­•ÈÌ½µµ¥ÑÑ•…±±½…Ñ¥½¸Ñ¡”Í…µ”Ý…äˆ°€ ¤€ôøì4(€€€½¹ÍÐ…±±½…Ñ¥½¸€ôÉ•…Ñ•QÉ…‘•±±½…Ñ¥½¸¡ì4(€€€€€¥è€‰„Äˆ°4(€€€€€Í•±±É½ÕÁ%è€‰ÍœÄˆ°4(€€€€€ÑÉ…‘•%è€‰ÐµÍÕÈˆ°4(€€€€€Á½ÉÑ™½±¥½%è€‰ÀÄˆ°4(€€€€€Ñ¥­•Èè€‰MUHˆ°4(€€€€€Í¡…É•Í±½Í•è€ÈÈ°4(€€€€€•á¥ÑAÉ¥”è€ÔÀ¸ÐÈ°4(€€€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈØ´ÀÄ´ÈÜˆ°4(€€€€€•á•ÕÑ¥½¹Q¥µ”è€ˆÄÀèÀÀˆ°4(€€€ô¤ì4(€€€½¹ÍÐÁ¡…¹Ñ½µM•±°€ôì4(€€€€€­•äè€‰¡É¡¼µÌÄˆ°4(€€€€€…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰!I!<ˆ°Í¥‘”è€‰M10ˆ…Ì½¹ÍÐ°Í¡…É•Ìè€ÈÈ°ÁÉ¥”è€ÔÀ¸Ä°‘…Ñ”è€ˆÈÀÈØ´ÀÄ´ÈÜˆ°½¹™¥‘•¹”è€‰±½Üˆ…Ì½¹ÍÐô¤°4(€€€ôì4(€€€½¹ÍÐ¡¥¹ÑÌ€ô™¥¹‘]É½¹Q¥­•É…¹‘¥‘…Ñ•-•åÌ¡mÁ¡…¹Ñ½µM•±±t°mt°m…±±½…Ñ¥½¹t¤ì4(€€€•áÁ•Ð¡¡¥¹ÑÌ¹•Ð ‰¡É¡¼µÌÄˆ¤¤¹Ñ½	” ‰MUHˆ¤ì4(€ô¤ì4)ô¤ì4(4)‘•ÍÉ¥‰” ‰™¥¹‘…Ñ•5¥ÍÉ•…‘ÕÁ±¥…Ñ•!¥¹ÑÌˆ°€ ¤€ôøì(€¥Ð ‰™±…Ì„Á•¹‘¥¹œ	ÕäÝ¡½Í”‘…äÝ…Ì±¥­•±äµ¥ÍÉ•…‰ä½¹”‘¥¥Ð……¥¹ÍÐ…¸…±É•…‘äµ½µµ¥ÑÑ•ÑÉ…‘”€¡Ñ¡”É•…°I5…Í”è€ÄÄ)…¸ÙÌ€ÀÄ)…¸¤ˆ°€ ¤€ôøì(€€€½¹ÍÐ½µµ¥ÑÑ•€ôÉ•…Ñ•QÉ…‘”¡ì4(€€€€€¥è€‰ÐÄˆ°4(€€€€€Á½ÉÑ™½±¥½%è€‰ÀÄˆ°4(€€€€€Ñ¥­•Èè€‰I5ˆ°4(€€€€€Í¡…É•Ìè€ÔÀÀ°4(€€€€€•¹ÑÉåAÉ¥”è€È¸Üä°4(€€€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÄÄˆ°4(€€€€€•á•ÕÑ¥½¹Q¥µ”è€ˆÄÀèÌÐˆ°4(€€€ô¤ì4(€€€½¹ÍÐÁ•¹‘¥¹œ€ôì­•äè€‰ÀÄˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰I5ˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€È¸Üä°‘…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÀÄˆô¤ôì4(€€€½¹ÍÐ¡¥¹ÑÌ€ô™¥¹‘…Ñ•5¥ÍÉ•…‘ÕÁ±¥…Ñ•!¥¹ÑÌ¡mÁ•¹‘¥¹t°m½µµ¥ÑÑ•‘t°mt¤ì4(€€€•áÁ•Ð¡¡¥¹ÑÌ¹•Ð ‰ÀÄˆ¤¤¹Ñ½	” ˆÈÀÈÌ´ÀÄ´ÄÄˆ¤ì(€ô¤ì((€¥Ð ‰¹•Ù•È…ÁÁ±¥•Ì…¸=H‘…Ñ”µµ¥ÍÉ•…Ý…É¹¥¹œÑ¼„¹…Ñ¥Ù”‰É½­•Èá•°É½Üˆ°€ ¤€ôøì(€€€½¹ÍÐ½µµ¥ÑÑ•€ôÉ•…Ñ•QÉ…‘”¡ì(€€€€€¥è€‰ÐÄˆ°Á½ÉÑ™½±¥½%è€‰ÀÄˆ°Ñ¥­•Èè€‰Aˆ°Í¡…É•Ìè€ÔÀÀ°•¹ÑÉåAÉ¥”è€Ä¸à°(€€€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈÈ´ÄÄ´ÈÜˆ°•á•ÕÑ¥½¹Q¥µ”è€ˆÄÐèÈäˆ°(€€€ô¤ì(€€€½¹ÍÐÁ•¹‘¥¹œ€ôì(€€€€€­•äè€‰•á•°´ÈÐµ¹½Øˆ°(€€€€€…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰Aˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€Ä¸Üä°‘…Ñ”è€ˆÈÀÈÈ´ÄÄ´ÈÐˆ°Ñ¥µ”è€ˆÀÄèÈÁA4ˆ°Í½ÕÉ”è€‰½™™¥¥…°µ‰É½­•Èµ•á•°ˆô¤°(€€€ôì(€€€•áÁ•Ð¡™¥¹‘…Ñ•5¥ÍÉ•…‘ÕÁ±¥…Ñ•!¥¹ÑÌ¡mÁ•¹‘¥¹t°m½µµ¥ÑÑ•‘t°mt¤¹Í¥é”¤¹Ñ½	” À¤ì(€ô¤ì(4(€¥Ð ‰‘½•Ì¹½Ð™±…œ…¸•á…Ð‘…Ñ”µ…Ñ ƒŠPÑ¡…ÐÌÑ¡”¹½Éµ…°•á…Ðµ‘ÕÁ±¥…Ñ”Á…Ñ Ì©½ˆ°¹½ÐÑ¡¥Ì½¹”ˆ°€ ¤€ôøì4(€€€½¹ÍÐ½µµ¥ÑÑ•€ôÉ•…Ñ•QÉ…‘”¡ì4(€€€€€¥è€‰ÐÄˆ°4(€€€€€Á½ÉÑ™½±¥½%è€‰ÀÄˆ°4(€€€€€Ñ¥­•Èè€‰I5ˆ°4(€€€€€Í¡…É•Ìè€ÔÀÀ°4(€€€€€•¹ÑÉåAÉ¥”è€È¸Üä°4(€€€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÄÄˆ°4(€€€€€•á•ÕÑ¥½¹Q¥µ”è€ˆÄÀèÌÐˆ°4(€€€ô¤ì4(€€€½¹ÍÐÁ•¹‘¥¹œ€ôì­•äè€‰ÀÄˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰I5ˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€È¸Üä°‘…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÄÄˆô¤ôì4(€€€•áÁ•Ð¡™¥¹‘…Ñ•5¥ÍÉ•…‘ÕÁ±¥…Ñ•!¥¹ÑÌ¡mÁ•¹‘¥¹t°m½µµ¥ÑÑ•‘t°mt¤¹Í¥é”¤¹Ñ½	” À¤ì4(€ô¤ì4(4(€¥Ð ‰‘½•Ì¹½Ð™±…œ‘…Ñ•Ì‘¥™™•É¥¹œ¥¸µ½É”Ñ¡…¸½¹”‘¥¥ÐÁ½Í¥Ñ¥½¸ƒŠPÑ½¼™…È™É½´„Í¥¹±”=Hµ¥ÍÉ•…Ñ¼‰”Í…™”ˆ°€ ¤€ôøì4(€€€½¹ÍÐ½µµ¥ÑÑ•€ôÉ•…Ñ•QÉ…‘”¡ì4(€€€€€¥è€‰ÐÄˆ°4(€€€€€Á½ÉÑ™½±¥½%è€‰ÀÄˆ°4(€€€€€Ñ¥­•Èè€‰I5ˆ°4(€€€€€Í¡…É•Ìè€ÔÀÀ°4(€€€€€•¹ÑÉåAÉ¥”è€È¸Üä°4(€€€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÄÄˆ°4(€€€€€•á•ÕÑ¥½¹Q¥µ”è€ˆÄÀèÌÐˆ°4(€€€ô¤ì4(€€€½¹ÍÐÁ•¹‘¥¹œ€ôì­•äè€‰ÀÄˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰I5ˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€È¸Üä°‘…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÈÈˆô¤ôì4(€€€•áÁ•Ð¡™¥¹‘…Ñ•5¥ÍÉ•…‘ÕÁ±¥…Ñ•!¥¹ÑÌ¡mÁ•¹‘¥¹t°m½µµ¥ÑÑ•‘t°mt¤¹Í¥é”¤¹Ñ½	” À¤ì4(€ô¤ì4(4(€¥Ð ‰‘½•Ì¹½Ð™±…œ„‘¥™™•É•¹Ðµ½¹Ñ ½å•…È•Ù•¸¥˜Ñ¡”‘…ä±½½­ÌÍ¥µ¥±…Èˆ°€ ¤€ôøì4(€€€½¹ÍÐ½µµ¥ÑÑ•€ôÉ•…Ñ•QÉ…‘”¡ì4(€€€€€¥è€‰ÐÄˆ°4(€€€€€Á½ÉÑ™½±¥½%è€‰ÀÄˆ°4(€€€€€Ñ¥­•Èè€‰I5ˆ°4(€€€€€Í¡…É•Ìè€ÔÀÀ°4(€€€€€•¹ÑÉåAÉ¥”è€È¸Üä°4(€€€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÄÄˆ°4(€€€€€•á•ÕÑ¥½¹Q¥µ”è€ˆÄÀèÌÐˆ°4(€€€ô¤ì4(€€€½¹ÍÐÁ•¹‘¥¹œ€ôì­•äè€‰ÀÄˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰I5ˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€È¸Üä°‘…Ñ”è€ˆÈÀÈÌ´ÀÈ´ÄÄˆô¤ôì4(€€€•áÁ•Ð¡™¥¹‘…Ñ•5¥ÍÉ•…‘ÕÁ±¥…Ñ•!¥¹ÑÌ¡mÁ•¹‘¥¹t°m½µµ¥ÑÑ•‘t°mt¤¹Í¥é”¤¹Ñ½	” À¤ì4(€ô¤ì4(4(€¥Ð ‰‘½•Ì¹½Ð™±…œÝ¡•¸Ñ¡”ÁÉ¥”•¹Õ¥¹•±ä‘¥™™•ÉÌƒŠP¹½ÐÑ¡”Í…µ”•á•ÕÑ¥½¸ˆ°€ ¤€ôøì4(€€€½¹ÍÐ½µµ¥ÑÑ•€ôÉ•…Ñ•QÉ…‘”¡ì4(€€€€€¥è€‰ÐÄˆ°4(€€€€€Á½ÉÑ™½±¥½%è€‰ÀÄˆ°4(€€€€€Ñ¥­•Èè€‰I5ˆ°4(€€€€€Í¡…É•Ìè€ÔÀÀ°4(€€€€€•¹ÑÉåAÉ¥”è€È¸Üä°4(€€€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÄÄˆ°4(€€€€€•á•ÕÑ¥½¹Q¥µ”è€ˆÄÀèÌÐˆ°4(€€€ô¤ì4(€€€½¹ÍÐÁ•¹‘¥¹œ€ôì­•äè€‰ÀÄˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰I5ˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€Ì¸Ô°‘…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÀÄˆô¤ôì4(€€€•áÁ•Ð¡™¥¹‘…Ñ•5¥ÍÉ•…‘ÕÁ±¥…Ñ•!¥¹ÑÌ¡mÁ•¹‘¥¹t°m½µµ¥ÑÑ•‘t°mt¤¹Í¥é”¤¹Ñ½	” À¤ì4(€ô¤ì4(4(€¥Ð ‰™±…Ì„Á•¹‘¥¹œM•±°……¥¹ÍÐ„½µµ¥ÑÑ•…±±½…Ñ¥½¸Ñ¡”Í…µ”Ý…äˆ°€ ¤€ôøì4(€€€½¹ÍÐ…±±½…Ñ¥½¸€ôÉ•…Ñ•QÉ…‘•±±½…Ñ¥½¸¡ì4(€€€€€¥è€‰„Äˆ°4(€€€€€Í•±±É½ÕÁ%è€‰ÍœÄˆ°4(€€€€€ÑÉ…‘•%è€‰ÐÄˆ°4(€€€€€Á½ÉÑ™½±¥½%è€‰ÀÄˆ°4(€€€€€Ñ¥­•Èè€‰I5ˆ°4(€€€€€Í¡…É•Í±½Í•è€ÔÀÀ°4(€€€€€•á¥ÑAÉ¥”è€È¸à°4(€€€€€•á•ÕÑ¥½¹…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÄÜˆ°4(€€€€€•á•ÕÑ¥½¹Q¥µ”è€ˆÄÌèÈØˆ°4(€€€ô¤ì4(€€€½¹ÍÐÁ•¹‘¥¹œ€ôì­•äè€‰ÌÄˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰I5ˆ°Í¥‘”è€‰M10ˆ…Ì½¹ÍÐ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€È¸à°‘…Ñ”è€ˆÈÀÈÌ´ÀÄ´ÀÜˆô¤ôì4(€€€½¹ÍÐ¡¥¹ÑÌ€ô™¥¹‘…Ñ•5¥ÍÉ•…‘ÕÁ±¥…Ñ•!¥¹ÑÌ¡mÁ•¹‘¥¹t°mt°m…±±½…Ñ¥½¹t¤ì4(€€€•áÁ•Ð¡¡¥¹ÑÌ¹•Ð ‰ÌÄˆ¤¤¹Ñ½	” ˆÈÀÈÌ´ÀÄ´ÄÜˆ¤ì4(€ô¤ì4)ô¤ì()‘•ÍÉ¥‰” ‰™¥¹‘=™™¥¥…±	É½­•Éá•±I•ÕÁ±½…‘ÕÁ±¥…Ñ•-•åÌˆ°€ ¤€ôøì(€¥Ð ‰É•µ½Ù•Ì„É”µÕÁ±½…‘•½™™¥¥…°á•°•á•ÕÑ¥½¸…±É•…‘äÉ•Í½±Ù•¥¸Ñ¡”Í…µ”Í•ÍÍ¥½¸ˆ°€ ¤€ôøì(€€€½¹ÍÐ•¹ÑÉ¥•Ì€ôl(€€€€€ì­•äè€‰É•½É‘•ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰Aˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€Ä¸Øà°‘…Ñ”è€ˆÈÀÈÈ´ÄÄ´ÀÜˆ°Ñ¥µ”è€ˆÄÀèÐÁ4ˆ°Í½ÕÉ”è€‰½™™¥¥…°µ‰É½­•Èµ•á•°ˆô¤ô°(€€€€€ì­•äè€‰É•ÕÁ±½…ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰Aˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€Ä¸Øà°‘…Ñ”è€ˆÈÀÈÈ´ÄÄ´ÀÜˆ°Ñ¥µ”è€ˆÄÀèÐÀˆ°Í½ÕÉ”è€‰½™™¥¥…°µ‰É½­•Èµ•á•°ˆô¤ô°(€€€tì(€€€•áÁ•Ð¡™¥¹‘=™™¥¥…±	É½­•Éá•±I•ÕÁ±½…‘ÕÁ±¥…Ñ•-•åÌ¡•¹ÑÉ¥•Ì°¹•ÜM•Ð¡l‰É•½É‘•‰t¤¤¤¹Ñ½ÅÕ…°¡l‰É•ÕÁ±½…‰t¤ì(€ô¤ì((€¥Ð ‰­••ÁÌ•¹Õ¥¹”Í…µ”µÙ…±Õ”½™™¥¥…°™¥±±ÌÝ¡•¸Ñ¡•¥È•á•ÕÑ¥½¸Ñ¥µ•Ì‘¥™™•Èˆ°€ ¤€ôøì(€€€½¹ÍÐ•¹ÑÉ¥•Ì€ôl(€€€€€ì­•äè€‰™¥ÉÍÐˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰Aˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€Ä¸Øà°‘…Ñ”è€ˆÈÀÈÈ´ÄÄ´ÀÜˆ°Ñ¥µ”è€ˆÄÀèÐÁ4ˆ°Í½ÕÉ”è€‰½™™¥¥…°µ‰É½­•Èµ•á•°ˆô¤ô°(€€€€€ì­•äè€‰Í•½¹ˆ°…¹‘¥‘…Ñ”è‰Õå…¹‘¥‘…Ñ”¡ìÑ¥­•Èè€‰Aˆ°Í¡…É•Ìè€ÔÀÀ°ÁÉ¥”è€Ä¸Øà°‘…Ñ”è€ˆÈÀÈÈ´ÄÄ´ÀÜˆ°Ñ¥µ”è€ˆÄÄèÔÁ4ˆ°Í½ÕÉ”è€‰½™™¥¥…°µ‰É½­•Èµ•á•°ˆô¤ô°(€€€tì(€€€•áÁ•Ð¡™¥¹‘=™™¥¥…±	É½­•Éá•±I•ÕÁ±½…‘ÕÁ±¥…Ñ•-•åÌ¡•¹ÑÉ¥•Ì°¹•ÜM•Ð¡l‰™¥ÉÍÐ‰t¤¤¤¹Ñ½ÅÕ…°¡mt¤ì(€ô¤ì)ô¤ì(

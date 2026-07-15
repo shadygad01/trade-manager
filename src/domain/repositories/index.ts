@@ -41,6 +41,7 @@ export interface TradeRepository {
   save(trade: Trade): Promise<void>;
   /** Optional bulk writer used by import confirmation to avoid one IndexedDB request per lot. */
   saveMany?(trades: Trade[]): Promise<void>;
+  deleteMany?(ids: string[]): Promise<void>;
   saveRemainingShares(tradeId: string, remainingShares: number): Promise<void>;
   delete(id: string): Promise<void>;
 }
@@ -52,6 +53,8 @@ export interface TradeAllocationRepository {
   getByPortfolio(portfolioId: string): Promise<TradeAllocation[]>;
   getByTrade(tradeId: string): Promise<TradeAllocation[]>;
   save(allocation: TradeAllocation): Promise<void>;
+  saveMany?(allocations: TradeAllocation[]): Promise<void>;
+  deleteMany?(ids: string[]): Promise<void>;
   delete(id: string): Promise<void>;
 }
 
@@ -61,6 +64,7 @@ export interface TimelineRepository {
   save(event: TimelineEvent): Promise<void>;
   /** Optional bulk writer used by import confirmation. */
   saveMany?(events: TimelineEvent[]): Promise<void>;
+  deleteMany?(ids: string[]): Promise<void>;
   delete(id: string): Promise<void>;
 }
 

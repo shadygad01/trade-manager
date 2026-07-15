@@ -25,6 +25,14 @@ export class DexieTradeAllocationRepository implements TradeAllocationRepository
     await this.db.tradeAllocations.put(allocation);
   }
 
+  async saveMany(allocations: TradeAllocation[]): Promise<void> {
+    if (allocations.length > 0) await this.db.tradeAllocations.bulkPut(allocations);
+  }
+
+  async deleteMany(ids: string[]): Promise<void> {
+    if (ids.length > 0) await this.db.tradeAllocations.bulkDelete(ids);
+  }
+
   async delete(id: string): Promise<void> {
     await this.db.tradeAllocations.delete(id);
   }

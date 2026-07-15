@@ -1,5 +1,6 @@
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
+import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 import type {
   RawTransactionRepository,
   TradeRepository,
@@ -184,10 +185,16 @@ export async function ensureLegacyFactsExist(repos: LegacyLedgerRepos, portfolio
       .map((t) => (t.payload as SellAllocationDecisionPayload).sellExecutionId)
   );
 
-  const legacyTrades = (await repos.trades.getByPortfolio(portfolioId))
+  const legacyTrades = (await (repos.trades.getByPortfolio
+    ? repos.trades.getByPortfolio(portfolioId)
+    : repos.trades.getAll().then((rows) => rows.filter((trade) => trade.portfolioId === portfolioId))))
     .filter((t) => normalizeTicker(t.ticker) === normalized)
     .sort((a, b) => a.id.localeCompare(b.id));
-  const legacyAllocations = (await repos.allocations.getByPortfolio(portfolioId)).filter((a) => normalizeTicker(a.ticker) === normalized);
+  const legacyAllocations = (await (repos.allocations.getByPortfolio
+    ? repos.allocations.getByPortfolio(portfolioId)
+    : repos.allocations.getAll().then((rows) => rows.filter((allocation) => allocation.portfolioId === portfolioId)))).filter(
+    (a) => normalizeTicker(a.ticker) === normalized,
+  );
   const tradeById = new Map(legacyTrades.map((t) => [t.id, t]));
 
   let appended = 0;
@@ -314,8 +321,27 @@ export async function projectLegacyTicker(
   engineAllocations: Allocation[]
 ): Promise<void> {
   const normalized = normalizeTicker(ticker);
-  const existingTrades = (await repos.trades.getByPortfolio(portfolioId)).filter((t) => normalizeTicker(t.ticker) === normalized);
-  const existingAllocations = (await repos.allocations.getByPortfolio(portfolioId)).filter((a) => normalizeTicker(a.ticker) === normalized);
+  const existingTrades = (await (repos.trades.getByPortfolio
+    ? repos.trades.getByPortfolio(portfolioId)
+    : repos.trades.getAll().then((rows) => rows.filter((trade) => trade.portfolioId === portfolioId)))).filter(
+    (t) => normalizeTicker(t.ticker) === normalized,
+  );
+  const existingAllocations = (await (repos.allocations.getByPortfolio
+    ? repos.allocations.getByPortfolio(portfolioId)
+    : repos.allocations.getAll().then((rows) => rows.filter((allocation) => allocation.portfolioId === portfolioId)))).filter(
+    (a) => normalizeTicker(a.ticker) === normalized,
+  );
+  const existingTimeline = repos.timeline
+    ? repos.timeline.getByPortfolio
+      ? await repos.timeline.getByPortfolio(portfolioId)
+      : (await repos.timeline.getAll()).filter((event) => event.portfolioId === portfolioId)
+    : [];
+  const tradesToSave: Trade[] = [];
+  const tradesToDelete: string[] = [];
+  const allocationsToSave: TradeAllocation[] = [];
+  const allocationsToDelete: string[] = [];
+  const timelineToSave: TimelineEvent[] = [];
+  const timelineToDelete: string[] = [];
 
   const lots = events.filter((e): e is LotOpenedEvent => e.type === "LotOpened");
   const closedByLot = new Map<string, number>();
@@ -407,7 +433,7 @@ export async function projectLegacyTicker(
         transactionNumber: lot.transactionNumber ?? match.transactionNumber,
         remainingShares,
       };
-      if (!tradesEqual(match, updated)) await repos.trades.save(updated);
+      if (!tradesEqual(match, updated)) tradesToSave.push(updated);
     } else {
       const created: Trade = {
         id: lot.eventId,
@@ -426,12 +452,12 @@ export async function projectLegacyTicker(
         createdAt: new Date().toISOString(),
         transactionNumber: lot.transactionNumber,
       };
-      await repos.trades.save(created);
+      tradesToSave.push(created);
       tradeIdByLotEventId.set(lot.eventId, created.id);
       keptTradeIds.add(created.id);
       if (repos.timeline) {
         const cost = lot.shares * lot.price + (lot.fees ?? 0) + (lot.taxes ?? 0);
-        await repos.timeline.save(
+        timelineToSave.push(
           createTimelineEvent({
             id: generateId(),
             portfolioId,
@@ -441,7 +467,7 @@ export async function projectLegacyTicker(
             relatedTradeIds: [created.id],
             amount: -cost,
             shares: lot.shares,
-          })
+          }),
         );
       }
     }
@@ -454,11 +480,21 @@ export async function projectLegacyTicker(
       if (entry) await repos.journal.delete(entry.id);
     }
     if (repos.timeline) {
-      const events_ = await repos.timeline.getByPortfolio(portfolioId);
-      const buyEvent = events_.find((e) => e.type === "Buy" && e.relatedTradeIds?.includes(stale.id));
-      if (buyEvent) await repos.timeline.delete(buyEvent.id);
+      const buyEvent = existingTimeline.find((e) => e.type === "Buy" && e.relatedTradeIds?.includes(stale.id));
+      if (buyEvent) timelineToDelete.push(buyEvent.id);
     }
-    await repos.trades.delete(stale.id);
+    tradesToDelete.push(stale.id);
+  }
+
+  if (repos.trades.saveMany) await repos.trades.saveMany(tradesToSave);
+  else for (const trade of tradesToSave) await repos.trades.save(trade);
+  if (repos.trades.deleteMany) await repos.trades.deleteMany(tradesToDelete);
+  else for (const id of tradesToDelete) await repos.trades.delete(id);
+  if (repos.timeline) {
+    if (repos.timeline.saveMany) await repos.timeline.saveMany(timelineToSave);
+    else for (const event of timelineToSave) await repos.timeline.save(event);
+    if (repos.timeline.deleteMany) await repos.timeline.deleteMany(timelineToDelete);
+    else for (const id of timelineToDelete) await repos.timeline.delete(id);
   }
 
   const keptAllocationIds = new Set<string>();
@@ -478,7 +514,7 @@ export async function projectLegacyTicker(
         executionTime: a.executionTime ?? match.executionTime,
         transactionNumber: a.transactionNumber ?? match.transactionNumber,
       };
-      if (!allocationsEqual(match, updated)) await repos.allocations.save(updated);
+      if (!allocationsEqual(match, updated)) allocationsToSave.push(updated);
     } else {
       const created: TradeAllocation = {
         id: a.id,
@@ -495,12 +531,16 @@ export async function projectLegacyTicker(
         createdAt: new Date().toISOString(),
         transactionNumber: a.transactionNumber,
       };
-      await repos.allocations.save(created);
+      allocationsToSave.push(created);
       keptAllocationIds.add(created.id);
     }
   }
 
   for (const stale of existingAllocations) {
-    if (!keptAllocationIds.has(stale.id)) await repos.allocations.delete(stale.id);
+    if (!keptAllocationIds.has(stale.id)) allocationsToDelete.push(stale.id);
   }
+  if (repos.allocations.saveMany) await repos.allocations.saveMany(allocationsToSave);
+  else for (const allocation of allocationsToSave) await repos.allocations.save(allocation);
+  if (repos.allocations.deleteMany) await repos.allocations.deleteMany(allocationsToDelete);
+  else for (const id of allocationsToDelete) await repos.allocations.delete(id);
 }

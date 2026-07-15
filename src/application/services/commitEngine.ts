@@ -13,8 +13,7 @@ import {
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { generateId } from "@domain/value-objects/id";
 import { verifyAll } from "./verificationEngine";
-import { generateLedgerEvents } from "./ledgerEngine";
-import { generateAllocations } from "./allocationEngine";
+import { projectInWorker } from "./commitProjectionWorker";
 import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
 import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } from "./ledgerProjection";
 import { canonicalKey } from "./ledgerRebuild";
@@ -201,7 +200,8 @@ export async function commitTicker(
 
   // Full relevant set, same reason as shouldCommit: capture facts are
   // corroboration inputs; verdicts still only ever cover Buy/Sell rows.
-  const verdicts = verifyAll({ transactions: relevant, positions: NO_EXISTING_POSITIONS });
+  const projected = await projectInWorker(relevant);
+  const verdicts = new Map(projected.verdicts);
   const verifiedTransactions = tradeTransactions.filter((t) => verdicts.get(t.id)?.verdict === "Verified");
   const factSeqCursor = relevant.reduce((max, t) => Math.max(max, t.seq), 0);
 
@@ -218,7 +218,7 @@ export async function commitTicker(
     factSeqCursor,
   });
 
-  const events = generateLedgerEvents(verifiedTransactions);
+  const events = projected.events;
 
   diagnostics?.recordDecision({
     decisionType: "Replay",
@@ -233,7 +233,7 @@ export async function commitTicker(
     factSeqCursor,
   });
 
-  const allocations = generateAllocations(events, decisionTransactions);
+  const allocations = projected.allocations;
 
   diagnostics?.recordDecision({
     decisionType: "Allocation",
@@ -263,12 +263,6 @@ export async function commitTicker(
   // permanently stranding a Sell row on "still pending") and skipping
   // projectLegacyTicker below entirely â€” even though events/allocations
   // were already computed and don't depend on this cache write succeeding.
-  try {
-    await repos.committedLedger.commitTicker({ portfolioId, ticker: normalizedTicker, events, allocations });
-  } catch (err) {
-    console.error("committedLedger.commitTicker failed (cache commit skipped, legacy projection still proceeds):", err);
-  }
-
   // Projection only ever runs on a TERMINAL verdict set. commitTicker is
   // also force-called on Retraction/Correction regardless of shouldCommit
   // (to clear a stale cache), and in that path a still-Needs-Review fact
@@ -277,421 +271,4 @@ export async function commitTicker(
   // terminal (everything retracted IS a settled state); an undecided one is
   // not.
   const terminal = [...verdicts.values()].every((v) => v.verdict !== "Needs Review");
-  if (projection && terminal) {
-    try {
-      await projectLegacyTicker(projection, portfolioId, normalizedTicker, events, allocations);
-    } catch (err) {
-      console.error("projectLegacyTicker failed (cache commit already applied, legacy rows unchanged):", err);
-    }
-  }
-}
-
-/**
- * The reactive trigger: append a raw transaction, then commit its ticker if
- * that just made the whole ticker's verification state terminal. This is
- * the ONLY place a commit is ever triggered â€” no scheduled job, no manual
- * "rebuild" button, matching the Ledger rewrite's "no rebuild command"
- * rule. Every writer should call this instead of `rawTransactions.append`
- * directly once it's ready to participate in the new architecture.
- *
- * A PortfolioAssignment's own envelope carries no portfolioId/ticker (it
- * targets another row by id) â€” its trigger check has to look up what it
- * just assigned instead. Any other transaction with no portfolioId (e.g.
- * everything Import writes today, before an assignment exists) or no
- * ticker has nothing to commit yet: a correct, expected no-op, not a gap.
- */
-export async function appendAndMaybeCommit(
-  repos: CommitEngineRepos,
-  transaction: Omit<RawTransaction, "seq">,
-  diagnostics?: DiagnosticsRecorder,
-  writerContext?: WriterContext,
-  options?: { deferCommit?: boolean },
-): Promise<RawTransaction> {
-  const appended = await repos.rawTransactions.append(transaction);
-
-  diagnostics?.recordWrite({
-    writer: writerContext?.writer ?? "commitEngine.ts",
-    function: writerContext?.function ?? "appendAndMaybeCommit",
-    file: writerContext?.file ?? "src/application/services/commitEngine.ts",
-    table: "rawTransactions",
-    objectId: appended.id,
-    valueSource: "reference",
-    reason: writerContext?.reason ?? `Appended a ${appended.kind} fact`,
-    portfolioId: appended.portfolioId,
-    ticker: appended.ticker,
-  });
-
-  if (options?.deferCommit) return appended;
-
-  if (appended.kind === "PortfolioAssignment") {
-    const { targetId, portfolioId } = appended.payload as PortfolioAssignmentPayload;
-    const target = await repos.rawTransactions.getById(targetId);
-    if (target?.ticker !== undefined && (await shouldCommit(repos, portfolioId, target.ticker))) {
-      await commitTicker(repos, portfolioId, target.ticker, diagnostics);
-    }
-  } else if (appended.kind === "Correction") {
-    // A ticker correction moves its target between two tickers' relevant
-    // sets â€” unlike the shouldCommit-gated branches below, both the ticker
-    // it just left and the ticker it just joined must re-derive their cache
-    // immediately (never left stale), regardless of whether every other
-    // pending row on either ticker has reached a terminal verdict yet.
-    const { targetId, patch } = appended.payload as CorrectionPayload;
-    if (patch.ticker !== undefined) {
-      const target = await repos.rawTransactions.getById(targetId);
-      if (target) {
-        const all = await repos.rawTransactions.getAll();
-        const resolvedPortfolioId = resolveCurrentPortfolioId(all, target);
-        if (resolvedPortfolioId !== undefined) {
-          const priorTicker = resolveCurrentTicker(all, target, appended.id);
-          const currentTicker = resolveCurrentTicker(all, target);
-          const affectedTickers = new Set([priorTicker, currentTicker].filter((t): t is string => t !== undefined));
-          for (const affectedTicker of affectedTickers) {
-            await commitTicker(repos, resolvedPortfolioId, affectedTicker, diagnostics);
-          }
-        }
-      }
-    }
-  } else if (appended.kind === "Retraction") {
-    // Same reasoning as Correction above: a retraction must force its
-    // ticker's cache to drop the retracted row right away, even if the rest
-    // of the ticker's batch isn't otherwise terminal.
-    const { targetId } = appended.payload as RetractionPayload;
-    const target = await repos.rawTransactions.getById(targetId);
-    if (target?.ticker !== undefined) {
-      const all = await repos.rawTransactions.getAll();
-      const resolvedPortfolioId = resolveCurrentPortfolioId(all, target);
-      const resolvedTicker = resolveCurrentTicker(all, target);
-      if (resolvedPortfolioId !== undefined && resolvedTicker !== undefined) {
-        await commitTicker(repos, resolvedPortfolioId, resolvedTicker, diagnostics);
-      }
-    }
-  } else if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
-    if (await shouldCommit(repos, appended.portfolioId, appended.ticker)) {
-      await commitTicker(repos, appended.portfolioId, appended.ticker, diagnostics);
-    }
-  }
-  return appended;
-}
-
-/**
- * Assigns every still-unassigned raw transaction for `ticker` to
- * `portfolioId` â€” one PortfolioAssignment fact per target, never a batch
- * edit, so each stays independently traceable. This is what Import's
- * existing per-ticker portfolio picker calls once the user resolves which
- * portfolio a ticker's extracted rows belong to; it's the only place a
- * freshly-imported (portfolioId-less) raw transaction ever gets one.
- */
-export async function assignPortfolio(
-  repos: CommitEngineRepos,
-  ticker: string,
-  portfolioId: string,
-  diagnostics?: DiagnosticsRecorder,
-  options?: { deferCommit?: boolean },
-): Promise<void> {
-  const normalizedTicker = normalizeTicker(ticker);
-  const all = await repos.rawTransactions.getAll();
-  const unassigned = all.filter((t) => {
-    if (NON_SUBJECT_KINDS.has(t.kind)) return false;
-    if (isRetracted(all, t.id)) return false;
-    const resolvedTicker = resolveCurrentTicker(all, t);
-    if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== normalizedTicker) return false;
-    return resolveCurrentPortfolioId(all, t) === undefined;
-  });
-
-  for (const target of unassigned) {
-    const payload: PortfolioAssignmentPayload = { targetId: target.id, portfolioId };
-    await appendAndMaybeCommit(
-      repos,
-      createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }),
-      diagnostics,
-      { writer: "commitEngine.ts", function: "assignPortfolio", file: "src/application/services/commitEngine.ts", reason: "Assigned a still-unassigned fact to a portfolio (ticker-wide sweep)" },
-      options,
-    );
-  }
-}
-
-/**
- * Assigns exactly ONE fact to `portfolioId` â€” the single-target counterpart
- * to `assignPortfolio`'s ticker-wide sweep, for a caller that just
- * adopted/created that one specific fact and has no business touching any
- * of its ticker's OTHER still-pending siblings.
- *
- * Real, reproduced bug this exists to fix: `ensureBuyFact`/`ensureSellFacts`
- * used to call the ticker-wide `assignPortfolio` here instead â€” harmless for
- * a ticker with a single Buy/Sell, but for a ticker with TWO OR MORE
- * still-pending Buys in the same commit batch (e.g. two Excel-sourced Buys
- * imported together), assigning the FIRST one's fact swept up the SECOND
- * one's still-unprocessed fact too (it looked "unassigned", same as any
- * genuine gap `assignPortfolio` exists to close) â€” which reactively fired
- * `appendAndMaybeCommit`'s own commit trigger for the second fact BEFORE its
- * own `recordBuy` call had run, materializing a legacy Trade for it straight
- * from the raw fact via `projectLegacyTicker`. That phantom Trade then raced
- * the second candidate's own, genuine `recordBuy` call moments later,
- * producing two Trade rows for one real execution, and the genuine
- * candidate's own RawTransaction fact got auto-skipped/retracted as an
- * apparent "exact duplicate" of the phantom â€” permanently losing its
- * official-broker-excel provenance the same shape as the single-Buy race
- * this same investigation found and fixed in `ImportPage.tsx`. Scoping the
- * assignment to exactly the fact just adopted/created closes this off at
- * the source: no other still-pending sibling is ever touched.
- */
-export async function assignPortfolioToFact(
-  repos: CommitEngineRepos,
-  targetId: string,
-  portfolioId: string,
-  diagnostics?: DiagnosticsRecorder,
-  options?: { deferCommit?: boolean },
-): Promise<void> {
-  const all = await repos.rawTransactions.getAll();
-  const target = all.find((t) => t.id === targetId);
-  if (!target || isRetracted(all, target.id) || resolveCurrentPortfolioId(all, target) !== undefined) return;
-  const payload: PortfolioAssignmentPayload = { targetId, portfolioId };
-  await appendAndMaybeCommit(
-    repos,
-    createRawTransaction({ kind: "PortfolioAssignment", source: "manual", payload }),
-    diagnostics,
-    { writer: "commitEngine.ts", function: "assignPortfolioToFact", file: "src/application/services/commitEngine.ts", reason: "Assigned exactly one adopted/created fact to a portfolio" },
-    options,
-  );
-}
-
-/**
- * Retracts one raw transaction â€” used when the pre-migration UI deletes or
- * voids a fact directly (e.g. TradeService.deleteTrade), so the new
- * architecture's next commit for that ticker can't resurrect something the
- * user just removed. `targetId` must be the RawTransaction's own id, not a
- * derived LedgerEvent id.
- */
-export async function retractRawTransaction(
-  repos: CommitEngineRepos,
-  targetId: string,
-  reason?: string,
-  diagnostics?: DiagnosticsRecorder
-): Promise<void> {
-  const payload: RetractionPayload = { targetId, reason };
-  await appendAndMaybeCommit(
-    repos,
-    createRawTransaction({ kind: "Retraction", source: "manual", payload }),
-    diagnostics,
-    { writer: "commitEngine.ts", function: "retractRawTransaction", file: "src/application/services/commitEngine.ts", reason: reason ?? "Retracted a raw transaction" }
-  );
-}
-
-/**
- * Closes a structural gap `duplicateMatch`/`upgradeFact` (ImportPage.tsx)
- * never covers: those only ever reconcile a fact against a NEW candidate
- * actively being extracted in an Import session, comparing it against the
- * legacy Trade/TradeAllocation projection. Any OTHER writer that appends a
- * live execution fact outside that flow â€” e.g. `ensureLegacyFactsExist`
- * (ledgerProjection.ts) reactively gap-filling a legacy Trade â€” never passes
- * through that check at all, so two live facts describing the identical
- * execution (same canonicalKey) can coexist indefinitely with nothing to
- * converge them, regardless of which one was appended first, which ticker,
- * or which portfolio. This is that missing convergence step, generic across
- * every ticker/portfolio/execution: whenever more than one live fact shares
- * a canonicalKey, only the highest-`authorityRank` one survives.
- *
- * Deliberately scoped to one (already-resolved) ticker per call, run from
- * `commitTicker` right after `ensureLegacyFactsExist`, never a
- * database-wide sweep â€” the same "no unattended full-portfolio rewrite"
- * safety boundary this codebase's BF-1 Validation Design established. A
- * genuine tie (`authorityRank` equal â€” e.g. two "manual" facts) is never
- * resolved automatically, mirroring `higherAuthority`'s own "ties favor
- * neither" rule; only a STRICTLY higher-ranked survivor triggers anything.
- *
- * canonicalKey alone (ticker/date/shares/price) is NOT sufficient proof two
- * facts describe the SAME execution â€” crossTransactionIsolation.test.ts's
- * whole "twin lot" suite exists because two genuinely DISTINCT real
- * executions routinely share that exact value (e.g. two same-price
- * same-day orders). A first version of this function ignored that and
- * wrongly merged a twin-lot pair in exactly that test, caught by the
- * regression suite before shipping. `findLiveExecutionFact`'s own
- * `timesConflict` tie-break is the established, already-tested primitive
- * for this distinction, reused first: if ANY pair within a canonicalKey
- * group has a genuinely conflicting `executionTime` (proving they're
- * different real orders, not one execution described twice), the WHOLE
- * group is left untouched.
- *
- * That alone still isn't enough: a SECOND real, reproduced defect (same
- * test, same investigation) showed `ensureLegacyFactsExist` can itself
- * nondeterministically mint a redundant gap-fill fact for one twin lot even
- * while its own already-adopted extraction-time fact is still live â€” a
- * pre-existing Gap Filling behavior, out of this fix's scope to correct
- * (see docs/ROADMAP.md Sprint 16). When that happens, the redundant fact's
- * `executionTime` can coincidentally match its sibling's, defeating the
- * `timesConflict` check alone. The second guard therefore consults the
- * legacy Trades when they are available (they always are from
- * `commitTicker`): a group is skipped only when its facts are compatible
- * with MORE THAN ONE same-value Trade. This preserves the twin-lot safety
- * boundary without throwing away a safe convergence merely because another
- * same-value Trade exists at a different, conflicting time.
- *
- * Buy-side: a Buy fact is never referenced by another fact's id, so a plain
- * retraction is the whole fix (mirrors `upgradeFact`'s own BUY branch).
- * Sell-side: also re-points a live SellAllocationDecision referencing the
- * losing fact at the survivor instead of leaving it dangling â€” the same
- * swap provenanceRepair.ts's own `upgradeSellExecutionFact` performs for
- * its narrower ("manual"-only) historical case, inlined here rather than
- * imported to avoid a circular dependency (provenanceRepair.ts already
- * imports this file for `retractRawTransaction`/`appendAndMaybeCommit`).
- *
- * Every write below goes straight to `repos.rawTransactions.append` â€”
- * never `retractRawTransaction`/`appendAndMaybeCommit` â€” for the exact
- * reason `ensureLegacyFactsExist`'s own doc comment states: this runs
- * INSIDE `commitTicker`, and `appendAndMaybeCommit` reactively re-triggers
- * `commitTicker` on every append. A real, reproduced regression caught this
- * the hard way (the same twin-lot suite above, on a first attempt at this
- * fix): the recursive re-entrant commit interleaved with the outer call's
- * own `projectLegacyTicker` run and transiently deleted a still-open Trade
- * row before its own Sell could reference it. Diagnostics tracing is
- * intentionally skipped here for the same reason `ensureLegacyFactsExist`
- * has none â€” there is no `WriterContext`-carrying choke point available at
- * this recursion depth that doesn't reintroduce the same hazard.
- */
-export async function reconcileDuplicateAuthority(
-  repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
-  ticker: string
-): Promise<number> {
-  const normalized = normalizeTicker(ticker);
-  let convergedCount = 0;
-
-  // Keep the actual Trade times, rather than only their number. A
-  // time-resolved pair of facts can safely converge even when a different
-  // twin lot shares its time-blind canonicalKey.
-  let buysByKey: Map<string, Trade[]> | undefined;
-  if (repos.trades) {
-    const allTrades = await repos.trades.getAll();
-    buysByKey = new Map<string, Trade[]>();
-    for (const t of allTrades) {
-      if (normalizeTicker(t.ticker) !== normalized) continue;
-      const key = canonicalKey({ side: "BUY", ticker: normalized, date: t.executionDate, shares: t.shares, price: t.entryPrice });
-      const matches = buysByKey.get(key) ?? [];
-      matches.push(t);
-      buysByKey.set(key, matches);
-    }
-  }
-
-  for (const kind of ["BuyExecution", "SellExecution"] as const) {
-    const all = await repos.rawTransactions.getAll();
-    const live = all.filter((t) => {
-      if (t.kind !== kind) return false;
-      if (isRetracted(all, t.id)) return false;
-      const resolved = resolveCurrentTicker(all, t);
-      return resolved !== undefined && normalizeTicker(resolved) === normalized;
-    });
-
-    const byKey = new Map<string, RawTransaction[]>();
-    for (const t of live) {
-      const p = t.payload as BuyExecutionPayload | SellExecutionPayload;
-      const key = canonicalKey({
-        side: kind === "BuyExecution" ? "BUY" : "SELL",
-        ticker: normalized,
-        date: p.executionDate,
-        shares: p.shares,
-        price: p.price,
-      });
-      const list = byKey.get(key) ?? [];
-      list.push(t);
-      byKey.set(key, list);
-    }
-
-    for (const [key, facts] of byKey.entries()) {
-      if (facts.length <= 1) continue;
-
-      const timeOf = (t: RawTransaction) => (t.payload as BuyExecutionPayload | SellExecutionPayload).executionTime;
-      const hasConflictingTwin = facts.some((a, i) => facts.some((b, j) => i < j && timesConflict(timeOf(a), timeOf(b))));
-      if (hasConflictingTwin) continue; // at least one pair is provably a distinct real execution â€” never merge this group.
-
-      if (kind === "BuyExecution") {
-        const compatibleTrades = (buysByKey?.get(key) ?? []).filter((trade) =>
-          facts.every((fact) => !timesConflict(timeOf(fact), trade.executionTime)),
-        );
-        // Two compatible legacy trades means the facts still cannot be
-        // tied to one business execution safely (including an unknown-time
-        // backfill), so retain the conservative twin-lot behavior.
-        if (compatibleTrades.length >= 2) continue;
-      }
-
-      const best = facts.reduce((a, b) => (authorityRank(b.source) > authorityRank(a.source) ? b : a));
-      for (const loser of facts) {
-        if (loser.id === best.id) continue;
-        if (authorityRank(loser.source) >= authorityRank(best.source)) continue; // tie â€” never auto-resolved.
-
-        await repos.rawTransactions.append(
-          createRawTransaction({
-            kind: "Retraction",
-            source: "manual",
-            payload: { targetId: loser.id, reason: "Provenance upgrade: superseded by a higher-authority document describing the same execution." },
-          })
-        );
-
-        if (kind === "SellExecution") {
-          const freshAll = await repos.rawTransactions.getAll();
-          const decision = freshAll.find(
-            (t) =>
-              t.kind === "SellAllocationDecision" &&
-              !isRetracted(freshAll, t.id) &&
-              (t.payload as SellAllocationDecisionPayload).sellExecutionId === loser.id
-          );
-          if (decision) {
-            await repos.rawTransactions.append(
-              createRawTransaction({
-                kind: "Retraction",
-                source: "manual",
-                payload: { targetId: decision.id, reason: "Provenance upgrade: re-pointed at the higher-authority SellExecution fact." },
-              })
-            );
-            const replacementPayload: SellAllocationDecisionPayload = {
-              sellExecutionId: best.id,
-              allocations: (decision.payload as SellAllocationDecisionPayload).allocations,
-            };
-            await repos.rawTransactions.append(
-              createRawTransaction({ kind: "SellAllocationDecision", source: "manual", portfolioId: decision.portfolioId, ticker: decision.ticker, payload: replacementPayload })
-            );
-          }
-        }
-        convergedCount += 1;
-      }
-    }
-  }
-
-  return convergedCount;
-}
-
-/**
- * Corrects every still-live raw transaction currently resolving to
- * `oldTicker` (Buy/Sell executions, evidence, verifications, dividends â€”
- * anything ticker-bearing) over to `newTicker` â€” the raw-transaction twin of
- * TradeService.renameTickerEverywhere, so a ticker rename in the
- * pre-migration UI doesn't leave this architecture's copy permanently
- * orphaned under the old, now-corrected-away ticker.
- */
-export async function renameRawTransactionsTicker(
-  repos: CommitEngineRepos,
-  oldTicker: string,
-  newTicker: string,
-  diagnostics?: DiagnosticsRecorder
-): Promise<number> {
-  const normalizedOld = normalizeTicker(oldTicker);
-  const normalizedNew = normalizeTicker(newTicker);
-  if (!normalizedNew || normalizedNew === normalizedOld) return 0;
-
-  const all = await repos.rawTransactions.getAll();
-  const targets = all.filter((t) => {
-    if (t.ticker === undefined) return false;
-    if (isRetracted(all, t.id)) return false;
-    const resolvedTicker = resolveCurrentTicker(all, t);
-    return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalizedOld;
-  });
-
-  for (const target of targets) {
-    const payload: CorrectionPayload = { targetId: target.id, patch: { ticker: normalizedNew } };
-    await appendAndMaybeCommit(
-      repos,
-      createRawTransaction({ kind: "Correction", source: "manual", payload }),
-      diagnostics,
-      { writer: "commitEngine.ts", function: "renameRawTransactionsTicker", file: "src/application/services/commitEngine.ts", reason: `Corrected ticker ${normalizedOld} -> ${normalizedNew}` }
-    );
-  }
-  return targets.length;
-}
+  cÛ]¼¶‰ËkºwµçAĞ¤€ôôôÕ¹‘•™¥¹•ì4(€ô¤ì4(4(€™½È€¡½¹ÍĞÑ…É•Ğ½˜Õ¹…ÍÍ¥¹•¤ì4(€€€½¹ÍĞÁ…å±½…èA½ÉÑ™½±¥½ÍÍ¥¹µ•¹ÑA…å±½…€ôìÑ…É•Ñ%èÑ…É•Ğ¹¥°Á½ÉÑ™½±¥½%ôì4(€€€…İ…¥Ğ…ÁÁ•¹‘¹‘5…å‰•½µµ¥Ğ 4(€€€€€É•Á½Ì°4(€€€€€É•…Ñ•I…İQÉ…¹Í…Ñ¥½¸¡ì­¥¹è€‰A½ÉÑ™½±¥½ÍÍ¥¹µ•¹Ğˆ°Í½ÕÉ”è€‰µ…¹Õ…°ˆ°Á…å±½…ô¤°4(€€€€€‘¥…¹½ÍÑ¥Ì°(€€€€€ìİÉ¥Ñ•Èè€‰½µµ¥Ñ¹¥¹”¹ÑÌˆ°™Õ¹Ñ¥½¸è€‰…ÍÍ¥¹A½ÉÑ™½±¥¼ˆ°™¥±”è€‰ÍÉŒ½…ÁÁ±¥…Ñ¥½¸½Í•ÉÙ¥•Ì½½µµ¥Ñ¹¥¹”¹ÑÌˆ°É•…Í½¸è€‰ÍÍ¥¹•„ÍÑ¥±°µÕ¹…ÍÍ¥¹•™…ĞÑ¼„Á½ÉÑ™½±¥¼€¡Ñ¥­•Èµİ¥‘”Íİ••À¤ˆô°(€€€€€½ÁÑ¥½¹Ì°(€€€€¤ì4(€ô4)ô4(4(¼¨¨4(€¨ÍÍ¥¹Ì•á…Ñ±ä=9™…ĞÑ¼Á½ÉÑ™½±¥½%‘€ƒŠPÑ¡”Í¥¹±”µÑ…É•Ğ½Õ¹Ñ•ÉÁ…ÉĞ4(€¨Ñ¼…ÍÍ¥¹A½ÉÑ™½±¥½€ÌÑ¥­•Èµİ¥‘”Íİ••À°™½È„…±±•ÈÑ¡…Ğ©ÕÍĞ4(€¨…‘½ÁÑ•½É•…Ñ•Ñ¡…Ğ½¹”ÍÁ•¥™¥Œ™…Ğ…¹¡…Ì¹¼‰ÕÍ¥¹•ÍÌÑ½Õ¡¥¹œ…¹ä4(€¨½˜¥ÑÌÑ¥­•ÈÌ=Q!HÍÑ¥±°µÁ•¹‘¥¹œÍ¥‰±¥¹Ì¸4(€¨4(€¨I•…°°É•ÁÉ½‘Õ•‰ÕœÑ¡¥Ì•á¥ÍÑÌÑ¼™¥àè•¹ÍÕÉ•	Õå…Ñ€½•¹ÍÕÉ•M•±±…ÑÍ€4(€¨ÕÍ•Ñ¼…±°Ñ¡”Ñ¥­•Èµİ¥‘”…ÍÍ¥¹A½ÉÑ™½±¥½€¡•É”¥¹ÍÑ•…ƒŠP¡…Éµ±•ÍÌ™½È4(€¨„Ñ¥­•Èİ¥Ñ „Í¥¹±”	Õä½M•±°°‰ÕĞ™½È„Ñ¥­•Èİ¥Ñ Q]<=H5=I4(€¨ÍÑ¥±°µÁ•¹‘¥¹œ	ÕåÌ¥¸Ñ¡”Í…µ”½µµ¥Ğ‰…Ñ €¡”¹œ¸Ñİ¼á•°µÍ½ÕÉ•	ÕåÌ4(€¨¥µÁ½ÉÑ•Ñ½•Ñ¡•È¤°…ÍÍ¥¹¥¹œÑ¡”%IMP½¹”Ì™…ĞÍİ•ÁĞÕÀÑ¡”M=94(€¨½¹”ÌÍÑ¥±°µÕ¹ÁÉ½•ÍÍ•™…ĞÑ½¼€¡¥Ğ±½½­•€‰Õ¹…ÍÍ¥¹•ˆ°Í…µ”…Ì…¹ä4(€¨•¹Õ¥¹”…À…ÍÍ¥¹A½ÉÑ™½±¥½€•á¥ÍÑÌÑ¼±½Í”¤ƒŠPİ¡¥ É•…Ñ¥Ù•±ä™¥É•4(€¨…ÁÁ•¹‘¹‘5…å‰•½µµ¥Ñ€Ì½İ¸½µµ¥ĞÑÉ¥•È™½ÈÑ¡”Í•½¹™…Ğ	=I¥ÑÌ4(€¨½İ¸É•½É‘	Õå€…±°¡…ÉÕ¸°µ…Ñ•É¥…±¥é¥¹œ„±•…äQÉ…‘”™½È¥ĞÍÑÉ…¥¡Ğ4(€¨™É½´Ñ¡”É…Ü™…ĞÙ¥„ÁÉ½©•Ñ1•…åQ¥­•É€¸Q¡…ĞÁ¡…¹Ñ½´QÉ…‘”Ñ¡•¸É…•4(€¨Ñ¡”Í•½¹…¹‘¥‘…Ñ”Ì½İ¸°•¹Õ¥¹”É•½É‘	Õå€…±°µ½µ•¹ÑÌ±…Ñ•È°4(€¨ÁÉ½‘Õ¥¹œÑİ¼QÉ…‘”É½İÌ™½È½¹”É•…°•á•ÕÑ¥½¸°…¹Ñ¡”•¹Õ¥¹”4(€¨…¹‘¥‘…Ñ”Ì½İ¸I…İQÉ…¹Í…Ñ¥½¸™…Ğ½Ğ…ÕÑ¼µÍ­¥ÁÁ•½É•ÑÉ…Ñ•…Ì…¸4(€¨…ÁÁ…É•¹Ğ€‰•á…Ğ‘ÕÁ±¥…Ñ”ˆ½˜Ñ¡”Á¡…¹Ñ½´ƒŠPÁ•Éµ…¹•¹Ñ±ä±½Í¥¹œ¥ÑÌ4(€¨½™™¥¥…°µ‰É½­•Èµ•á•°ÁÉ½Ù•¹…¹”Ñ¡”Í…µ”Í¡…Á”…ÌÑ¡”Í¥¹±”µ	ÕäÉ…”4(€¨Ñ¡¥ÌÍ…µ”¥¹Ù•ÍÑ¥…Ñ¥½¸™½Õ¹…¹™¥á•¥¸%µÁ½ÉÑA…”¹ÑÍá€¸M½Á¥¹œÑ¡”4(€¨…ÍÍ¥¹µ•¹ĞÑ¼•á…Ñ±äÑ¡”™…Ğ©ÕÍĞ…‘½ÁÑ•½É•…Ñ•±½Í•ÌÑ¡¥Ì½™˜…Ğ4(€¨Ñ¡”Í½ÕÉ”è¹¼½Ñ¡•ÈÍÑ¥±°µÁ•¹‘¥¹œÍ¥‰±¥¹œ¥Ì•Ù•ÈÑ½Õ¡•¸4(€¨¼4)•áÁ½ÉĞ…Íå¹Œ™Õ¹Ñ¥½¸…ÍÍ¥¹A½ÉÑ™½±¥½Q½…Ğ (€É•Á½Ìè½µµ¥Ñ¹¥¹•I•Á½Ì°(€Ñ…É•Ñ%èÍÑÉ¥¹œ°(€Á½ÉÑ™½±¥½%èÍÑÉ¥¹œ°(€‘¥…¹½ÍÑ¥Ìüè¥…¹½ÍÑ¥ÍI•½É‘•È°(€½ÁÑ¥½¹Ìüèì‘•™•É½µµ¥Ğüè‰½½±•…¸ô°(¤èAÉ½µ¥Í”ñÙ½¥øì(€½¹ÍĞ…±°€ô…İ…¥ĞÉ•Á½Ì¹É…İQÉ…¹Í…Ñ¥½¹Ì¹•Ñ±° ¤ì4(€½¹ÍĞÑ…É•Ğ€ô…±°¹™¥¹ ¡Ğ¤€ôøĞ¹¥€ôôôÑ…É•Ñ%¤ì4(€¥˜€ …Ñ…É•Ğñğ¥ÍI•ÑÉ…Ñ•¡…±°°Ñ…É•Ğ¹¥¤ñğÉ•Í½±Ù•ÕÉÉ•¹ÑA½ÉÑ™½±¥½%¡…±°°Ñ…É•Ğ¤€„ôôÕ¹‘•™¥¹•¤É•ÑÕÉ¸ì4(€½¹ÍĞÁ…å±½…èA½ÉÑ™½±¥½ÍÍ¥¹µ•¹ÑA…å±½…€ôìÑ…É•Ñ%°Á½ÉÑ™½±¥½%ôì4(€…İ…¥Ğ…ÁÁ•¹‘¹‘5…å‰•½µµ¥Ğ 4(€€€É•Á½Ì°4(€€€É•…Ñ•I…İQÉ…¹Í…Ñ¥½¸¡ì­¥¹è€‰A½ÉÑ™½±¥½ÍÍ¥¹µ•¹Ğˆ°Í½ÕÉ”è€‰µ…¹Õ…°ˆ°Á…å±½…ô¤°4(€€€‘¥…¹½ÍÑ¥Ì°(€€€ìİÉ¥Ñ•Èè€‰½µµ¥Ñ¹¥¹”¹ÑÌˆ°™Õ¹Ñ¥½¸è€‰…ÍÍ¥¹A½ÉÑ™½±¥½Q½…Ğˆ°™¥±”è€‰ÍÉŒ½…ÁÁ±¥…Ñ¥½¸½Í•ÉÙ¥•Ì½½µµ¥Ñ¹¥¹”¹ÑÌˆ°É•…Í½¸è€‰ÍÍ¥¹••á…Ñ±ä½¹”…‘½ÁÑ•½É•…Ñ•™…ĞÑ¼„Á½ÉÑ™½±¥¼ˆô°(€€€½ÁÑ¥½¹Ì°(€€¤ì)ô(4(¼¨¨4(€¨I•ÑÉ…ÑÌ½¹”É…ÜÑÉ…¹Í…Ñ¥½¸ƒŠPÕÍ•İ¡•¸Ñ¡”ÁÉ”µµ¥É…Ñ¥½¸U$‘•±•Ñ•Ì½È4(€¨Ù½¥‘Ì„™…Ğ‘¥É•Ñ±ä€¡”¹œ¸QÉ…‘•M•ÉÙ¥”¹‘•±•Ñ•QÉ…‘”¤°Í¼Ñ¡”¹•Ü4(€¨…É¡¥Ñ•ÑÕÉ”Ì¹•áĞ½µµ¥Ğ™½ÈÑ¡…ĞÑ¥­•È…¸ĞÉ•ÍÕÉÉ•ĞÍ½µ•Ñ¡¥¹œÑ¡”4(€¨ÕÍ•È©ÕÍĞÉ•µ½Ù•¸Ñ…É•Ñ%‘€µÕÍĞ‰”Ñ¡”I…İQÉ…¹Í…Ñ¥½¸Ì½İ¸¥°¹½Ğ„4(€¨‘•É¥Ù•1•‘•ÉÙ•¹Ğ¥¸4(€¨¼4)•áÁ½ÉĞ…Íå¹Œ™Õ¹Ñ¥½¸É•ÑÉ…ÑI…İQÉ…¹Í…Ñ¥½¸ 4(€É•Á½Ìè½µµ¥Ñ¹¥¹•I•Á½Ì°4(€Ñ…É•Ñ%èÍÑÉ¥¹œ°4(€É•…Í½¸üèÍÑÉ¥¹œ°4(€‘¥…¹½ÍÑ¥Ìüè¥…¹½ÍÑ¥ÍI•½É‘•È4(¤èAÉ½µ¥Í”ñÙ½¥øì4(€½¹ÍĞÁ…å±½…èI•ÑÉ…Ñ¥½¹A…å±½…€ôìÑ…É•Ñ%°É•…Í½¸ôì4(€…İ…¥Ğ…ÁÁ•¹‘¹‘5…å‰•½µµ¥Ğ 4(€€€É•Á½Ì°4(€€€É•…Ñ•I…İQÉ…¹Í…Ñ¥½¸¡ì­¥¹è€‰I•ÑÉ…Ñ¥½¸ˆ°Í½ÕÉ”è€‰µ…¹Õ…°ˆ°Á…å±½…ô¤°4(€€€‘¥…¹½ÍÑ¥Ì°4(€€€ìİÉ¥Ñ•Èè€‰½µµ¥Ñ¹¥¹”¹ÑÌˆ°™Õ¹Ñ¥½¸è€‰É•ÑÉ…ÑI…İQÉ…¹Í…Ñ¥½¸ˆ°™¥±”è€‰ÍÉŒ½…ÁÁ±¥…Ñ¥½¸½Í•ÉÙ¥•Ì½½µµ¥Ñ¹¥¹”¹ÑÌˆ°É•…Í½¸èÉ•…Í½¸€üü€‰I•ÑÉ…Ñ•„É…ÜÑÉ…¹Í…Ñ¥½¸ˆô4(€€¤ì4)ô4(4(¼¨¨4(€¨±½Í•Ì„ÍÑÉÕÑÕÉ…°…À‘ÕÁ±¥…Ñ•5…Ñ¡€½ÕÁÉ…‘•…Ñ€€¡%µÁ½ÉÑA…”¹ÑÍà¤4(€¨¹•Ù•È½Ù•ÉÌèÑ¡½Í”½¹±ä•Ù•ÈÉ•½¹¥±”„™…Ğ……¥¹ÍĞ„9\…¹‘¥‘…Ñ”4(€¨…Ñ¥Ù•±ä‰•¥¹œ•áÑÉ…Ñ•¥¸…¸%µÁ½ÉĞÍ•ÍÍ¥½¸°½µÁ…É¥¹œ¥Ğ……¥¹ÍĞÑ¡”4(€¨±•…äQÉ…‘”½QÉ…‘•±±½…Ñ¥½¸ÁÉ½©•Ñ¥½¸¸¹ä=Q!HİÉ¥Ñ•ÈÑ¡…Ğ…ÁÁ•¹‘Ì„4(€¨±¥Ù”•á•ÕÑ¥½¸™…Ğ½ÕÑÍ¥‘”Ñ¡…Ğ™±½ÜƒŠP”¹œ¸•¹ÍÕÉ•1•…å…ÑÍá¥ÍÑ€4(€¨€¡±•‘•ÉAÉ½©•Ñ¥½¸¹ÑÌ¤É•…Ñ¥Ù•±ä…Àµ™¥±±¥¹œ„±•…äQÉ…‘”ƒŠP¹•Ù•ÈÁ…ÍÍ•Ì4(€¨Ñ¡É½Õ Ñ¡…Ğ¡•¬…Ğ…±°°Í¼Ñİ¼±¥Ù”™…ÑÌ‘•ÍÉ¥‰¥¹œÑ¡”¥‘•¹Ñ¥…°4(€¨•á•ÕÑ¥½¸€¡Í…µ”…¹½¹¥…±-•ä¤…¸½•á¥ÍĞ¥¹‘•™¥¹¥Ñ•±äİ¥Ñ ¹½Ñ¡¥¹œÑ¼4(€¨½¹Ù•É”Ñ¡•´°É•…É‘±•ÍÌ½˜İ¡¥ ½¹”İ…Ì…ÁÁ•¹‘•™¥ÉÍĞ°İ¡¥ Ñ¥­•È°4(€¨½Èİ¡¥ Á½ÉÑ™½±¥¼¸Q¡¥Ì¥ÌÑ¡…Ğµ¥ÍÍ¥¹œ½¹Ù•É•¹”ÍÑ•À°•¹•É¥Œ…É½ÍÌ4(€¨•Ù•ÉäÑ¥­•È½Á½ÉÑ™½±¥¼½•á•ÕÑ¥½¸èİ¡•¹•Ù•Èµ½É”Ñ¡…¸½¹”±¥Ù”™…ĞÍ¡…É•Ì4(€¨„…¹½¹¥…±-•ä°½¹±äÑ¡”¡¥¡•ÍĞµ…ÕÑ¡½É¥ÑåI…¹­€½¹”ÍÕÉÙ¥Ù•Ì¸4(€¨4(€¨•±¥‰•É…Ñ•±äÍ½Á•Ñ¼½¹”€¡…±É•…‘äµÉ•Í½±Ù•¤Ñ¥­•ÈÁ•È…±°°ÉÕ¸™É½´4(€¨½µµ¥ÑQ¥­•É€É¥¡Ğ…™Ñ•È•¹ÍÕÉ•1•…å…ÑÍá¥ÍÑ€°¹•Ù•È„4(€¨‘…Ñ…‰…Í”µİ¥‘”Íİ••ÀƒŠPÑ¡”Í…µ”€‰¹¼Õ¹…ÑÑ•¹‘•™Õ±°µÁ½ÉÑ™½±¥¼É•İÉ¥Ñ”ˆ4(€¨Í…™•Ñä‰½Õ¹‘…ÉäÑ¡¥Ì½‘•‰…Í”Ì	´ÄY…±¥‘…Ñ¥½¸•Í¥¸•ÍÑ…‰±¥Í¡•¸4(€¨•¹Õ¥¹”Ñ¥”€¡…ÕÑ¡½É¥ÑåI…¹­€•ÅÕ…°ƒŠP”¹œ¸Ñİ¼€‰µ…¹Õ…°ˆ™…ÑÌ¤¥Ì¹•Ù•È4(€¨É•Í½±Ù•…ÕÑ½µ…Ñ¥…±±ä°µ¥ÉÉ½É¥¹œ¡¥¡•ÉÕÑ¡½É¥Ñå€Ì½İ¸€‰Ñ¥•Ì™…Ù½È4(€¨¹•¥Ñ¡•ÈˆÉÕ±”ì½¹±ä„MQI%Q1d¡¥¡•ÈµÉ…¹­•ÍÕÉÙ¥Ù½ÈÑÉ¥•ÉÌ…¹åÑ¡¥¹œ¸4(€¨4(€¨…¹½¹¥…±-•ä…±½¹”€¡Ñ¥­•È½‘…Ñ”½Í¡…É•Ì½ÁÉ¥”¤¥Ì9=PÍÕ™™¥¥•¹ĞÁÉ½½˜Ñİ¼4(€¨™…ÑÌ‘•ÍÉ¥‰”Ñ¡”M5•á•ÕÑ¥½¸ƒŠPÉ½ÍÍQÉ…¹Í…Ñ¥½¹%Í½±…Ñ¥½¸¹Ñ•ÍĞ¹ÑÌÌ4(€¨İ¡½±”€‰Ñİ¥¸±½ĞˆÍÕ¥Ñ”•á¥ÍÑÌ‰•…ÕÍ”Ñİ¼•¹Õ¥¹•±ä%MQ%9PÉ•…°4(€¨•á•ÕÑ¥½¹ÌÉ½ÕÑ¥¹•±äÍ¡…É”Ñ¡…Ğ•á…ĞÙ…±Õ”€¡”¹œ¸Ñİ¼Í…µ”µÁÉ¥”4(€¨Í…µ”µ‘…ä½É‘•ÉÌ¤¸™¥ÉÍĞÙ•ÉÍ¥½¸½˜Ñ¡¥Ì™Õ¹Ñ¥½¸¥¹½É•Ñ¡…Ğ…¹4(€¨İÉ½¹±äµ•É•„Ñİ¥¸µ±½ĞÁ…¥È¥¸•á…Ñ±äÑ¡…ĞÑ•ÍĞ°…Õ¡Ğ‰äÑ¡”4(€¨É•É•ÍÍ¥½¸ÍÕ¥Ñ”‰•™½É”Í¡¥ÁÁ¥¹œ¸™¥¹‘1¥Ù•á•ÕÑ¥½¹…Ñ€Ì½İ¸4(€¨Ñ¥µ•Í½¹™±¥Ñ€Ñ¥”µ‰É•…¬¥ÌÑ¡”•ÍÑ…‰±¥Í¡•°…±É•…‘äµÑ•ÍÑ•ÁÉ¥µ¥Ñ¥Ù”4(€¨™½ÈÑ¡¥Ì‘¥ÍÑ¥¹Ñ¥½¸°É•ÕÍ•™¥ÉÍĞè¥˜9dÁ…¥Èİ¥Ñ¡¥¸„…¹½¹¥…±-•ä4(€¨É½ÕÀ¡…Ì„•¹Õ¥¹•±ä½¹™±¥Ñ¥¹œ•á•ÕÑ¥½¹Q¥µ•€€¡ÁÉ½Ù¥¹œÑ¡•äÉ”4(€¨‘¥™™•É•¹ĞÉ•…°½É‘•ÉÌ°¹½Ğ½¹”•á•ÕÑ¥½¸‘•ÍÉ¥‰•Ñİ¥”¤°Ñ¡”]!=14(€¨É½ÕÀ¥Ì±•™ĞÕ¹Ñ½Õ¡•¸4(€¨4(€¨Q¡…Ğ…±½¹”ÍÑ¥±°¥Í¸Ğ•¹½Õ è„M=9É•…°°É•ÁÉ½‘Õ•‘•™•Ğ€¡Í…µ”4(€¨Ñ•ÍĞ°Í…µ”¥¹Ù•ÍÑ¥…Ñ¥½¸¤Í¡½İ••¹ÍÕÉ•1•…å…ÑÍá¥ÍÑ€…¸¥ÑÍ•±˜4(€¨¹½¹‘•Ñ•Éµ¥¹¥ÍÑ¥…±±äµ¥¹Ğ„É•‘Õ¹‘…¹Ğ…Àµ™¥±°™…Ğ™½È½¹”Ñİ¥¸±½Ğ•Ù•¸4(€¨İ¡¥±”¥ÑÌ½İ¸…±É•…‘äµ…‘½ÁÑ••áÑÉ…Ñ¥½¸µÑ¥µ”™…Ğ¥ÌÍÑ¥±°±¥Ù”ƒŠP„4(€¨ÁÉ”µ•á¥ÍÑ¥¹œ…À¥±±¥¹œ‰•¡…Ù¥½È°½ÕĞ½˜Ñ¡¥Ì™¥àÌÍ½Á”Ñ¼½ÉÉ•Ğ4(€¨€¡Í•”‘½Ì½I=5@¹µMÁÉ¥¹Ğ€ÄØ¤¸]¡•¸Ñ¡…Ğ¡…ÁÁ•¹Ì°Ñ¡”É•‘Õ¹‘…¹Ğ™…ĞÌ4(€¨•á•ÕÑ¥½¹Q¥µ•€…¸½¥¹¥‘•¹Ñ…±±äµ…Ñ ¥ÑÌÍ¥‰±¥¹œÌ°‘•™•…Ñ¥¹œÑ¡”(€¨Ñ¥µ•Í½¹™±¥Ñ€¡•¬…±½¹”¸Q¡”Í•½¹Õ…ÉÑ¡•É•™½É”½¹ÍÕ±ÑÌÑ¡”(€¨±•…äQÉ…‘•Ìİ¡•¸Ñ¡•ä…É”…Ù…¥±…‰±”€¡Ñ¡•ä…±İ…åÌ…É”™É½´(€¨½µµ¥ÑQ¥­•É€¤è„É½ÕÀ¥ÌÍ­¥ÁÁ•½¹±äİ¡•¸¥ÑÌ™…ÑÌ…É”½µÁ…Ñ¥‰±”(€¨İ¥Ñ 5=IQ!8=9Í…µ”µÙ…±Õ”QÉ…‘”¸Q¡¥ÌÁÉ•Í•ÉÙ•ÌÑ¡”Ñİ¥¸µ±½ĞÍ…™•Ñä(€¨‰½Õ¹‘…Éäİ¥Ñ¡½ÕĞÑ¡É½İ¥¹œ…İ…ä„Í…™”½¹Ù•É•¹”µ•É•±ä‰•…ÕÍ”…¹½Ñ¡•È(€¨Í…µ”µÙ…±Õ”QÉ…‘”•á¥ÍÑÌ…Ğ„‘¥™™•É•¹Ğ°½¹™±¥Ñ¥¹œÑ¥µ”¸(€¨4(€¨	ÕäµÍ¥‘”è„	Õä™…Ğ¥Ì¹•Ù•ÈÉ•™•É•¹•‰ä…¹½Ñ¡•È™…ĞÌ¥°Í¼„Á±…¥¸4(€¨É•ÑÉ…Ñ¥½¸¥ÌÑ¡”İ¡½±”™¥à€¡µ¥ÉÉ½ÉÌÕÁÉ…‘•…Ñ€Ì½İ¸	Ud‰É…¹ ¤¸4(€¨M•±°µÍ¥‘”è…±Í¼É”µÁ½¥¹ÑÌ„±¥Ù”M•±±±±½…Ñ¥½¹•¥Í¥½¸É•™•É•¹¥¹œÑ¡”4(€¨±½Í¥¹œ™…Ğ…ĞÑ¡”ÍÕÉÙ¥Ù½È¥¹ÍÑ•…½˜±•…Ù¥¹œ¥Ğ‘…¹±¥¹œƒŠPÑ¡”Í…µ”4(€¨Íİ…ÀÁÉ½Ù•¹…¹•I•Á…¥È¹ÑÌÌ½İ¸ÕÁÉ…‘•M•±±á•ÕÑ¥½¹…Ñ€Á•É™½ÉµÌ™½È4(€¨¥ÑÌ¹…ÉÉ½İ•È€ ‰µ…¹Õ…°ˆµ½¹±ä¤¡¥ÍÑ½É¥…°…Í”°¥¹±¥¹•¡•É”É…Ñ¡•ÈÑ¡…¸4(€¨¥µÁ½ÉÑ•Ñ¼…Ù½¥„¥ÉÕ±…È‘•Á•¹‘•¹ä€¡ÁÉ½Ù•¹…¹•I•Á…¥È¹ÑÌ…±É•…‘ä4(€¨¥µÁ½ÉÑÌÑ¡¥Ì™¥±”™½ÈÉ•ÑÉ…ÑI…İQÉ…¹Í…Ñ¥½¹€½…ÁÁ•¹‘¹‘5…å‰•½µµ¥Ñ€¤¸4(€¨4(€¨Ù•ÉäİÉ¥Ñ”‰•±½Ü½•ÌÍÑÉ…¥¡ĞÑ¼É•Á½Ì¹É…İQÉ…¹Í…Ñ¥½¹Ì¹…ÁÁ•¹‘€ƒŠP4(€¨¹•Ù•ÈÉ•ÑÉ…ÑI…İQÉ…¹Í…Ñ¥½¹€½…ÁÁ•¹‘¹‘5…å‰•½µµ¥Ñ€ƒŠP™½ÈÑ¡”•á…Ğ4(€¨É•…Í½¸•¹ÍÕÉ•1•…å…ÑÍá¥ÍÑ€Ì½İ¸‘½Œ½µµ•¹ĞÍÑ…Ñ•ÌèÑ¡¥ÌÉÕ¹Ì4(€¨%9M%½µµ¥ÑQ¥­•É€°…¹…ÁÁ•¹‘¹‘5…å‰•½µµ¥Ñ€É•…Ñ¥Ù•±äÉ”µÑÉ¥•ÉÌ4(€¨½µµ¥ÑQ¥­•É€½¸•Ù•Éä…ÁÁ•¹¸É•…°°É•ÁÉ½‘Õ•É•É•ÍÍ¥½¸…Õ¡ĞÑ¡¥Ì4(€¨Ñ¡”¡…Éİ…ä€¡Ñ¡”Í…µ”Ñİ¥¸µ±½ĞÍÕ¥Ñ”…‰½Ù”°½¸„™¥ÉÍĞ…ÑÑ•µÁĞ…ĞÑ¡¥Ì4(€¨™¥à¤èÑ¡”É•ÕÉÍ¥Ù”É”µ•¹ÑÉ…¹Ğ½µµ¥Ğ¥¹Ñ•É±•…Ù•İ¥Ñ Ñ¡”½ÕÑ•È…±°Ì4(€¨½İ¸ÁÉ½©•Ñ1•…åQ¥­•É€ÉÕ¸…¹ÑÉ…¹Í¥•¹Ñ±ä‘•±•Ñ•„ÍÑ¥±°µ½Á•¸QÉ…‘”4(€¨É½Ü‰•™½É”¥ÑÌ½İ¸M•±°½Õ±É•™•É•¹”¥Ğ¸¥…¹½ÍÑ¥ÌÑÉ…¥¹œ¥Ì4(€¨¥¹Ñ•¹Ñ¥½¹…±±äÍ­¥ÁÁ•¡•É”™½ÈÑ¡”Í…µ”É•…Í½¸•¹ÍÕÉ•1•…å…ÑÍá¥ÍÑ€4(€¨¡…Ì¹½¹”ƒŠPÑ¡•É”¥Ì¹¼]É¥Ñ•É½¹Ñ•áÑ€µ…ÉÉå¥¹œ¡½­”Á½¥¹Ğ…Ù…¥±…‰±”…Ğ4(€¨Ñ¡¥ÌÉ•ÕÉÍ¥½¸‘•ÁÑ Ñ¡…Ğ‘½•Í¸ĞÉ•¥¹ÑÉ½‘Õ”Ñ¡”Í…µ”¡…é…É¸4(€¨¼4)•áÁ½ÉĞ…Íå¹Œ™Õ¹Ñ¥½¸É•½¹¥±•ÕÁ±¥…Ñ•ÕÑ¡½É¥Ñä 4(€É•Á½Ìè½µµ¥Ñ¹¥¹•I•Á½Ì€˜A…ÉÑ¥…°ñ1•…å1•‘•ÉI•Á½Ìø°4(€Ñ¥­•ÈèÍÑÉ¥¹œ4(¤èAÉ½µ¥Í”ñ¹Õµ‰•Èøì4(€½¹ÍĞ¹½Éµ…±¥é•€ô¹½Éµ…±¥é•Q¥­•È¡Ñ¥­•È¤ì4(€±•Ğ½¹Ù•É•‘½Õ¹Ğ€ô€Àì4(4(€€¼¼-••ÀÑ¡”…ÑÕ…°QÉ…‘”Ñ¥µ•Ì°É…Ñ¡•ÈÑ¡…¸½¹±äÑ¡•¥È¹Õµ‰•È¸(€€¼¼Ñ¥µ”µÉ•Í½±Ù•Á…¥È½˜™…ÑÌ…¸Í…™•±ä½¹Ù•É”•Ù•¸İ¡•¸„‘¥™™•É•¹Ğ(€€¼¼Ñİ¥¸±½ĞÍ¡…É•Ì¥ÑÌÑ¥µ”µ‰±¥¹…¹½¹¥…±-•ä¸(€±•Ğ‰ÕåÍ	å-•äè5…ÀñÍÑÉ¥¹œ°QÉ…‘•mtøğÕ¹‘•™¥¹•ì(€¥˜€¡É•Á½Ì¹ÑÉ…‘•Ì¤ì(€€€½¹ÍĞ…±±QÉ…‘•Ì€ô…İ…¥ĞÉ•Á½Ì¹ÑÉ…‘•Ì¹•Ñ±° ¤ì(€€€‰ÕåÍ	å-•ä€ô¹•Ü5…ÀñÍÑÉ¥¹œ°QÉ…‘•mtø ¤ì(€€€™½È€¡½¹ÍĞĞ½˜…±±QÉ…‘•Ì¤ì(€€€€€¥˜€¡¹½Éµ…±¥é•Q¥­•È¡Ğ¹Ñ¥­•È¤€„ôô¹½Éµ…±¥é•¤½¹Ñ¥¹Õ”ì(€€€€€½¹ÍĞ­•ä€ô…¹½¹¥…±-•ä¡ìÍ¥‘”è€‰	Udˆ°Ñ¥­•Èè¹½Éµ…±¥é•°‘…Ñ”èĞ¹•á•ÕÑ¥½¹…Ñ”°Í¡…É•ÌèĞ¹Í¡…É•Ì°ÁÉ¥”èĞ¹•¹ÑÉåAÉ¥”ô¤ì(€€€€€½¹ÍĞµ…Ñ¡•Ì€ô‰ÕåÍ	å-•ä¹•Ğ¡­•ä¤€üümtì(€€€€€µ…Ñ¡•Ì¹ÁÕÍ ¡Ğ¤ì(€€€€€‰ÕåÍ	å-•ä¹Í•Ğ¡­•ä°µ…Ñ¡•Ì¤ì(€€€ô(€ô(4(€™½È€¡½¹ÍĞ­¥¹½˜l‰	Õåá•ÕÑ¥½¸ˆ°€‰M•±±á•ÕÑ¥½¸‰t…Ì½¹ÍĞ¤ì4(€€€½¹ÍĞ…±°€ô…İ…¥ĞÉ•Á½Ì¹É…İQÉ…¹Í…Ñ¥½¹Ì¹•Ñ±° ¤ì4(€€€½¹ÍĞ±¥Ù”€ô…±°¹™¥±Ñ•È ¡Ğ¤€ôøì4(€€€€€¥˜€¡Ğ¹­¥¹€„ôô­¥¹¤É•ÑÕÉ¸™…±Í”ì4(€€€€€¥˜€¡¥ÍI•ÑÉ…Ñ•¡…±°°Ğ¹¥¤¤É•ÑÕÉ¸™…±Í”ì4(€€€€€½¹ÍĞÉ•Í½±Ù•€ôÉ•Í½±Ù•ÕÉÉ•¹ÑQ¥­•È¡…±°°Ğ¤ì4(€€€€€É•ÑÕÉ¸É•Í½±Ù•€„ôôÕ¹‘•™¥¹•€˜˜¹½Éµ…±¥é•Q¥­•È¡É•Í½±Ù•¤€ôôô¹½Éµ…±¥é•ì4(€€€ô¤ì4(4(€€€½¹ÍĞ‰å-•ä€ô¹•Ü5…ÀñÍÑÉ¥¹œ°I…İQÉ…¹Í…Ñ¥½¹mtø ¤ì4(€€€™½È€¡½¹ÍĞĞ½˜±¥Ù”¤ì4(€€€€€½¹ÍĞÀ€ôĞ¹Á…å±½……Ì	Õåá•ÕÑ¥½¹A…å±½…ğM•±±á•ÕÑ¥½¹A…å±½…ì4(€€€€€½¹ÍĞ­•ä€ô…¹½¹¥…±-•ä¡ì4(€€€€€€€Í¥‘”è­¥¹€ôôô€‰	Õåá•ÕÑ¥½¸ˆ€ü€‰	Udˆ€è€‰M10ˆ°4(€€€€€€€Ñ¥­•Èè¹½Éµ…±¥é•°4(€€€€€€€‘…Ñ”èÀ¹•á•ÕÑ¥½¹…Ñ”°4(€€€€€€€Í¡…É•ÌèÀ¹Í¡…É•Ì°4(€€€€€€€ÁÉ¥”èÀ¹ÁÉ¥”°4(€€€€€ô¤ì4(€€€€€½¹ÍĞ±¥ÍĞ€ô‰å-•ä¹•Ğ¡­•ä¤€üümtì4(€€€€€±¥ÍĞ¹ÁÕÍ ¡Ğ¤ì4(€€€€€‰å-•ä¹Í•Ğ¡­•ä°±¥ÍĞ¤ì4(€€€ô4(4(€€€™½È€¡½¹ÍĞm­•ä°™…ÑÍt½˜‰å-•ä¹•¹ÑÉ¥•Ì ¤¤ì(€€€€€¥˜€¡™…ÑÌ¹±•¹Ñ €ğô€Ä¤½¹Ñ¥¹Õ”ì((€€€€€½¹ÍĞÑ¥µ•=˜€ô€¡ĞèI…İQÉ…¹Í…Ñ¥½¸¤€ôø€¡Ğ¹Á…å±½……Ì	Õåá•ÕÑ¥½¹A…å±½…ğM•±±á•ÕÑ¥½¹A…å±½…¤¹•á•ÕÑ¥½¹Q¥µ”ì(€€€€€½¹ÍĞ¡…Í½¹™±¥Ñ¥¹Qİ¥¸€ô™…ÑÌ¹Í½µ” ¡„°¤¤€ôø™…ÑÌ¹Í½µ” ¡ˆ°¨¤€ôø¤€ğ¨€˜˜Ñ¥µ•Í½¹™±¥Ğ¡Ñ¥µ•=˜¡„¤°Ñ¥µ•=˜¡ˆ¤¤¤¤ì(€€€€€¥˜€¡¡…Í½¹™±¥Ñ¥¹Qİ¥¸¤½¹Ñ¥¹Õ”ì€¼¼…Ğ±•…ÍĞ½¹”Á…¥È¥ÌÁÉ½Ù…‰±ä„‘¥ÍÑ¥¹ĞÉ•…°•á•ÕÑ¥½¸ƒŠP¹•Ù•Èµ•É”Ñ¡¥ÌÉ½ÕÀ¸((€€€€€¥˜€¡­¥¹€ôôô€‰	Õåá•ÕÑ¥½¸ˆ¤ì(€€€€€€€½¹ÍĞ½µÁ…Ñ¥‰±•QÉ…‘•Ì€ô€¡‰ÕåÍ	å-•äü¹•Ğ¡­•ä¤€üümt¤¹™¥±Ñ•È ¡ÑÉ…‘”¤€ôø(€€€€€€€€€™…ÑÌ¹•Ù•Éä ¡™…Ğ¤€ôø€…Ñ¥µ•Í½¹™±¥Ğ¡Ñ¥µ•=˜¡™…Ğ¤°ÑÉ…‘”¹•á•ÕÑ¥½¹Q¥µ”¤¤°(€€€€€€€€¤ì(€€€€€€€€¼¼Qİ¼½µÁ…Ñ¥‰±”±•…äÑÉ…‘•Ìµ•…¹ÌÑ¡”™…ÑÌÍÑ¥±°…¹¹½Ğ‰”(€€€€€€€€¼¼Ñ¥•Ñ¼½¹”‰ÕÍ¥¹•ÍÌ•á•ÕÑ¥½¸Í…™•±ä€¡¥¹±Õ‘¥¹œ…¸Õ¹­¹½İ¸µÑ¥µ”(€€€€€€€€¼¼‰…­™¥±°¤°Í¼É•Ñ…¥¸Ñ¡”½¹Í•ÉÙ…Ñ¥Ù”Ñİ¥¸µ±½Ğ‰•¡…Ù¥½È¸(€€€€€€€¥˜€¡½µÁ…Ñ¥‰±•QÉ…‘•Ì¹±•¹Ñ €øô€È¤½¹Ñ¥¹Õ”ì(€€€€€ô(4(€€€€€½¹ÍĞ‰•ÍĞ€ô™…ÑÌ¹É•‘Õ” ¡„°ˆ¤€ôø€¡…ÕÑ¡½É¥ÑåI…¹¬¡ˆ¹Í½ÕÉ”¤€ø…ÕÑ¡½É¥ÑåI…¹¬¡„¹Í½ÕÉ”¤€üˆ€è„¤¤ì4(€€€€€™½È€¡½¹ÍĞ±½Í•È½˜™…ÑÌ¤ì4(€€€€€€€¥˜€¡±½Í•È¹¥€ôôô‰•ÍĞ¹¥¤½¹Ñ¥¹Õ”ì4(€€€€€€€¥˜€¡…ÕÑ¡½É¥ÑåI…¹¬¡±½Í•È¹Í½ÕÉ”¤€øô…ÕÑ¡½É¥ÑåI…¹¬¡‰•ÍĞ¹Í½ÕÉ”¤¤½¹Ñ¥¹Õ”ì€¼¼Ñ¥”ƒŠP¹•Ù•È…ÕÑ¼µÉ•Í½±Ù•¸4(4(€€€€€€€…İ…¥ĞÉ•Á½Ì¹É…İQÉ…¹Í…Ñ¥½¹Ì¹…ÁÁ•¹ 4(€€€€€€€€€É•…Ñ•I…İQÉ…¹Í…Ñ¥½¸¡ì4(€€€€€€€€€€€­¥¹è€‰I•ÑÉ…Ñ¥½¸ˆ°4(€€€€€€€€€€€Í½ÕÉ”è€‰µ…¹Õ…°ˆ°4(€€€€€€€€€€€Á…å±½…èìÑ…É•Ñ%è±½Í•È¹¥°É•…Í½¸è€‰AÉ½Ù•¹…¹”ÕÁÉ…‘”èÍÕÁ•ÉÍ•‘•‰ä„¡¥¡•Èµ…ÕÑ¡½É¥Ñä‘½Õµ•¹Ğ‘•ÍÉ¥‰¥¹œÑ¡”Í…µ”•á•ÕÑ¥½¸¸ˆô°4(€€€€€€€€€ô¤4(€€€€€€€€¤ì4(4(€€€€€€€¥˜€¡­¥¹€ôôô€‰M•±±á•ÕÑ¥½¸ˆ¤ì4(€€€€€€€€€½¹ÍĞ™É•Í¡±°€ô…İ…¥ĞÉ•Á½Ì¹É…İQÉ…¹Í…Ñ¥½¹Ì¹•Ñ±° ¤ì4(€€€€€€€€€½¹ÍĞ‘•¥Í¥½¸€ô™É•Í¡±°¹™¥¹ 4(€€€€€€€€€€€€¡Ğ¤€ôø4(€€€€€€€€€€€€€Ğ¹­¥¹€ôôô€‰M•±±±±½…Ñ¥½¹•¥Í¥½¸ˆ€˜˜4(€€€€€€€€€€€€€€…¥ÍI•ÑÉ…Ñ•¡™É•Í¡±°°Ğ¹¥¤€˜˜4(€€€€€€€€€€€€€€¡Ğ¹Á…å±½……ÌM•±±±±½…Ñ¥½¹•¥Í¥½¹A…å±½…¤¹Í•±±á•ÕÑ¥½¹%€ôôô±½Í•È¹¥4(€€€€€€€€€€¤ì4(€€€€€€€€€¥˜€¡‘•¥Í¥½¸¤ì4(€€€€€€€€€€€…İ…¥ĞÉ•Á½Ì¹É…İQÉ…¹Í…Ñ¥½¹Ì¹…ÁÁ•¹ 4(€€€€€€€€€€€€€É•…Ñ•I…İQÉ…¹Í…Ñ¥½¸¡ì4(€€€€€€€€€€€€€€€­¥¹è€‰I•ÑÉ…Ñ¥½¸ˆ°4(€€€€€€€€€€€€€€€Í½ÕÉ”è€‰µ…¹Õ…°ˆ°4(€€€€€€€€€€€€€€€Á…å±½…èìÑ…É•Ñ%è‘•¥Í¥½¸¹¥°É•…Í½¸è€‰AÉ½Ù•¹…¹”ÕÁÉ…‘”èÉ”µÁ½¥¹Ñ•…ĞÑ¡”¡¥¡•Èµ…ÕÑ¡½É¥ÑäM•±±á•ÕÑ¥½¸™…Ğ¸ˆô°4(€€€€€€€€€€€€€ô¤4(€€€€€€€€€€€€¤ì4(€€€€€€€€€€€½¹ÍĞÉ•Á±…•µ•¹ÑA…å±½…èM•±±±±½…Ñ¥½¹•¥Í¥½¹A…å±½…€ôì4(€€€€€€€€€€€€€Í•±±á•ÕÑ¥½¹%è‰•ÍĞ¹¥°4(€€€€€€€€€€€€€…±±½…Ñ¥½¹Ìè€¡‘•¥Í¥½¸¹Á…å±½……ÌM•±±±±½…Ñ¥½¹•¥Í¥½¹A…å±½…¤¹…±±½…Ñ¥½¹Ì°4(€€€€€€€€€€€ôì4(€€€€€€€€€€€…İ…¥ĞÉ•Á½Ì¹É…İQÉ…¹Í…Ñ¥½¹Ì¹…ÁÁ•¹ 4(€€€€€€€€€€€€€É•…Ñ•I…İQÉ…¹Í…Ñ¥½¸¡ì­¥¹è€‰M•±±±±½…Ñ¥½¹•¥Í¥½¸ˆ°Í½ÕÉ”è€‰µ…¹Õ…°ˆ°Á½ÉÑ™½±¥½%è‘•¥Í¥½¸¹Á½ÉÑ™½±¥½%°Ñ¥­•Èè‘•¥Í¥½¸¹Ñ¥­•È°Á…å±½…èÉ•Á±…•µ•¹ÑA…å±½…ô¤4(€€€€€€€€€€€€¤ì4(€€€€€€€€€ô4(€€€€€€€ô4(€€€€€€€½¹Ù•É•‘½Õ¹Ğ€¬ô€Äì4(€€€€€ô4(€€€ô4(€ô4(4(€É•ÑÕÉ¸½¹Ù•É•‘½Õ¹Ğì4)ô4(4(¼¨¨4(€¨½ÉÉ•ÑÌ•Ù•ÉäÍÑ¥±°µ±¥Ù”É…ÜÑÉ…¹Í…Ñ¥½¸ÕÉÉ•¹Ñ±äÉ•Í½±Ù¥¹œÑ¼4(€¨½±‘Q¥­•É€€¡	Õä½M•±°•á•ÕÑ¥½¹Ì°•Ù¥‘•¹”°Ù•É¥™¥…Ñ¥½¹Ì°‘¥Ù¥‘•¹‘ÌƒŠP4(€¨…¹åÑ¡¥¹œÑ¥­•Èµ‰•…É¥¹œ¤½Ù•ÈÑ¼¹•İQ¥­•É€ƒŠPÑ¡”É…ÜµÑÉ…¹Í…Ñ¥½¸Ñİ¥¸½˜4(€¨QÉ…‘•M•ÉÙ¥”¹É•¹…µ•Q¥­•ÉÙ•Éåİ¡•É”°Í¼„Ñ¥­•ÈÉ•¹…µ”¥¸Ñ¡”4(€¨ÁÉ”µµ¥É…Ñ¥½¸U$‘½•Í¸Ğ±•…Ù”Ñ¡¥Ì…É¡¥Ñ•ÑÕÉ”Ì½ÁäÁ•Éµ…¹•¹Ñ±ä4(€¨½ÉÁ¡…¹•Õ¹‘•ÈÑ¡”½±°¹½Üµ½ÉÉ•Ñ•µ…İ…äÑ¥­•È¸4(€¨¼4)•áÁ½ÉĞ…Íå¹Œ™Õ¹Ñ¥½¸É•¹…µ•I…İQÉ…¹Í…Ñ¥½¹ÍQ¥­•È 4(€É•Á½Ìè½µµ¥Ñ¹¥¹•I•Á½Ì°4(€½±‘Q¥­•ÈèÍÑÉ¥¹œ°4(€¹•İQ¥­•ÈèÍÑÉ¥¹œ°4(€‘¥…¹½ÍÑ¥Ìüè¥…¹½ÍÑ¥ÍI•½É‘•È4(¤èAÉ½µ¥Í”ñ¹Õµ‰•Èøì4(€½¹ÍĞ¹½Éµ…±¥é•‘=±€ô¹½Éµ…±¥é•Q¥­•È¡½±‘Q¥­•È¤ì4(€½¹ÍĞ¹½Éµ…±¥é•‘9•Ü€ô¹½Éµ…±¥é•Q¥­•È¡¹•İQ¥­•È¤ì4(€¥˜€ …¹½Éµ…±¥é•‘9•Üñğ¹½Éµ…±¥é•‘9•Ü€ôôô¹½Éµ…±¥é•‘=±¤É•ÑÕÉ¸€Àì4(4(€½¹ÍĞ…±°€ô…İ…¥ĞÉ•Á½Ì¹É…İQÉ…¹Í…Ñ¥½¹Ì¹•Ñ±° ¤ì4(€½¹ÍĞÑ…É•ÑÌ€ô…±°¹™¥±Ñ•È ¡Ğ¤€ôøì4(€€€¥˜€¡Ğ¹Ñ¥­•È€ôôôÕ¹‘•™¥¹•¤É•ÑÕÉ¸™…±Í”ì4(€€€¥˜€¡¥ÍI•ÑÉ…Ñ•¡…±°°Ğ¹¥¤¤É•ÑÕÉ¸™…±Í”ì4(€€€½¹ÍĞÉ•Í½±Ù•‘Q¥­•È€ôÉ•Í½±Ù•ÕÉÉ•¹ÑQ¥­•È¡…±°°Ğ¤ì4(€€€É•ÑÕÉ¸É•Í½±Ù•‘Q¥­•È€„ôôÕ¹‘•™¥¹•€˜˜¹½Éµ…±¥é•Q¥­•È¡É•Í½±Ù•‘Q¥­•È¤€ôôô¹½Éµ…±¥é•‘=±ì4(€ô¤ì4(4(€™½È€¡½¹ÍĞÑ…É•Ğ½˜Ñ…É•ÑÌ¤ì4(€€€½¹ÍĞÁ…å±½…è½ÉÉ•Ñ¥½¹A…å±½…€ôìÑ…É•Ñ%èÑ…É•Ğ¹¥°Á…Ñ èìÑ¥­•Èè¹½Éµ…±¥é•‘9•Üôôì4(€€€…İ…¥Ğ…ÁÁ•¹‘¹‘5…å‰•½µµ¥Ğ 4(€€€€€É•Á½Ì°4(€€€€€É•…Ñ•I…İQÉ…¹Í…Ñ¥½¸¡ì­¥¹è€‰½ÉÉ•Ñ¥½¸ˆ°Í½ÕÉ”è€‰µ…¹Õ…°ˆ°Á…å±½…ô¤°4(€€€€€‘¥…¹½ÍÑ¥Ì°4(€€€€€ìİÉ¥Ñ•Èè€‰½µµ¥Ñ¹¥¹”¹ÑÌˆ°™Õ¹Ñ¥½¸è€‰É•¹…µ•I…İQÉ…¹Í…Ñ¥½¹ÍQ¥­•Èˆ°™¥±”è€‰ÍÉŒ½…ÁÁ±¥…Ñ¥½¸½Í•ÉÙ¥•Ì½½µµ¥Ñ¹¥¹”¹ÑÌˆ°É•…Í½¸è½ÉÉ•Ñ•Ñ¥­•È€‘í¹½Éµ…±¥é•‘=±‘ô€´ø€‘í¹½Éµ…±¥é•‘9•İõ€ô4(€€€€¤ì4(€ô4(€É•ÑÕÉ¸Ñ…É•ÑÌ¹±•¹Ñ ì4)ô4(
