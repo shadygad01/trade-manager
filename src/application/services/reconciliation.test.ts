@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations, isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
+import {
+  reconcilePositions,
+  suggestDuplicateTradeIds,
+  findPendingConfirmations,
+  isTickerFullyOfficialBrokerExcelSourced,
+  isTickerOfficialBrokerExcelCoveredByCandidates,
+} from "./reconciliation";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
 import { createRawTransaction, type RawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
@@ -202,6 +208,30 @@ describe("isTickerFullyOfficialBrokerExcelSourced", () => {
   it("is still false for a source that ranks below official-broker-excel even if not literally 'manual'", () => {
     const facts = [buyFact({ id: "b1", source: "screenshot" })];
     expect(isTickerFullyOfficialBrokerExcelSourced(facts, "COMI")).toBe(false);
+  });
+});
+
+describe("isTickerOfficialBrokerExcelCoveredByCandidates", () => {
+  it("covers a live legacy/backfill fact when the current official workbook has the exact execution", () => {
+    const legacy = buyFact({ id: "legacy", source: "backfill", shares: 27, price: 12.5, executionDate: "2024-08-20" });
+    expect(
+      isTickerOfficialBrokerExcelCoveredByCandidates(
+        [legacy],
+        "COMI",
+        [{ ticker: "COMI", side: "BUY", shares: 27, price: 12.5, date: "2024-08-20", source: "official-broker-excel" }],
+      ),
+    ).toBe(true);
+  });
+
+  it("does not cover an unrelated lower-authority execution", () => {
+    const legacy = buyFact({ id: "legacy", source: "backfill", shares: 27, price: 12.5, executionDate: "2024-08-20" });
+    expect(
+      isTickerOfficialBrokerExcelCoveredByCandidates(
+        [legacy],
+        "COMI",
+        [{ ticker: "COMI", side: "BUY", shares: 27, price: 12.6, date: "2024-08-20", source: "official-broker-excel" }],
+      ),
+    ).toBe(false);
   });
 });
 

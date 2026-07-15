@@ -2,6 +2,7 @@ import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
 import type { RawTransaction, BuyExecutionPayload, SellExecutionPayload } from "@domain/entities/RawTransaction";
+import type { ParsedTradeCandidate } from "@domain/entities/Upload";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import type { PositionAggregate } from "./TradeService";
 import { checkTickerMatch } from "./importVerification";
@@ -100,6 +101,52 @@ export function isTickerFullyOfficialBrokerExcelSourced(rawTransactions: RawTran
         isCoveredByRetractedHigherAuthorityTwin(rawTransactions, t, normalized),
     )
   );
+}
+
+/**
+ * Read-side recovery for an old import whose official fact was retracted or
+ * never persisted, while the same execution is still present in the current
+ * official broker workbook.  This is intentionally stricter than merely
+ * seeing an official row: every live lower-authority execution must match an
+ * official candidate on the immutable execution fields, so an unrelated
+ * manual/backfill trade can never be hidden by a fresh upload.
+ */
+export function isTickerOfficialBrokerExcelCoveredByCandidates(
+  rawTransactions: RawTransaction[],
+  ticker: string,
+  candidates: ParsedTradeCandidate[],
+): boolean {
+  const normalized = normalizeTicker(ticker);
+  const official = candidates.filter(
+    (candidate) => normalizeTicker(candidate.ticker) === normalized && candidate.source === "official-broker-excel",
+  );
+  if (official.length === 0) return false;
+
+  const live = rawTransactions.filter((fact) => {
+    if (fact.kind !== "BuyExecution" && fact.kind !== "SellExecution") return false;
+    if (isRetracted(rawTransactions, fact.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(rawTransactions, fact);
+    return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalized;
+  });
+  if (live.length === 0) return false;
+  // If a live official/invoice fact is already present, let the normal
+  // provenance-upgrade effect finish retracting any lower twin first. Using
+  // the session fallback during that short write window would make the UI
+  // report "Fully matched" before the old fact was actually retracted.
+  if (live.some((fact) => authorityRank(fact.source) >= OFFICIAL_BROKER_EXCEL_RANK)) return false;
+
+  return live.every((fact) => {
+    const payload = fact.payload as BuyExecutionPayload | SellExecutionPayload;
+    const side = fact.kind === "BuyExecution" ? "BUY" : "SELL";
+    return official.some(
+      (candidate) =>
+        candidate.side === side &&
+        candidate.shares === payload.shares &&
+        candidate.price === payload.price &&
+        candidate.date === payload.executionDate &&
+        !timesConflict(candidate.time, payload.executionTime),
+    );
+  });
 }
 
 export interface PositionReconciliation {
