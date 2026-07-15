@@ -144,6 +144,18 @@ function retractRawTransactionKeys(keys: Iterable<string>) {
  */
 const inFlightKeys = new Set<string>();
 
+interface ConfirmBatchState {
+  addedKeys: string[];
+  acceptedKeys: string[];
+  skippedKeys: string[];
+  addedTradeIds: Record<string, string>;
+  addedAllocationIds: Record<string, string[]>;
+}
+
+function emptyConfirmBatchState(): ConfirmBatchState {
+  return { addedKeys: [], acceptedKeys: [], skippedKeys: [], addedTradeIds: {}, addedAllocationIds: {} };
+}
+
 /**
  * Import runs as a strict two-phase workflow: (1) extract — drop as many
  * files as needed; every candidate/verification accumulates into one pool,
@@ -486,6 +498,7 @@ export function ImportPage() {
     session.skippedKeys,
     session.dismissedKeys,
     sellCandidate,
+    distributing,
   ]);
 
   // A repeated native broker Excel export can reach the persisted Import
@@ -495,14 +508,14 @@ export function ImportPage() {
   // export's exact execution time to remove only a true re-upload copy before
   // it can remain as a misleading Ready/Confirm row.
   useEffect(() => {
-    if (!initialDataLoaded) return;
+    if (!initialDataLoaded || distributing) return;
     const state = importSession.getState();
     const resolvedKeys = new Set([...state.addedKeys, ...state.skippedKeys, ...state.dismissedKeys]);
     const duplicateKeys = findOfficialBrokerExcelReuploadDuplicateKeys(state.pendingCandidates, resolvedKeys);
     if (duplicateKeys.length === 0) return;
     importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...duplicateKeys])] }));
     retractRawTransactionKeys(duplicateKeys);
-  }, [initialDataLoaded, pendingCandidates, session.addedKeys, session.skippedKeys, session.dismissedKeys]);
+  }, [initialDataLoaded, pendingCandidates, session.addedKeys, session.skippedKeys, session.dismissedKeys, distributing]);
 
   /**
    * Statement Aggregate Reconciliation: a Statement row that sums several
@@ -526,7 +539,7 @@ export function ImportPage() {
    * under the commit that's still in flight on it.
    */
   useEffect(() => {
-    if (!initialDataLoaded) return;
+    if (!initialDataLoaded || distributing) return;
     const state = importSession.getState();
     const stillPending = state.pendingCandidates.filter(
       (e) => !state.addedKeys.includes(e.key) && !state.skippedKeys.includes(e.key) && !state.dismissedKeys.includes(e.key) && !inFlightKeys.has(e.key),
@@ -538,7 +551,7 @@ export function ImportPage() {
     importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
     retractRawTransactionKeys(keysToSkip);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialDataLoaded, pendingCandidates, session.addedKeys, session.skippedKeys, session.dismissedKeys]);
+  }, [initialDataLoaded, pendingCandidates, session.addedKeys, session.skippedKeys, session.dismissedKeys, distributing]);
 
   /**
    * A ticker that already has trades recorded somewhere shouldn't make the
@@ -853,7 +866,7 @@ export function ImportPage() {
     setRowErrors((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : "Something went wrong." }));
   }
 
-  async function addBuyCandidate(entry: CandidateEntry, ticker: string, deferCommit = false) {
+  async function addBuyCandidate(entry: CandidateEntry, ticker: string, deferCommit = false, batch?: ConfirmBatchState) {
     try {
       const portfolioId = portfolioForTicker(ticker);
 
@@ -879,8 +892,11 @@ export function ImportPage() {
           brokerStatus: entry.candidate.brokerStatus ?? "Needs Confirmation",
           transactionNumber: entry.candidate.transactionNumber,
         });
-        importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
-        clearRowError(entry.key);
+        if (batch) batch.addedKeys.push(entry.key);
+        else {
+          importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+          clearRowError(entry.key);
+        }
         return;
       }
 
@@ -902,14 +918,20 @@ export function ImportPage() {
         },
         diagnostics,
       );
-      importSession.update((prev) => ({
-        ...prev,
-        addedKeys: [...prev.addedKeys, entry.key],
-        addedTradeIds: { ...prev.addedTradeIds, [entry.key]: trade.id },
-      }));
-      clearRowError(entry.key);
+      if (batch) {
+        batch.addedKeys.push(entry.key);
+        batch.addedTradeIds[entry.key] = trade.id;
+      } else {
+        importSession.update((prev) => ({
+          ...prev,
+          addedKeys: [...prev.addedKeys, entry.key],
+          addedTradeIds: { ...prev.addedTradeIds, [entry.key]: trade.id },
+        }));
+        clearRowError(entry.key);
+      }
     } catch (e) {
       setRowError(entry.key, e);
+      if (batch) throw e;
     }
   }
 
@@ -1132,7 +1154,10 @@ export function ImportPage() {
 
   async function commitTickerGroupLocked(ticker: string, portfolioId: string): Promise<void> {
     diagnostics.recordSessionEvent({ workflowStep: "Confirm", label: `Confirm ${ticker}`, portfolioId, ticker });
-    const state = importSession.getState();
+    const stateBeforeBatch = importSession.getState();
+    const state = stateBeforeBatch;
+    const batchState = emptyConfirmBatchState();
+    const processBatch = async () => {
 
     const buys = state.pendingCandidates.filter(
       (e) =>
@@ -1154,10 +1179,10 @@ export function ImportPage() {
         // shares and break the ticker's verification. Only a possible match
         // with a genuinely different price (>1%) still commits, badge intact.
         if (match && (match.matchType === "exact" || pricesWithinOcrNoise(match.matchedPrice, entry.candidate.price))) {
-          importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, entry.key])] }));
+          batchState.skippedKeys.push(entry.key);
           continue;
         }
-        await addBuyCandidate(entry, ticker, true);
+        await addBuyCandidate(entry, ticker, true, batchState);
       } finally {
         inFlightKeys.delete(entry.key);
       }
@@ -1169,7 +1194,7 @@ export function ImportPage() {
     for (const entry of dividends) {
       inFlightKeys.add(entry.key);
       try {
-        await addDividend(entry, ticker);
+        await addDividend(entry, ticker, batchState);
       } finally {
         inFlightKeys.delete(entry.key);
       }
@@ -1181,7 +1206,7 @@ export function ImportPage() {
     for (const entry of verifications) {
       inFlightKeys.add(entry.key);
       try {
-        await acceptVerification(entry, ticker);
+        await acceptVerification(entry, ticker, batchState);
       } finally {
         inFlightKeys.delete(entry.key);
       }
@@ -1232,15 +1257,34 @@ export function ImportPage() {
     // non-fatal: a failure here is a shadow-write gap (dividends/
     // verifications missing their portfolio assignment), never a reason to
     // fail the Buy commit that already succeeded.
-    try {
       await assignPortfolio(repos, ticker, portfolioId, diagnostics, { deferCommit: true });
-      // All Buy/assignment facts above were appended without triggering the
-      // expensive full ticker projection. Rebuild the materialized ledger
-      // exactly once after the complete Confirm batch is durable.
-      await commitTicker(repos, portfolioId, ticker, diagnostics);
+    };
+
+    try {
+      if (repos.runInTransaction) {
+        await repos.runInTransaction(processBatch);
+      } else {
+        await processBatch();
+      }
     } catch (err) {
-      console.error("assignPortfolio failed (shadow write, non-fatal):", err);
+      // The database transaction rolls back on failure. Restore the session
+      // snapshot too, so the UI never claims rows were Added when their
+      // durable writes did not commit.
+      importSession.update(() => stateBeforeBatch);
+      throw err;
     }
+
+    // All Buy/assignment facts above are durable now and were appended without
+    // triggering the expensive full ticker projection. Rebuild exactly once.
+    await commitTicker(repos, portfolioId, ticker, diagnostics);
+    importSession.update((prev) => ({
+      ...prev,
+      addedKeys: [...new Set([...prev.addedKeys, ...batchState.addedKeys])],
+      acceptedKeys: [...new Set([...prev.acceptedKeys, ...batchState.acceptedKeys])],
+      skippedKeys: [...new Set([...prev.skippedKeys, ...batchState.skippedKeys])],
+      addedTradeIds: { ...prev.addedTradeIds, ...batchState.addedTradeIds },
+      addedAllocationIds: { ...prev.addedAllocationIds, ...batchState.addedAllocationIds },
+    }));
   }
 
   /**
@@ -1277,7 +1321,22 @@ export function ImportPage() {
     if (matchedTickers.length === 0) return;
     setDistributing(true);
     try {
-      await Promise.all(matchedTickers.map((ticker) => commitTickerGroup(ticker)));
+      // Tickers in the same portfolio share its cash row. Process those
+      // serially to avoid lost-update races, while independent portfolios can
+      // still progress concurrently.
+      const byPortfolio = new Map<string, string[]>();
+      for (const ticker of matchedTickers) {
+        const portfolioId = resolvedPortfolioId(ticker);
+        if (!portfolioId) continue;
+        const group = byPortfolio.get(portfolioId) ?? [];
+        group.push(ticker);
+        byPortfolio.set(portfolioId, group);
+      }
+      await Promise.all(
+        [...byPortfolio.values()].map(async (tickers) => {
+          for (const ticker of tickers) await commitTickerGroup(ticker);
+        }),
+      );
       setStage("idle");
     } catch (e) {
       setStage("error");
@@ -1459,7 +1518,7 @@ export function ImportPage() {
     });
   }
 
-  async function addDividend(entry: DividendEntry, ticker: string) {
+  async function addDividend(entry: DividendEntry, ticker: string, batch?: ConfirmBatchState) {
     try {
       const portfolioId = portfolioForTicker(ticker);
       await recordDividend(repos, portfolioId, {
@@ -1468,10 +1527,14 @@ export function ImportPage() {
         date: entry.dividend.date,
         notes: "Imported from screenshot/PDF",
       });
-      importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
-      clearRowError(entry.key);
+      if (batch) batch.addedKeys.push(entry.key);
+      else {
+        importSession.update((prev) => ({ ...prev, addedKeys: [...prev.addedKeys, entry.key] }));
+        clearRowError(entry.key);
+      }
     } catch (e) {
       setRowError(entry.key, e);
+      if (batch) throw e;
     }
   }
 
@@ -1526,7 +1589,7 @@ export function ImportPage() {
     }
   }
 
-  async function acceptVerification(entry: VerificationEntry, ticker: string) {
+  async function acceptVerification(entry: VerificationEntry, ticker: string, batch?: ConfirmBatchState) {
     try {
       const portfolioId = portfolioForTicker(ticker);
       await repos.verifications.save({
@@ -1535,10 +1598,14 @@ export function ImportPage() {
         portfolioId,
         ticker: normalizeTicker(entry.verification.ticker),
       });
-      importSession.update((prev) => ({ ...prev, acceptedKeys: [...prev.acceptedKeys, entry.key] }));
-      clearRowError(entry.key);
+      if (batch) batch.acceptedKeys.push(entry.key);
+      else {
+        importSession.update((prev) => ({ ...prev, acceptedKeys: [...prev.acceptedKeys, entry.key] }));
+        clearRowError(entry.key);
+      }
     } catch (e) {
       setRowError(entry.key, e);
+      if (batch) throw e;
     }
   }
 

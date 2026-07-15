@@ -26,6 +26,7 @@ export { DexieDiagnosticEventRepository } from "./DexieDiagnosticEventRepository
 export { DexieDiagnosticCaseRepository } from "./DexieDiagnosticCaseRepository";
 
 export interface Repositories {
+  runInTransaction<T>(work: () => Promise<T>): Promise<T>;
   portfolios: DexiePortfolioRepository;
   trades: DexieTradeRepository;
   tradeAllocations: DexieTradeAllocationRepository;
@@ -40,6 +41,25 @@ export interface Repositories {
 
 export function createRepositories(database: PortfolioOsDatabase = sharedDb): Repositories {
   return {
+    runInTransaction<T>(work: () => Promise<T>): Promise<T> {
+      return database.transaction(
+        "rw",
+        [
+          database.portfolios,
+          database.trades,
+          database.tradeAllocations,
+          database.timelineEvents,
+          database.journalEntries,
+          database.verifications,
+          database.uploads,
+          database.rawTransactions,
+          database.ledgerCache,
+          database.allocationsCache,
+          database.pendingExecutions,
+        ],
+        work,
+      );
+    },
     portfolios: new DexiePortfolioRepository(database),
     trades: new DexieTradeRepository(database),
     tradeAllocations: new DexieTradeAllocationRepository(database),

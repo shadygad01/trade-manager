@@ -10,6 +10,8 @@ import type {
 } from "@domain/repositories";
 
 export interface AppRepositories {
+  /** Optional infrastructure transaction coordinator used by bulk import jobs. */
+  runInTransaction?<T>(work: () => Promise<T>): Promise<T>;
   portfolios: PortfolioRepository;
   trades: TradeRepository;
   allocations: TradeAllocationRepository;

@@ -1,4 +1,3 @@
-
 import { describe, it, expect } from "vitest";
 import { reconcilePositions, suggestDuplicateTradeIds, findPendingConfirmations, isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
 import { createTrade } from "@domain/entities/Trade";
@@ -106,7 +105,7 @@ describe("reconcilePositions", () => {
       buyFact({ id: "b2", source: "official-broker-excel", shares: 90 }),
     ];
     // computed (100) intentionally disagrees with the verified screenshot
-    // (30) â€” per the broker-record trust policy this must never surface as
+    // (30) — per the broker-record trust policy this must never surface as
     // a mismatch/shortfall/stale row at all, since the whole "My Position"
     // comparison no longer applies to this ticker.
     const results = reconcilePositions([position("COMI", 100)], [verification({ units: 30 })], [], [], facts);
@@ -148,7 +147,7 @@ describe("isTickerFullyOfficialBrokerExcelSourced", () => {
     expect(isTickerFullyOfficialBrokerExcelSourced(facts, "COMI")).toBe(false);
   });
 
-  it("is false for a ticker with zero facts at all â€” nothing to be 'fully' anything of", () => {
+  it("is false for a ticker with zero facts at all — nothing to be 'fully' anything of", () => {
     expect(isTickerFullyOfficialBrokerExcelSourced([], "COMI")).toBe(false);
   });
 
@@ -158,7 +157,7 @@ describe("isTickerFullyOfficialBrokerExcelSourced", () => {
     expect(isTickerFullyOfficialBrokerExcelSourced([fact, retraction], "COMI")).toBe(false);
   });
 
-  // Systemic audit finding: a fact's own `ticker` field is immutable â€” a
+  // Systemic audit finding: a fact's own `ticker` field is immutable — a
   // ticker rename/correction (TradeService.renameTickerEverywhere) is its
   // own separate Correction fact, never an edit in place. Reading
   // `payload.ticker` directly (the pre-fix implementation) silently stopped
@@ -178,7 +177,7 @@ describe("isTickerFullyOfficialBrokerExcelSourced", () => {
   // Invoice (evidenceAuthority.ts rank 6, strictly ABOVE official-broker-excel's
   // rank 5) still hit the "closed-position, no corroboration" dead-end
   // because the old check demanded the literal string "official-broker-excel"
-  // rather than comparing authority rank â€” even though an Invoice is
+  // rather than comparing authority rank — even though an Invoice is
   // objectively more trustworthy than the Excel export this function was
   // originally written to trust.
   it("is true when every live fact outranks official-broker-excel (e.g. invoice), not just an exact source match", () => {
@@ -206,8 +205,8 @@ describe("suggestDuplicateTradeIds", () => {
     expect(suggested).toEqual(["t2"]);
   });
 
-  it("delegates to the canonical avg-cost-ranked solver when a verified avg cost is available â€” picking the subset whose surviving avg cost is closest to it", () => {
-    // Removing t1 (50) leaves t2+t3, implied avg (48+55)/2 = 51.5 â€” farther
+  it("delegates to the canonical avg-cost-ranked solver when a verified avg cost is available — picking the subset whose surviving avg cost is closest to it", () => {
+    // Removing t1 (50) leaves t2+t3, implied avg (48+55)/2 = 51.5 — farther
     // from the broker's 54 than removing t2 (48), which leaves t1+t3, avg
     // (50+55)/2 = 52.5. The canonical solver correctly prefers removing t2.
     const suggested = suggestDuplicateTradeIds({
@@ -225,7 +224,7 @@ describe("suggestDuplicateTradeIds", () => {
 
   it("returns every trade needed to close a gap spanning more than one duplicate", () => {
     // Three 100-share buys (t1 kept, t2/t3 duplicates) computed at 300 vs. a
-    // broker-verified 100 â€” both duplicates must go in one pass, not just one.
+    // broker-verified 100 — both duplicates must go in one pass, not just one.
     const suggested = suggestDuplicateTradeIds({
       openTrades: [
         { id: "t1", entryPrice: 50, shares: 100, remainingShares: 100 },
@@ -251,7 +250,7 @@ describe("suggestDuplicateTradeIds", () => {
   });
 
   it("skips a trade that would undershoot into a shortfall, trying a different one instead", () => {
-    // Gap is 50, but the lowest-priced trade is 100 shares â€” removing it
+    // Gap is 50, but the lowest-priced trade is 100 shares — removing it
     // would leave 250 computed vs. 300 verified (a new shortfall), so it's
     // skipped in favor of the 50-share trade that closes the gap exactly.
     const suggested = suggestDuplicateTradeIds({
@@ -354,4 +353,3 @@ describe("findPendingConfirmations", () => {
     expect(findPendingConfirmations([], [])).toEqual([]);
   });
 });
-

@@ -1,4 +1,3 @@
-
 import type { DiagnosticsRecorder } from "@domain/repositories";
 
 export type TickerMatchReason =
@@ -17,7 +16,7 @@ export interface TickerMatchStatus {
   reason: TickerMatchReason;
   netShares: number;
   /**
-   * Shares this ticker already had on the ledger before this batch â€”
+   * Shares this ticker already had on the ledger before this batch —
    * included in netShares. Surfaced so the UI can show the reconciliation
    * arithmetic ("20 already recorded + 54 in this batch = 74"): a verified
    * count that includes invisible existing shares otherwise looks like it
@@ -25,7 +24,7 @@ export interface TickerMatchStatus {
    */
   existingRemainingShares?: number;
   /**
-   * Echoes checkTickerMatch's own inputs back on the result â€” the single
+   * Echoes checkTickerMatch's own inputs back on the result — the single
    * canonical figures every "Pending Buy/Sell for TICKER total N shares"
    * display in the UI must read from, instead of re-deriving them with a
    * second filter that can silently drift from the one the match/mismatch
@@ -38,7 +37,7 @@ export interface TickerMatchStatus {
   verifiedUnits?: number;
   /**
    * Echoed straight from the same latest-verification record `verifiedUnits`
-   * came from â€” lets a "mismatch" ticker's avg-cost-based reconcile
+   * came from — lets a "mismatch" ticker's avg-cost-based reconcile
    * suggestion (mismatchResolver.suggestRemovalsToReconcile) read it here
    * instead of re-selecting "the latest PositionVerification for this
    * ticker" a second time with a separately maintained copy of the same
@@ -48,12 +47,12 @@ export interface TickerMatchStatus {
   /**
    * True on a "mismatch" whose already-committed shares alone (before this
    * batch's pending candidates) already reconcile exactly against the
-   * broker's verified count â€” i.e. the broker independently confirms the
+   * broker's verified count — i.e. the broker independently confirms the
    * ledger was already correct, and every pending candidate for this ticker
    * is re-describing shares already accounted for (a bulk re-upload of an
    * already-fully-imported ticker), not a genuinely new transaction. See
    * ImportPage's "Discard all pending for {ticker}" action, which this
-   * flag enables â€” distinct from the row-level duplicate checks, which
+   * flag enables — distinct from the row-level duplicate checks, which
    * require an individual candidate to match a specific existing trade or
    * sibling by date+shares and miss this case whenever the existing lots
    * were recorded with a different date/shares split than this new read.
@@ -61,13 +60,13 @@ export interface TickerMatchStatus {
   alreadyFullyRecorded?: boolean;
   /**
    * Which side of the transaction list is the likely source of the
-   * discrepancy â€” surfaced in the mismatch/no-verification banners so the
+   * discrepancy — surfaced in the mismatch/no-verification banners so the
    * user knows where to look first.
    *
-   * "buy"  â†’ net shares exceed the expected count, or buys outweigh sells
-   *          â€” look for a duplicate or misread buy transaction.
-   * "sell" â†’ net shares fall short of the expected count, or sells outweigh
-   *          buys â€” look for a duplicate or misread sell transaction, or a
+   * "buy"  → net shares exceed the expected count, or buys outweigh sells
+   *          — look for a duplicate or misread buy transaction.
+   * "sell" → net shares fall short of the expected count, or sells outweigh
+   *          buys — look for a duplicate or misread sell transaction, or a
    *          missing buy.
    */
   discrepancySide?: "buy" | "sell";
@@ -75,8 +74,8 @@ export interface TickerMatchStatus {
    * True only on `reason === "broker-excel-verified"`, when a "My Position"
    * screenshot (or other secondary source) exists but disagrees with the
    * net share count. Per the broker-record trust policy this never blocks,
-   * downgrades, or invalidates the Excel-sourced transaction â€” `matched`
-   * stays true regardless â€” it exists purely so the UI can flag the
+   * downgrades, or invalidates the Excel-sourced transaction — `matched`
+   * stays true regardless — it exists purely so the UI can flag the
    * disagreement for the user to look at, without treating it as a real
    * discrepancy the way a `"mismatch"` reason does for every other source.
    */
@@ -95,7 +94,7 @@ export interface TickerMatchStatus {
  * same problem for a different reason: a broker "My Position" screenshot
  * never lists a position with zero units, so one will never be uploaded for
  * it. The buy/sell invoices already extracted (each carrying its own
- * date/price/shares) are the confirmation in that case â€” there's no current
+ * date/price/shares) are the confirmation in that case — there's no current
  * position left to verify against a screenshot.
  *
  * A ticker whose every still-pending Buy/Sell candidate came from a
@@ -103,7 +102,7 @@ export interface TickerMatchStatus {
  * `ParsedTradeCandidate.source`) rather than an OCR'd screenshot has a third
  * way out of the same problem: an invoice is a labeled, fixed-layout
  * document trusted as sufficient proof of its own transaction, so it never
- * needs a separate "My Position" recount just to confirm one new buy/sell â€”
+ * needs a separate "My Position" recount just to confirm one new buy/sell —
  * requiring one anyway would mean re-screenshotting the whole position on
  * every single invoice import. Only applies when no broker verification
  * exists at all; a screenshot that's actually present and mismatches still
@@ -112,9 +111,9 @@ export interface TickerMatchStatus {
  *
  * A ticker whose every still-pending candidate came from the broker's own
  * native "Your Orders" Excel export (`source: "official-broker-excel"`, see
- * ThndrOrdersWorkbookParser.ts) is verified for the same reason â€” every
+ * ThndrOrdersWorkbookParser.ts) is verified for the same reason — every
  * field is printed verbatim by the broker's own system, no OCR or AI
- * extraction involved â€” but goes one step further than invoice: it is
+ * extraction involved — but goes one step further than invoice: it is
  * authoritative even against a DISAGREEING "My Position" screenshot, not
  * just a missing one (checked before the verifiedUnits branch entirely, see
  * the code below). Per the broker-record trust policy, only the Excel
@@ -122,10 +121,10 @@ export interface TickerMatchStatus {
  * Excel-sourced batch; a disagreeing screenshot is surfaced via
  * `secondaryMismatch` for the user to review, never as a block.
  *
- * A fourth way, one level broader â€” the dual-source rule: a ticker whose
+ * A fourth way, one level broader — the dual-source rule: a ticker whose
  * every still-pending candidate is *either* invoice-sourced *or*
  * cross-verified by a second, DIFFERENT document type describing the same
- * transaction (see `findCrossSourceVerifiedKeys` â€” statement + invoice,
+ * transaction (see `findCrossSourceVerifiedKeys` — statement + invoice,
  * statement + orders screenshot, invoice + orders screenshot, CSV +
  * anything; which pair doesn't matter, that they're two independent
  * document types does). Two independent sources agreeing is at least as
@@ -135,7 +134,7 @@ export interface TickerMatchStatus {
  * mismatch is hiding inside a row nothing else ever corroborated.
  *
  * A fifth way, same shape again: a ticker whose every still-pending
- * candidate is corroborated one way or another â€” invoice-sourced,
+ * candidate is corroborated one way or another — invoice-sourced,
  * cross-verified, or matched against a fulfilled order on the broker's own
  * account-wide "Orders" timeline screenshot (see
  * orderEvidence.findOrderConfirmedKeys: same ticker/side/share count, price
@@ -143,27 +142,27 @@ export interface TickerMatchStatus {
  * WHICH transactions happened (though not for the current position count),
  * so a batch it fully confirms doesn't additionally need a "My Position"
  * recount. Exactly like the invoice/cross-verified rules, this only ever
- * substitutes for a MISSING position screenshot â€” an actual mismatch against
+ * substitutes for a MISSING position screenshot — an actual mismatch against
  * a real one still blocks.
  *
  * `reason === "closed-position"` alone is deliberately NOT sufficient to set
- * `matched: true` (see the corroboration check below) â€” net-zero (buys
+ * `matched: true` (see the corroboration check below) — net-zero (buys
  * exactly cancel sells) is indistinguishable, by arithmetic alone, from a
  * batch that's missing an equal, canceling buy+sell pair before or after it.
  * completenessEngine.ts documents the same rule from the historical-
- * completeness side (real cases: JUFO, SKPC â€” a ticker whose visible history
+ * completeness side (real cases: JUFO, SKPC — a ticker whose visible history
  * happened to net to zero, verified as "matched" on that arithmetic alone,
  * while an actual missing Buy/Sell sat just outside the imported window).
  * `checkTickerMatch` used to auto-match this case unconditionally; the fix is
  * to require the SAME independent corroboration signals (invoice/cross/
- * orders-verified) it already requires for a NON-zero net position â€” never a
+ * orders-verified) it already requires for a NON-zero net position — never a
  * broker "My Position" recount here, since a closed ticker never appears on
  * one (see the reason ordering below: closed-position is checked only after
  * the three corroboration branches, not before them).
  */
 /**
  * The exact wording checkTickerMatch's own MatchBadge renderer (ImportPage.tsx)
- * shows for each reason â€” reused here verbatim so a Diagnostics Center
+ * shows for each reason — reused here verbatim so a Diagnostics Center
  * "Verification" decision names literally the same banner text the user sees,
  * not a paraphrase that could drift from it.
  */
@@ -172,7 +171,7 @@ function describeMatchDecision(result: TickerMatchStatus): string {
     case "no-shares-to-verify":
       return "No shares to verify";
     case "broker-excel-verified":
-      return result.secondaryMismatch ? "Verified (broker Excel) â€” secondary mismatch vs screenshot" : "Verified (broker Excel)";
+      return result.secondaryMismatch ? "Verified (broker Excel) — secondary mismatch vs screenshot" : "Verified (broker Excel)";
     case "invoice-verified":
       return "Verified (invoice)";
     case "cross-verified":
@@ -180,7 +179,7 @@ function describeMatchDecision(result: TickerMatchStatus): string {
     case "orders-verified":
       return "Verified (orders history)";
     case "closed-position":
-      return result.matched ? "Closed â€” sold out (corroborated)" : "Closed â€” needs corroborating evidence";
+      return result.matched ? "Closed — sold out (corroborated)" : "Closed — needs corroborating evidence";
     case "no-verification":
       return result.netShares < -1e-6 ? "Missing buy history" : "Needs broker screenshot";
     case "matched":
@@ -201,7 +200,7 @@ export function checkTickerMatch(params: {
   allPendingFromOfficialBrokerExcel?: boolean;
   allPendingSelfVerified?: boolean;
   allPendingOrderConfirmed?: boolean;
-  /** Diagnostics tagging only â€” never read by the decision logic itself. */
+  /** Diagnostics tagging only — never read by the decision logic itself. */
   ticker?: string;
   diagnostics?: DiagnosticsRecorder;
 }): TickerMatchStatus {
@@ -212,11 +211,11 @@ export function checkTickerMatch(params: {
   const common = { existingRemainingShares, pendingBuyShares, pendingSellShares };
 
   // This is the terminal decision function behind every "Needs broker
-  // screenshot"/"Mismatch"/"Closed â€” needs corroborating evidence" banner in
-  // the Import UI (ImportPage.tsx's MatchBadge only maps `.reason` to text â€”
+  // screenshot"/"Mismatch"/"Closed — needs corroborating evidence" banner in
+  // the Import UI (ImportPage.tsx's MatchBadge only maps `.reason` to text —
   // it decides nothing). Constraint Evaluation (constraintValidation.ts)
-  // checks a DIFFERENT question â€” whether already-known facts arithmetically
-  // reconcile â€” and can report "Satisfied" for a ticker this function still
+  // checks a DIFFERENT question — whether already-known facts arithmetically
+  // reconcile — and can report "Satisfied" for a ticker this function still
   // blocks, because reconciling arithmetic and having independent
   // corroboration for it are separate requirements. Every return path funnels
   // through `decide` below so exactly one decision is recorded per call,
@@ -261,7 +260,7 @@ export function checkTickerMatch(params: {
   }
 
   // The official broker Excel export is authoritative even against a
-  // DISAGREEING secondary source â€” checked before the verifiedUnits/screenshot
+  // DISAGREEING secondary source — checked before the verifiedUnits/screenshot
   // branch below (unlike every other corroboration signal, which only ever
   // substitutes for a MISSING screenshot and still blocks on a real,
   // present mismatch). Per the broker-record trust policy, only the Excel
@@ -283,7 +282,7 @@ export function checkTickerMatch(params: {
   }
   if (params.verifiedUnits === undefined) {
     // Corroboration checked BEFORE the closed-position shortcut, and applies
-    // equally whether netShares is zero or not â€” these three signals are
+    // equally whether netShares is zero or not — these three signals are
     // independent, per-transaction evidence, always strictly stronger than
     // "the arithmetic happens to cancel."
     if (params.allPendingFromInvoice) {
@@ -298,13 +297,13 @@ export function checkTickerMatch(params: {
     if (Math.abs(netShares) < 1e-6) {
       // Net-zero with NO independent corroboration: never auto-matched (see
       // the doc comment above). Never a "get a My Position screenshot" ask
-      // either â€” a closed position can't prove itself via a document that
+      // either — a closed position can't prove itself via a document that
       // only ever lists open holdings; the caller's evidence-recommendation
       // step (completenessEngine.recoveryPlan) is what names the actual next
       // document to request.
       return decide({ matched: false, reason: "closed-position", netShares, ...common });
     }
-    // No broker screenshot and no alternative verification â€” indicate which
+    // No broker screenshot and no alternative verification — indicate which
     // side the surplus/shortage sits on so the user knows where to look.
     // Sign of the NET (which includes already-recorded ledger shares), not a
     // pending-rows comparison: a batch of only Sells against a too-large
@@ -325,8 +324,8 @@ export function checkTickerMatch(params: {
     });
   }
   const alreadyFullyRecorded = Math.abs(existingRemainingShares - params.verifiedUnits) < 1e-6;
-  // netShares > verifiedUnits â†’ too many shares â†’ excess likely on buy side.
-  // netShares < verifiedUnits â†’ too few shares â†’ shortage likely on sell side (extra sell or missing buy).
+  // netShares > verifiedUnits → too many shares → excess likely on buy side.
+  // netShares < verifiedUnits → too few shares → shortage likely on sell side (extra sell or missing buy).
   const discrepancySide: "buy" | "sell" = netShares > params.verifiedUnits ? "buy" : "sell";
   return decide({
     matched: false,
@@ -343,7 +342,7 @@ export function checkTickerMatch(params: {
 /**
  * A ticker is "fully matched" once every buy/sell/dividend/verification row
  * extracted for it has reached a terminal state (committed, skipped as an
- * exact duplicate, or manually dismissed) and none is stuck on a row error â€”
+ * exact duplicate, or manually dismissed) and none is stuck on a row error —
  * i.e. there's nothing left for the user to look at. ImportPage uses this to
  * move a resolved ticker's card out of the active working list into a
  * collapsed "Fully matched" summary, so the active list only ever shows
@@ -351,7 +350,7 @@ export function checkTickerMatch(params: {
  * unallocated sell, a failed commit).
  *
  * A ticker with zero buy/sell rows (dividend/verification-only) never
- * resolves this way â€” there's no "sell = buy" question to answer for it, so
+ * resolves this way — there's no "sell = buy" question to answer for it, so
  * it stays visible like any other still-open card rather than silently
  * vanishing.
  */
@@ -379,4 +378,3 @@ export function isTickerFullyResolved(params: {
     (k) => !params.rowErrorKeys.has(k),
   );
 }
-

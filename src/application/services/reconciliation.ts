@@ -1,4 +1,3 @@
-
 import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
@@ -39,23 +38,23 @@ function isShadowedByHigherAuthorityTwin(all: RawTransaction[], fact: RawTransac
 /**
  * True only when every live Buy/Sell RawTransaction fact for this ticker is
  * at least as authoritative as the broker's own official Excel export (see
- * ThndrOrdersWorkbookParser.ts and evidenceAuthority.ts's ranking) â€” the "My
+ * ThndrOrdersWorkbookParser.ts and evidenceAuthority.ts's ranking) — the "My
  * Position" screenshot verification workflow no longer applies to such a
  * ticker at all, per the broker-record trust policy: the executed-BUY-minus-
  * executed-SELL count from documents this trustworthy already IS the
  * confirmed position, regardless of whether a screenshot exists, agrees, or
  * disagrees. Deliberately rank-based rather than an exact `source ===
  * "official-broker-excel"` match: a ticker whose sole surviving history is an
- * Invoice (rank 6, strictly above the Excel export's rank 5 â€” see
+ * Invoice (rank 6, strictly above the Excel export's rank 5 — see
  * evidenceAuthority.ts) is real, found evidence of the same closed-position
  * dead-end this function exists to fix, just one authority tier higher than
  * the case it was originally written for. False for a ticker with zero facts
- * (nothing to be "fully" anything of) or any fact sourced below that bar â€” a
+ * (nothing to be "fully" anything of) or any fact sourced below that bar — a
  * ticker with even one manual/screenshot/lower-tier execution still goes
  * through ordinary reconciliation.
  *
  * Resolves each fact's CURRENT ticker via `resolveCurrentTicker` (folding
- * any live Correction) rather than reading `payload.ticker` directly â€” a
+ * any live Correction) rather than reading `payload.ticker` directly — a
  * fact's own `ticker` field is immutable and never rewritten in place (e.g.
  * TradeService.renameTickerEverywhere's wrong-ticker fix is its own separate
  * Correction fact), so reading it raw silently stops recognizing an
@@ -78,18 +77,18 @@ export function isTickerFullyOfficialBrokerExcelSourced(rawTransactions: RawTran
 
 export interface PositionReconciliation {
   ticker: string;
-  /** The specific PositionVerification record this reconciliation is based on â€” lets the UI offer a direct delete for a stray/misfiled verification (see PortfolioDetailPage's "no recorded trades" banner). */
+  /** The specific PositionVerification record this reconciliation is based on — lets the UI offer a direct delete for a stray/misfiled verification (see PortfolioDetailPage's "no recorded trades" banner). */
   verificationId: string;
   computedShares: number;
   verifiedUnits: number;
   verifiedAvgCost?: number;
   verificationCapturedAt: string;
   verificationSource: "screenshot" | "manual";
-  /** Computed shares exceed the broker's verified units â€” a duplicate or misparsed trade is likely. */
+  /** Computed shares exceed the broker's verified units — a duplicate or misparsed trade is likely. */
   quantityMismatch: boolean;
-  /** Computed shares fall short of the broker's verified units â€” the ledger is missing a trade. */
+  /** Computed shares fall short of the broker's verified units — the ledger is missing a trade. */
   quantityShortfall: boolean;
-  /** A trade/allocation for this ticker was recorded after the screenshot was captured, so a gap is expected, not a bug â€” mismatch/shortfall are suppressed. */
+  /** A trade/allocation for this ticker was recorded after the screenshot was captured, so a gap is expected, not a bug — mismatch/shortfall are suppressed. */
   verificationStale: boolean;
 }
 
@@ -105,7 +104,7 @@ export interface PendingConfirmation {
 }
 
 /**
- * Every Trade/TradeAllocation still `confirmationStatus: "pending"` â€” a
+ * Every Trade/TradeAllocation still `confirmationStatus: "pending"` — a
  * partial-fill execution imported from STES (Extraction Notes = "Needs
  * Confirmation") whose exact final numbers await the broker invoice.
  * Independent of `reconcilePositions`: that function only ever produces a
@@ -151,7 +150,7 @@ export function findPendingConfirmations(trades: Trade[], allocations: TradeAllo
   return results;
 }
 
-/** The most recent PositionVerification per ticker â€” the same "which broker screenshot is ground truth" reduction reused by ledgerRebuild.ts's holdings diff. */
+/** The most recent PositionVerification per ticker — the same "which broker screenshot is ground truth" reduction reused by ledgerRebuild.ts's holdings diff. */
 export function latestByTicker(verifications: PositionVerification[]): Map<string, PositionVerification> {
   const latest = new Map<string, PositionVerification>();
   for (const v of verifications) {
@@ -167,29 +166,29 @@ export function latestByTicker(verifications: PositionVerification[]): Map<strin
 /**
  * Ground-truth reconciliation: compares the trade-ledger-derived position for
  * each ticker against the most recent broker "My Position" screenshot for
- * that ticker. Never mutates the ledger â€” this only surfaces a discrepancy
+ * that ticker. Never mutates the ledger — this only surfaces a discrepancy
  * for the user to investigate (e.g. a duplicate import, or a missing trade).
  *
- * The actual match/mismatch judgment is delegated to checkTickerMatch â€” the
+ * The actual match/mismatch judgment is delegated to checkTickerMatch — the
  * same canonical function Import's live commit gate and the Evidence
- * Intelligence facade both use â€” instead of a second, independently
+ * Intelligence facade both use — instead of a second, independently
  * hand-rolled comparison. Everything already committed for this ticker is
  * treated as a single settled amount (existingRemainingShares =
- * computedShares, no separate "pending" batch â€” there is none once trades
+ * computedShares, no separate "pending" batch — there is none once trades
  * are committed), so checkTickerMatch's netShares reduces to exactly
- * computedShares here. `verificationStale` â€” a real, additional concern
+ * computedShares here. `verificationStale` — a real, additional concern
  * checkTickerMatch has no equivalent for (it always compares "as of right
- * now," with no notion of a screenshot predating trades recorded since) â€”
+ * now," with no notion of a screenshot predating trades recorded since) —
  * remains this module's own, layered on top: a mismatch a newer trade would
  * fully explain is suppressed rather than reported as a live discrepancy.
  *
  * A ticker fully sourced from the broker's own official Excel export (see
  * `isTickerFullyOfficialBrokerExcelSourced`) never produces a row at all,
- * regardless of any "My Position" screenshot on file â€” per the broker-record
+ * regardless of any "My Position" screenshot on file — per the broker-record
  * trust policy, that whole comparison no longer applies once the Excel
  * export alone already confirms the position; a stray disagreeing
  * screenshot is not this module's concern to surface for such a ticker.
- * `rawTransactions` is deliberately REQUIRED, not optional/defaulted â€”
+ * `rawTransactions` is deliberately REQUIRED, not optional/defaulted —
  * an architectural-audit finding was that a defaulted-to-`[]` parameter here
  * would let any future caller silently bypass the trust policy (an omitted
  * argument reading as "no ticker is Excel-sourced" with no compiler or
@@ -217,7 +216,7 @@ export function reconcilePositions(
     const computedShares = computedByTicker.get(ticker) ?? 0;
 
     // Timestamps are plain "YYYY-MM-DDTHH:MM" / ISO strings, not Date objects
-    // â€” string comparison is safe here because both are zero-padded and
+    // — string comparison is safe here because both are zero-padded and
     // share the same YYYY-MM-DD prefix ordering.
     const hasNewerActivity =
       trades.some(
@@ -255,15 +254,15 @@ export function reconcilePositions(
 /**
  * When a ticker's computed share count exceeds the broker's verified units
  * (quantityMismatch), one or more of the open trades is almost always an
- * extra fill from a duplicate import â€” the same statement re-uploaded more
+ * extra fill from a duplicate import — the same statement re-uploaded more
  * than once produces more than one duplicate of the same real trade, not
  * just one. The same real trade parsed from two documents tends to differ
  * only by which one's price rounding won, so the lower-priced reads are the
  * more likely duplicates to delete, leaving the highest (most plausible,
  * post-commission) price on the ledger.
  *
- * Returns every trade needed to close the whole gap in one pass â€” not just
- * the single lowest-priced one â€” by removing lowest-priced deletable trades
+ * Returns every trade needed to close the whole gap in one pass — not just
+ * the single lowest-priced one — by removing lowest-priced deletable trades
  * (nothing sold against them yet) until computed shares reach the verified
  * count. Skips a trade that would remove more shares than the remaining gap
  * (which would turn the mismatch into a shortfall instead of resolving it)
@@ -279,11 +278,11 @@ export function suggestDuplicateTradeIds(params: {
   const deletable = [...params.openTrades].filter((t) => t.remainingShares === t.shares);
 
   // Prefer the canonical, avg-cost-ranked, alternatives-aware solver
-  // (mismatchResolver.suggestRemovalsToReconcile â€” the same one Import's own
+  // (mismatchResolver.suggestRemovalsToReconcile — the same one Import's own
   // reconcile banner uses) only when it actually has a ranking signal to
   // exploit (a broker-verified avg cost) and its exhaustive-subset search
   // can cover every deletable trade. Without an avg cost, that solver has NO
-  // price-preference signal at all and picks an arbitrary valid subset â€”
+  // price-preference signal at all and picks an arbitrary valid subset —
   // strictly worse than this module's own lowest-price-first heuristic,
   // which encodes a real, sound rule for exactly this common case (the same
   // real trade re-read from a duplicate document differs mostly in price
@@ -314,4 +313,3 @@ export function suggestDuplicateTradeIds(params: {
   }
   return ids;
 }
-
