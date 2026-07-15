@@ -323,6 +323,26 @@ export function ImportPage() {
     [pendingTickerKey, distributing],
   );
   const existingRawTransactions = existingRawTransactionsRaw ?? [];
+  // Uploads are durable evidence, unlike the localStorage review session.
+  // Keep official broker-workbook candidates available after a page reload or
+  // after every pending row has been dismissed/committed.
+  const officialUploadsRaw = useLiveQuery(
+    async () => (pendingTickers.length === 0 ? [] : repos.uploads.getAll()),
+    [pendingTickerKey],
+  );
+  const officialUploadCandidatesByTicker = useMemo(() => {
+    const byTicker = new Map<string, ParsedTradeCandidate[]>();
+    for (const upload of officialUploadsRaw ?? []) {
+      const candidates = upload.candidates.filter((candidate) => candidate.source === "official-broker-excel");
+      for (const candidate of candidates) {
+        const normalized = normalizeTicker(candidate.ticker);
+        const existing = byTicker.get(normalized) ?? [];
+        existing.push(candidate);
+        byTicker.set(normalized, existing);
+      }
+    }
+    return byTicker;
+  }, [officialUploadsRaw]);
   // Ground truth for the verification gate below — a broker "My Position"
   // screenshot accepted in an earlier session still counts as this ticker's
   // reference even if this batch re-extracts more buys/sells for it.
@@ -2011,6 +2031,7 @@ export function ImportPage() {
       ].map((entry) => entry.candidate);
       const allSessionCandidatesFromOfficialBrokerExcel =
         sessionCandidatesForTicker.length > 0 && sessionCandidatesForTicker.every((candidate) => candidate.source === "official-broker-excel");
+      const durableOfficialCandidates = officialUploadCandidatesByTicker.get(ticker) ?? [];
       const existingRemainingShares = existingTrades
         .filter((t) => normalizeTicker(t.ticker) === ticker)
         .reduce((sum, t) => sum + t.remainingShares, 0);
@@ -2019,7 +2040,8 @@ export function ImportPage() {
           ? remainingBuysAndSells.every((e) => e.candidate.source === "official-broker-excel")
           : isTickerFullyOfficialBrokerExcelSourced(existingRawTransactions, ticker) ||
             (allSessionCandidatesFromOfficialBrokerExcel &&
-              isTickerOfficialBrokerExcelCoveredByCandidates(existingRawTransactions, ticker, sessionCandidatesForTicker, existingRemainingShares));
+              isTickerOfficialBrokerExcelCoveredByCandidates(existingRawTransactions, ticker, sessionCandidatesForTicker, existingRemainingShares)) ||
+            isTickerOfficialBrokerExcelCoveredByCandidates(existingRawTransactions, ticker, durableOfficialCandidates, existingRemainingShares);
       const allPendingSelfVerified =
         remainingBuysAndSells.length > 0 &&
         remainingBuysAndSells.every(
@@ -2076,6 +2098,7 @@ export function ImportPage() {
     existingRawTransactions,
     existingRawTransactionsRaw,
     session.discardedCandidates,
+    officialUploadCandidatesByTicker,
     crossVerifiedKeys,
     aggregateConfirmedKeys,
     orderConfirmedKeys,
