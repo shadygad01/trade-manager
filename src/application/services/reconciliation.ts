@@ -130,8 +130,12 @@ export function isTickerOfficialBrokerExcelCoveredByCandidates(
     return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalized;
   });
   if (live.length === 0) {
-    const candidateNet = official.reduce((sum, candidate) => sum + (candidate.side === "BUY" ? candidate.shares : -candidate.shares), 0);
-    return existingRemainingShares !== undefined && Math.abs(existingRemainingShares) < 1e-6 && Math.abs(candidateNet) < 1e-6;
+    // A saved official Orders workbook is account-wide evidence of the
+    // ticker's execution history. When the materialized ledger says there
+    // are no open shares, do not demand that the parser's candidate subset
+    // independently net to zero; partial/filtered workbook rows are still
+    // stronger provenance than an invented request for another screenshot.
+    return existingRemainingShares !== undefined && Math.abs(existingRemainingShares) < 1e-6;
   }
   // If a live official/invoice fact is already present, let the normal
   // provenance-upgrade effect finish retracting any lower twin first. Using

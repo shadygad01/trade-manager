@@ -247,6 +247,17 @@ describe("isTickerOfficialBrokerExcelCoveredByCandidates", () => {
       ),
     ).toBe(true);
   });
+
+  it("does not require the saved workbook candidate subset to net to zero", () => {
+    expect(
+      isTickerOfficialBrokerExcelCoveredByCandidates(
+        [],
+        "ADPC",
+        [{ ticker: "ADPC", side: "BUY", shares: 500, price: 1.8, date: "2022-11-27", source: "official-broker-excel" }],
+        0,
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("suggestDuplicateTradeIds", () => {
