@@ -1271,9 +1271,25 @@ export function ImportPage() {
         !inFlightKeys.has(e.key),
     );
     const normalBuys: CandidateEntry[] = [];
+    // `existingTrades` is a snapshot from before this confirmation starts.
+    // Several identical rows in the same workbook therefore cannot be found
+    // by duplicateMatch until AFTER recordBuyBatch has already written them.
+    // Track the immutable execution identity within this batch so a second
+    // identical read is skipped before it can become a Trade. A real time or
+    // broker transaction number keeps genuinely separate fills distinct.
+    const seenBuyExecutionKeys = new Set<string>();
     for (const entry of buys) {
       inFlightKeys.add(entry.key);
       try {
+        const candidate = entry.candidate;
+        const batchIdentity = candidate.transactionNumber
+          ? `${normalizeTicker(candidate.ticker)}|BUY|txn:${candidate.transactionNumber}`
+          : `${normalizeTicker(candidate.ticker)}|BUY|${candidate.date}|${candidate.shares}|${Math.round(candidate.price * 10000)}|${candidate.time ?? "unknown"}`;
+        if (seenBuyExecutionKeys.has(batchIdentity)) {
+          batchState.skippedKeys.push(entry.key);
+          continue;
+        }
+        seenBuyExecutionKeys.add(batchIdentity);
         const match = duplicateMatch(entry.candidate);
         // "exact" is the same read re-imported; a "possible" match whose price
         // sits within OCR/commission noise of the recorded one is the same
