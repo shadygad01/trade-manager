@@ -90,8 +90,9 @@ function load(): ImportSessionState {
 
 let state: ImportSessionState = load();
 const listeners = new Set<() => void>();
+let persistTimer: ReturnType<typeof setTimeout> | undefined;
 
-function persist() {
+function persistNow() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
@@ -99,9 +100,29 @@ function persist() {
   }
 }
 
+/**
+ * Session updates can happen in quick succession while a workbook is being
+ * parsed (candidate pool, progress counters, duplicate cleanup). Serializing
+ * the entire pool synchronously on every update blocks the main thread and
+ * makes the page feel frozen. Coalesce writes into a short debounce window;
+ * pagehide/beforeunload still flush the latest state synchronously.
+ */
+function schedulePersist() {
+  if (persistTimer !== undefined) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = undefined;
+    persistNow();
+  }, 40);
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", persistNow);
+  window.addEventListener("beforeunload", persistNow);
+}
+
 function setState(next: ImportSessionState) {
   state = next;
-  persist();
+  schedulePersist();
   for (const listener of listeners) listener();
 }
 
@@ -118,6 +139,13 @@ export const importSession = {
   },
   clear(): void {
     setState(emptyState());
+  },
+  flush(): void {
+    if (persistTimer !== undefined) {
+      clearTimeout(persistTimer);
+      persistTimer = undefined;
+    }
+    persistNow();
   },
 };
 

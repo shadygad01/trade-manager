@@ -208,26 +208,60 @@ export function ImportPage() {
   const skippedKeys = useMemo(() => new Set(session.skippedKeys), [session.skippedKeys]);
   const dismissedKeys = useMemo(() => new Set(session.dismissedKeys), [session.dismissedKeys]);
 
+  const pendingTickerKey = useMemo(
+    () =>
+      [
+        ...new Set([
+          ...pendingCandidates.map((entry) => normalizeTicker(entry.candidate.ticker)),
+          ...pendingVerifications.map((entry) => normalizeTicker(entry.verification.ticker)),
+          ...pendingDividends
+            .map((entry) => entry.dividend.ticker)
+            .filter((ticker): ticker is string => Boolean(ticker))
+            .map(normalizeTicker),
+          ...pendingOrderEvidences.map((entry) => normalizeTicker(entry.evidence.ticker)),
+        ]),
+      ]
+        .sort()
+        .join("|"),
+    [pendingCandidates, pendingVerifications, pendingDividends, pendingOrderEvidences],
+  );
+  const pendingTickers = useMemo(() => (pendingTickerKey ? pendingTickerKey.split("|") : []), [pendingTickerKey]);
+
   const portfoliosRaw = useLiveQuery(() => repos.portfolios.getAll(), []);
   const portfolios = portfoliosRaw ?? [];
 
-  // Loaded across every portfolio so a candidate is flagged as a possible
-  // duplicate regardless of which portfolio it's ultimately assigned to.
-  const existingTradesRaw = useLiveQuery(() => repos.trades.getAll(), []);
+  // Every duplicate/reconciliation decision is ticker-scoped. Loading the
+  // entire historical ledger on every Dexie invalidation made a large Excel
+  // upload progressively slower as more rows were appended. Query only the
+  // tickers currently in the review pool; adapters without the targeted
+  // method retain the old getAll fallback for compatibility.
+  const queryByTickers = <T extends { ticker?: string }>(
+    repository: { getAll: () => Promise<T[]>; getByTicker?: (ticker: string) => Promise<T[]> },
+  ) =>
+    pendingTickers.length === 0
+      ? Promise.resolve([] as T[])
+      : repository.getByTicker
+        ? Promise.all(pendingTickers.map((ticker) => repository.getByTicker!(ticker))).then((rows) => rows.flat())
+        : repository.getAll();
+
+  const existingTradesRaw = useLiveQuery(() => queryByTickers(repos.trades), [pendingTickerKey]);
   const existingTrades = existingTradesRaw ?? [];
-  const existingAllocationsRaw = useLiveQuery(() => repos.allocations.getAll(), []);
+  const existingAllocationsRaw = useLiveQuery(() => queryByTickers(repos.allocations), [pendingTickerKey]);
   const existingAllocations = existingAllocationsRaw ?? [];
   // The legacy Trade/TradeAllocation entities carry no provenance field at
   // all — this is the only way to know a ticker's ALREADY-COMMITTED history
   // (as opposed to this batch's still-pending candidates) came entirely from
   // the official broker Excel export (see tickerMatchStatuses below, and
   // reconciliation.ts's own doc comment on isTickerFullyOfficialBrokerExcelSourced).
-  const existingRawTransactionsRaw = useLiveQuery(() => repos.rawTransactions.getAll(), []);
+  const existingRawTransactionsRaw = useLiveQuery(
+    () => queryByTickers(repos.rawTransactions),
+    [pendingTickerKey],
+  );
   const existingRawTransactions = existingRawTransactionsRaw ?? [];
   // Ground truth for the verification gate below — a broker "My Position"
   // screenshot accepted in an earlier session still counts as this ticker's
   // reference even if this batch re-extracts more buys/sells for it.
-  const existingVerificationsRaw = useLiveQuery(() => repos.verifications.getAll(), []);
+  const existingVerificationsRaw = useLiveQuery(() => queryByTickers(repos.verifications), [pendingTickerKey]);
   const existingVerifications = existingVerificationsRaw ?? [];
   // A dividend already recorded in an earlier import session is otherwise
   // invisible to the in-session dedup below (seenDividendKeys), which only

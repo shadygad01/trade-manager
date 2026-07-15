@@ -34,6 +34,8 @@ export interface PortfolioRepository {
 
 export interface TradeRepository {
   getAll(): Promise<Trade[]>;
+  /** Targeted import-page lookup; optional for backwards-compatible adapters. */
+  getByTicker?(ticker: string): Promise<Trade[]>;
   getByPortfolio(portfolioId: string): Promise<Trade[]>;
   getById(id: string): Promise<Trade | undefined>;
   save(trade: Trade): Promise<void>;
@@ -43,6 +45,8 @@ export interface TradeRepository {
 
 export interface TradeAllocationRepository {
   getAll(): Promise<TradeAllocation[]>;
+  /** Targeted import-page lookup; optional for backwards-compatible adapters. */
+  getByTicker?(ticker: string): Promise<TradeAllocation[]>;
   getByPortfolio(portfolioId: string): Promise<TradeAllocation[]>;
   getByTrade(tradeId: string): Promise<TradeAllocation[]>;
   save(allocation: TradeAllocation): Promise<void>;
@@ -66,6 +70,8 @@ export interface JournalRepository {
 
 export interface VerificationRepository {
   getAll(): Promise<PositionVerification[]>;
+  /** Targeted import-page lookup; optional for backwards-compatible adapters. */
+  getByTicker?(ticker: string): Promise<PositionVerification[]>;
   getByPortfolio(portfolioId: string): Promise<PositionVerification[]>;
   getLatest(portfolioId: string, ticker: string): Promise<PositionVerification | undefined>;
   save(verification: PositionVerification): Promise<void>;
@@ -107,6 +113,13 @@ export interface RawTransactionRepository {
   getById(id: string): Promise<RawTransaction | undefined>;
   /** Assigns `seq` atomically and persists the row. The only way a RawTransaction ever reaches storage. */
   append(transaction: Omit<RawTransaction, "seq">): Promise<RawTransaction>;
+  /**
+   * Optional bulk append used by import pipelines. Implementations that do
+   * not provide it remain fully compatible: callers fall back to append().
+   * A batch is one logical write and must assign monotonically increasing seq
+   * values in input order.
+   */
+  appendMany?(transactions: Omit<RawTransaction, "seq">[]): Promise<RawTransaction[]>;
 }
 
 /**

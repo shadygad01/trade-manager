@@ -47,6 +47,9 @@ export function createFakeTradeRepository(seed: Trade[] = []): TradeRepository {
     async getAll() {
       return [...store.values()];
     },
+    async getByTicker(ticker) {
+      return [...store.values()].filter((t) => t.ticker === ticker);
+    },
     async getByPortfolio(portfolioId) {
       return [...store.values()].filter((t) => t.portfolioId === portfolioId);
     },
@@ -72,6 +75,9 @@ export function createFakeTradeAllocationRepository(seed: TradeAllocation[] = []
   return {
     async getAll() {
       return [...store.values()];
+    },
+    async getByTicker(ticker) {
+      return [...store.values()].filter((a) => a.ticker === ticker);
     },
     async getByPortfolio(portfolioId) {
       return [...store.values()].filter((a) => a.portfolioId === portfolioId);
@@ -132,6 +138,9 @@ export function createFakeVerificationRepository(seed: PositionVerification[] = 
   return {
     async getAll() {
       return [...store.values()];
+    },
+    async getByTicker(ticker) {
+      return [...store.values()].filter((v) => v.ticker === ticker);
     },
     async getByPortfolio(portfolioId) {
       return [...store.values()].filter((v) => v.portfolioId === portfolioId);

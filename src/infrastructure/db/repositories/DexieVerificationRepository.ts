@@ -9,6 +9,10 @@ export class DexieVerificationRepository implements VerificationRepository {
     return this.db.verifications.toArray();
   }
 
+  async getByTicker(ticker: string): Promise<PositionVerification[]> {
+    return this.db.verifications.where("ticker").equals(ticker).toArray();
+  }
+
   async getByPortfolio(portfolioId: string): Promise<PositionVerification[]> {
     return this.db.verifications.where("portfolioId").equals(portfolioId).toArray();
   }

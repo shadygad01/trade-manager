@@ -9,6 +9,10 @@ export class DexieTradeAllocationRepository implements TradeAllocationRepository
     return this.db.tradeAllocations.toArray();
   }
 
+  async getByTicker(ticker: string): Promise<TradeAllocation[]> {
+    return this.db.tradeAllocations.where("ticker").equals(ticker).toArray();
+  }
+
   async getByPortfolio(portfolioId: string): Promise<TradeAllocation[]> {
     return this.db.tradeAllocations.where("portfolioId").equals(portfolioId).toArray();
   }

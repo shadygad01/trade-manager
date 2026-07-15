@@ -38,4 +38,17 @@ export class DexieRawTransactionRepository implements RawTransactionRepository {
       return record;
     });
   }
+
+  async appendMany(transactions: Omit<RawTransaction, "seq">[]): Promise<RawTransaction[]> {
+    if (transactions.length === 0) return [];
+    return this.db.transaction("rw", this.db.rawTransactions, async () => {
+      const last = await this.db.rawTransactions.orderBy("seq").last();
+      const records = transactions.map((transaction, index) => ({
+        ...transaction,
+        seq: (last?.seq ?? 0) + index + 1,
+      }));
+      await this.db.rawTransactions.bulkAdd(records);
+      return records;
+    });
+  }
 }

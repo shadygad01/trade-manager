@@ -9,6 +9,10 @@ export class DexieTradeRepository implements TradeRepository {
     return this.db.trades.toArray();
   }
 
+  async getByTicker(ticker: string): Promise<Trade[]> {
+    return this.db.trades.where("ticker").equals(ticker).toArray();
+  }
+
   async getByPortfolio(portfolioId: string): Promise<Trade[]> {
     return this.db.trades.where("portfolioId").equals(portfolioId).toArray();
   }

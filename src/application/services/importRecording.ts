@@ -1,6 +1,6 @@
 import type { ParsedTradeCandidate, ParsedDividendCandidate, ParsedOrderEvidence, ParsedCancelledOrder } from "@domain/entities/Upload";
 import type { PositionVerification } from "@domain/entities/PositionVerification";
-import { createRawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type PositionVerificationCapturePayload, type OrderEvidenceCapturePayload, type DividendPaymentPayload, type CancelledOrderPayload, type RawTransactionSource } from "@domain/entities/RawTransaction";
+import { createRawTransaction, type RawTransaction, type BuyExecutionPayload, type SellExecutionPayload, type PositionVerificationCapturePayload, type OrderEvidenceCapturePayload, type DividendPaymentPayload, type CancelledOrderPayload, type RawTransactionSource } from "@domain/entities/RawTransaction";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { appendAndMaybeCommit, type CommitEngineRepos } from "./commitEngine";
 import { findLiveExecutionFact } from "./rawTransactionFolds";
@@ -77,6 +77,7 @@ export function candidateSource(candidate: ParsedTradeCandidate): RawTransaction
 
 export async function recordImportedRawTransactions(repos: ImportRecordingRepos, input: ImportRecordingInput): Promise<void> {
   const { sourceUploadId, candidates, verifications, dividends, orderEvidences, cancelledOrders } = input;
+  const facts: Omit<RawTransaction, "seq">[] = [];
 
   // Invariant: exactly one live canonical execution fact per business
   // execution identity (ticker/date/shares/price/time), regardless of how
@@ -136,7 +137,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
         parserVersion: candidate.parserVersion,
         payload,
       });
-      await appendAndMaybeCommit(repos, fact);
+      facts.push(fact);
       liveExecutionFacts.push({ ...fact, seq: 0 });
     } else {
       const payload: SellExecutionPayload = {
@@ -160,7 +161,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
         parserVersion: candidate.parserVersion,
         payload,
       });
-      await appendAndMaybeCommit(repos, fact);
+      facts.push(fact);
       liveExecutionFacts.push({ ...fact, seq: 0 });
     }
   }
@@ -174,10 +175,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       capturedAt: verification.capturedAt,
       companyName: verification.companyName,
     };
-    await appendAndMaybeCommit(
-      repos,
-      createRawTransaction({ kind: "PositionVerificationCapture", source: "position-verification", sourceUploadId, ticker, payload })
-    );
+    facts.push(createRawTransaction({ kind: "PositionVerificationCapture", source: "position-verification", sourceUploadId, ticker, payload }));
   }
 
   // A dividend read alongside a "My Position" screen carries no source of its
@@ -186,10 +184,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
   for (const dividend of dividends) {
     const ticker = dividend.ticker ? normalizeTicker(dividend.ticker) : undefined;
     const payload: DividendPaymentPayload = { ticker, amount: dividend.amount, date: dividend.date };
-    await appendAndMaybeCommit(
-      repos,
-      createRawTransaction({ kind: "DividendPayment", source: dividend.source ?? "position-verification", sourceUploadId, ticker, payload })
-    );
+    facts.push(createRawTransaction({ kind: "DividendPayment", source: dividend.source ?? "position-verification", sourceUploadId, ticker, payload }));
   }
 
   // Order evidence is only ever read from the account-wide Orders-timeline
@@ -208,8 +203,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       time: evidence.time,
       companyName: evidence.companyName,
     };
-    await appendAndMaybeCommit(
-      repos,
+    facts.push(
       createRawTransaction({
         id: key,
         kind: "OrderEvidenceCapture",
@@ -220,7 +214,7 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
         extractionMethod: evidence.extractionMethod,
         parserVersion: evidence.parserVersion,
         payload,
-      })
+      }),
     );
   }
 
@@ -242,9 +236,13 @@ export async function recordImportedRawTransactions(repos: ImportRecordingRepos,
       brokerStatus: cancelledOrder.brokerStatus,
       companyName: cancelledOrder.companyName,
     };
-    await appendAndMaybeCommit(
-      repos,
-      createRawTransaction({ kind: "CancelledOrder", source: cancelledOrder.source ?? "statement", sourceUploadId, ticker, payload })
-    );
+    facts.push(createRawTransaction({ kind: "CancelledOrder", source: cancelledOrder.source ?? "statement", sourceUploadId, ticker, payload }));
   }
+
+  if (facts.length === 0) return;
+  if (repos.rawTransactions.appendMany) {
+    await repos.rawTransactions.appendMany(facts);
+    return;
+  }
+  for (const fact of facts) await appendAndMaybeCommit(repos, fact);
 }
