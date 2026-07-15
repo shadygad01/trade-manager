@@ -3,6 +3,7 @@ import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories, createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import {
   recordBuy,
+  recordBuyBatch,
   recordSell,
   computePositions,
   moveTrade,
@@ -27,6 +28,21 @@ function seedPortfolio(cash: number) {
 }
 
 describe("recordBuy", () => {
+  it("writes a batch of buys with one snapshot pass and preserves cash/timeline totals", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+
+    const results = await recordBuyBatch(repos, [
+      { portfolioId: "p1", ticker: "ABUK", shares: 10, entryPrice: 20, executionDate: "2026-01-05", executionTime: "10:00", source: "official-broker-excel" },
+      { portfolioId: "p1", ticker: "ABUK", shares: 15, entryPrice: 21, executionDate: "2026-01-06", executionTime: "10:00", source: "official-broker-excel" },
+    ]);
+
+    expect(results).toHaveLength(2);
+    expect(await repos.trades.getByPortfolio("p1")).toHaveLength(2);
+    expect(await repos.timeline.getByPortfolio("p1")).toHaveLength(2);
+    expect((await repos.portfolios.getById("p1"))?.cash).toBeCloseTo(10_000 - 200 - 315);
+    expect((await repos.rawTransactions.getAll()).filter((fact) => fact.kind === "BuyExecution")).toHaveLength(2);
+  });
+
   it("preserves an official broker document's source when restoring its missing buy", async () => {
     const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
 

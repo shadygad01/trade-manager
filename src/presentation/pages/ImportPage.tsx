@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { useLiveQuery } from "dexie-react-hooks";
 import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser, ChevronDown } from "lucide-react";
 import { repos, diagnostics, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
-import { recordBuy, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
+import { recordBuy, recordBuyBatch, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions, candidateSource } from "@application/services/importRecording";
 import { createPendingExecutionRecord } from "@application/services/pendingExecutions";
@@ -1168,6 +1168,7 @@ export function ImportPage() {
         !state.dismissedKeys.includes(e.key) &&
         !inFlightKeys.has(e.key),
     );
+    const normalBuys: CandidateEntry[] = [];
     for (const entry of buys) {
       inFlightKeys.add(entry.key);
       try {
@@ -1182,9 +1183,48 @@ export function ImportPage() {
           batchState.skippedKeys.push(entry.key);
           continue;
         }
-        await addBuyCandidate(entry, ticker, true, batchState);
+        if (entry.candidate.needsConfirmation) {
+          await addBuyCandidate(entry, ticker, true, batchState);
+        } else {
+          normalBuys.push(entry);
+        }
       } finally {
-        inFlightKeys.delete(entry.key);
+        if (!normalBuys.some((candidate) => candidate.key === entry.key)) inFlightKeys.delete(entry.key);
+      }
+    }
+
+    // The ordinary Buy rows are the dominant part of a broker workbook.
+    // Build them once and let the application service bulk-write the trades,
+    // timeline rows, cash update, and canonical facts. This removes the
+    // per-row getAll/getByPortfolio/save cycle that used to freeze the page.
+    if (normalBuys.length > 0) {
+      try {
+        const results = await recordBuyBatch(
+          repos,
+          normalBuys.map((entry) => ({
+            portfolioId,
+            ticker,
+            companyName: entry.candidate.companyName,
+            shares: entry.candidate.shares,
+            entryPrice: entry.candidate.price,
+            fees: entry.candidate.fees ?? 0,
+            taxes: entry.candidate.taxes ?? 0,
+            executionDate: entry.candidate.date,
+            executionTime: entry.candidate.time ?? "00:00",
+            notes: "Imported from screenshot/PDF",
+            transactionNumber: entry.candidate.transactionNumber,
+            source: entry.candidate.source,
+            deferCommit: true,
+          })),
+          diagnostics,
+        );
+        results.forEach((result, index) => {
+          const entry = normalBuys[index];
+          batchState.addedKeys.push(entry.key);
+          batchState.addedTradeIds[entry.key] = result.trade.id;
+        });
+      } finally {
+        normalBuys.forEach((entry) => inFlightKeys.delete(entry.key));
       }
     }
 

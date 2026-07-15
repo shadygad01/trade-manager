@@ -13,6 +13,7 @@ import {
   retractRawTransaction,
   renameRawTransactionsTicker,
   assignPortfolioToFact,
+  resolveCurrentPortfolioId,
   appendAndMaybeCommit,
   type CommitEngineRepos,
 } from "./commitEngine";
@@ -22,6 +23,7 @@ import { isRetracted, resolveCurrentTicker, findUnclaimedSellExecutionFact } fro
 import { timesConflict } from "./duplicateDetection";
 import {
   createRawTransaction,
+  type RawTransaction,
   type BuyExecutionPayload,
   type SellExecutionPayload,
   type SellAllocationDecisionPayload,
@@ -70,6 +72,188 @@ export interface RecordBuyInput {
 
 export interface RecordBuyResult {
   trade: Trade;
+}
+
+/**
+ * High-throughput import writer. The normal recordBuy path is intentionally
+ * simple for interactive edits, but it performs several reads and writes per
+ * lot. Repeating that path for a large broker workbook makes the work O(n²)
+ * and keeps React/Dexie busy for the whole click. Import confirmation uses
+ * this method instead: read the current snapshot once, build the complete
+ * write set in memory, then bulk-write the trades, timeline events, and raw
+ * facts in one transaction supplied by ImportPage.
+ */
+export async function recordBuyBatch(
+  repos: AppRepositories & Partial<CommitEngineRepos>,
+  inputs: RecordBuyInput[],
+  diagnostics?: DiagnosticsRecorder,
+): Promise<RecordBuyResult[]> {
+  if (inputs.length === 0) return [];
+
+  const portfolioIds = [...new Set(inputs.map((input) => input.portfolioId))];
+  const portfolios = new Map<string, Awaited<ReturnType<typeof repos.portfolios.getById>>>();
+  const tradesByPortfolio = new Map<string, Trade[]>();
+  for (const portfolioId of portfolioIds) {
+    const portfolio = await repos.portfolios.getById(portfolioId);
+    if (!portfolio) throw new Error(`Portfolio not found: ${portfolioId}`);
+    portfolios.set(portfolioId, portfolio);
+    tradesByPortfolio.set(portfolioId, await repos.trades.getByPortfolio(portfolioId));
+  }
+
+  const rawRepos = repos.rawTransactions && repos.committedLedger ? (repos as AppRepositories & CommitEngineRepos) : undefined;
+  const allFacts = rawRepos ? await rawRepos.rawTransactions.getAll() : [];
+  const factsToAppend: Omit<RawTransaction, "seq">[] = [];
+  const tradesToWrite: Trade[] = [];
+  const timelineToWrite = [] as Awaited<ReturnType<typeof createTimelineEvent>>[];
+  const results: RecordBuyResult[] = [];
+  const factSeqByTradeId = new Map<string, number | undefined>();
+
+  for (const input of inputs) {
+    assertWithinTrackingRange(input.executionDate);
+    const normalizedTicker = normalizeTicker(input.ticker);
+    const portfolio = portfolios.get(input.portfolioId)!;
+    const fees = input.fees ?? 0;
+    const taxes = input.taxes ?? 0;
+    const totalCost = Money.from(input.shares * input.entryPrice).add(Money.from(fees)).add(Money.from(taxes));
+    const trade = createTrade({
+      id: generateId(),
+      portfolioId: input.portfolioId,
+      ticker: normalizedTicker,
+      companyName: input.companyName,
+      sector: input.sector ?? sectorForTicker(normalizedTicker),
+      shares: input.shares,
+      entryPrice: input.entryPrice,
+      fees,
+      taxes,
+      executionDate: input.executionDate,
+      executionTime: input.executionTime,
+      notes: input.notes,
+      strategyTags: input.strategyTags,
+      transactionNumber: input.transactionNumber,
+    });
+    tradesToWrite.push(trade);
+    tradesByPortfolio.get(input.portfolioId)!.push(trade);
+    portfolios.set(input.portfolioId, { ...portfolio, cash: Money.from(portfolio.cash).subtract(totalCost).toNumber() });
+
+    timelineToWrite.push(
+      createTimelineEvent({
+        id: generateId(),
+        portfolioId: input.portfolioId,
+        type: "Buy",
+        timestamp: toTimestamp(input.executionDate, input.executionTime),
+        ticker: normalizedTicker,
+        relatedTradeIds: [trade.id],
+        amount: -totalCost.toNumber(),
+        shares: input.shares,
+        notes: input.notes,
+      }),
+    );
+
+    if (!rawRepos) {
+      results.push({ trade });
+      continue;
+    }
+
+    const existingTradeIds = new Set((tradesByPortfolio.get(input.portfolioId) ?? []).filter((candidate) => candidate.id !== trade.id).map((candidate) => candidate.id));
+    const key = canonicalKey({ side: "BUY", ticker: normalizedTicker, date: trade.executionDate, shares: trade.shares, price: trade.entryPrice });
+    const sameValueCandidates = allFacts.filter((fact) => {
+      if (fact.kind !== "BuyExecution" || isRetracted(allFacts, fact.id)) return false;
+      if (existingTradeIds.has(fact.id)) return false;
+      const resolvedTicker = resolveCurrentTicker(allFacts, fact);
+      if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== normalizedTicker) return false;
+      const payload = fact.payload as BuyExecutionPayload;
+      return canonicalKey({ side: "BUY", ticker: normalizedTicker, date: payload.executionDate, shares: payload.shares, price: payload.price }) === key;
+    });
+    const liveMatch =
+      sameValueCandidates.length > 1
+        ? (sameValueCandidates.find((fact) => !timesConflict(trade.executionTime, (fact.payload as BuyExecutionPayload).executionTime)) ?? sameValueCandidates[0])
+        : sameValueCandidates[0];
+
+    if (!liveMatch) {
+      const fact = createRawTransaction({
+        id: trade.id,
+        kind: "BuyExecution",
+        source: input.source ?? "manual",
+        portfolioId: trade.portfolioId,
+        ticker: normalizedTicker,
+        payload: {
+          ticker: normalizedTicker,
+          shares: trade.shares,
+          price: trade.entryPrice,
+          fees: trade.fees,
+          taxes: trade.taxes,
+          executionDate: trade.executionDate,
+          executionTime: trade.executionTime,
+          companyName: trade.companyName,
+          transactionNumber: trade.transactionNumber,
+          notes: trade.notes,
+          strategyTags: trade.strategyTags.length > 0 ? trade.strategyTags : undefined,
+          sector: input.sector,
+        },
+      });
+      factsToAppend.push(fact);
+      allFacts.push({ ...fact, seq: 0 });
+      factSeqByTradeId.set(trade.id, undefined);
+    } else {
+      factSeqByTradeId.set(trade.id, liveMatch.seq);
+      if (resolveCurrentPortfolioId(allFacts, liveMatch) === undefined) {
+        const assignment = createRawTransaction({
+          kind: "PortfolioAssignment",
+          source: "manual",
+          payload: { targetId: liveMatch.id, portfolioId: trade.portfolioId },
+        });
+        factsToAppend.push(assignment);
+        allFacts.push({ ...assignment, seq: 0 });
+      }
+    }
+    results.push({ trade });
+  }
+
+  if (repos.trades.saveMany) await repos.trades.saveMany(tradesToWrite);
+  else for (const trade of tradesToWrite) await repos.trades.save(trade);
+
+  for (const portfolio of portfolios.values()) await repos.portfolios.save(portfolio!);
+
+  if (repos.timeline.saveMany) await repos.timeline.saveMany(timelineToWrite);
+  else for (const event of timelineToWrite) await repos.timeline.save(event);
+
+  if (rawRepos && factsToAppend.length > 0) {
+    const appended = rawRepos.rawTransactions.appendMany
+      ? await rawRepos.rawTransactions.appendMany(factsToAppend)
+      : await Promise.all(factsToAppend.map((fact) => rawRepos.rawTransactions.append(fact)));
+    for (const fact of appended) {
+      if (fact.kind === "BuyExecution") factSeqByTradeId.set(fact.id, fact.seq);
+      diagnostics?.recordWrite({
+        writer: "TradeService.ts",
+        function: "recordBuyBatch",
+        file: "src/application/services/TradeService.ts",
+        table: "rawTransactions",
+        objectId: fact.id,
+        valueSource: "reference",
+        factSeqCursor: fact.seq,
+        reason: `Wrote a ${fact.kind} fact while confirming an import batch`,
+        portfolioId: fact.portfolioId,
+        ticker: fact.ticker,
+      });
+    }
+  }
+
+  for (const result of results) {
+    const factSeqCursor = factSeqByTradeId.get(result.trade.id);
+    diagnostics?.recordWrite({
+      writer: "TradeService.ts",
+      function: "recordBuyBatch",
+      file: "src/application/services/TradeService.ts",
+      table: "trades",
+      objectId: result.trade.id,
+      valueSource: factSeqCursor === undefined ? "reference" : "replayCursor",
+      factSeqCursor,
+      reason: "Recorded a Buy lot from an import batch",
+      portfolioId: result.trade.portfolioId,
+      ticker: result.trade.ticker,
+    });
+  }
+  return results;
 }
 
 /**

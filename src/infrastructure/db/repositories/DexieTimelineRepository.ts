@@ -17,6 +17,10 @@ export class DexieTimelineRepository implements TimelineRepository {
     await this.db.timelineEvents.put(event);
   }
 
+  async saveMany(events: TimelineEvent[]): Promise<void> {
+    if (events.length > 0) await this.db.timelineEvents.bulkPut(events);
+  }
+
   async delete(id: string): Promise<void> {
     await this.db.timelineEvents.delete(id);
   }

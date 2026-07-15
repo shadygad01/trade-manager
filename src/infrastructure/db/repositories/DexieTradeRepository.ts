@@ -25,6 +25,10 @@ export class DexieTradeRepository implements TradeRepository {
     await this.db.trades.put(trade);
   }
 
+  async saveMany(trades: Trade[]): Promise<void> {
+    if (trades.length > 0) await this.db.trades.bulkPut(trades);
+  }
+
   /** Targeted update so recomputing derived state never re-serializes attachments/notes. */
   async saveRemainingShares(tradeId: string, remainingShares: number): Promise<void> {
     await this.db.trades.update(tradeId, { remainingShares });
