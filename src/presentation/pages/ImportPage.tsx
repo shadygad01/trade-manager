@@ -7,7 +7,7 @@ import { recordBuy, recordSell, deleteTrade, renameTickerEverywhere } from "@app
 import { recordDividend } from "@application/services/PortfolioService";
 import { recordImportedRawTransactions, candidateSource } from "@application/services/importRecording";
 import { createPendingExecutionRecord } from "@application/services/pendingExecutions";
-import { assignPortfolio, assignPortfolioToFact, retractRawTransaction, resolveCurrentPortfolioId } from "@application/services/commitEngine";
+import { assignPortfolio, assignPortfolioToFact, commitTicker, retractRawTransaction, resolveCurrentPortfolioId } from "@application/services/commitEngine";
 import {
   findDuplicateBuyMatch,
   findDuplicateSellMatch,
@@ -853,7 +853,7 @@ export function ImportPage() {
     setRowErrors((prev) => ({ ...prev, [key]: e instanceof Error ? e.message : "Something went wrong." }));
   }
 
-  async function addBuyCandidate(entry: CandidateEntry, ticker: string) {
+  async function addBuyCandidate(entry: CandidateEntry, ticker: string, deferCommit = false) {
     try {
       const portfolioId = portfolioForTicker(ticker);
 
@@ -898,6 +898,7 @@ export function ImportPage() {
           executionTime: entry.candidate.time ?? "00:00",
           notes: "Imported from screenshot/PDF",
           transactionNumber: entry.candidate.transactionNumber,
+          deferCommit,
         },
         diagnostics,
       );
@@ -1156,7 +1157,7 @@ export function ImportPage() {
           importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, entry.key])] }));
           continue;
         }
-        await addBuyCandidate(entry, ticker);
+        await addBuyCandidate(entry, ticker, true);
       } finally {
         inFlightKeys.delete(entry.key);
       }
@@ -1232,7 +1233,11 @@ export function ImportPage() {
     // verifications missing their portfolio assignment), never a reason to
     // fail the Buy commit that already succeeded.
     try {
-      await assignPortfolio(repos, ticker, portfolioId, diagnostics);
+      await assignPortfolio(repos, ticker, portfolioId, diagnostics, { deferCommit: true });
+      // All Buy/assignment facts above were appended without triggering the
+      // expensive full ticker projection. Rebuild the materialized ledger
+      // exactly once after the complete Confirm batch is durable.
+      await commitTicker(repos, portfolioId, ticker, diagnostics);
     } catch (err) {
       console.error("assignPortfolio failed (shadow write, non-fatal):", err);
     }

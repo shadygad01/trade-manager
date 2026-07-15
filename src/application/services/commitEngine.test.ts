@@ -161,6 +161,21 @@ describe("commitEngine", () => {
       expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
     });
 
+    it("supports deferred commit for a batch writer, so the caller can rebuild once after all facts are durable", async () => {
+      const payload: BuyExecutionPayload = { ticker: "COMI", shares: 100, price: 45.5, executionDate: "2026-02-01" };
+      await appendAndMaybeCommit(
+        repos,
+        createRawTransaction({ kind: "BuyExecution", source: "invoice", portfolioId: PORTFOLIO, ticker: "COMI", payload }),
+        undefined,
+        undefined,
+        { deferCommit: true },
+      );
+
+      expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+      await commitTicker(repos, PORTFOLIO, "COMI");
+      expect((await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).map((event) => event.type)).toEqual(["LotOpened"]);
+    });
+
     it("appending the transaction that completes a closed position triggers a commit automatically, with no explicit commitTicker call", async () => {
       // A broker "My Position" capture of 0 units is the corroboration here
       // (see importVerification.ts's closed-position fix) — chosen instead

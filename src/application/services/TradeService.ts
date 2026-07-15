@@ -64,6 +64,8 @@ export interface RecordBuyInput {
   transactionNumber?: string;
   /** Evidence source when restoring a buy from a parsed broker document. Omitted for a genuinely manual entry. */
   source?: RawTransactionSource;
+  /** Import-only performance hint: append/assign the fact now and let the caller commit the ticker once after the batch. */
+  deferCommit?: boolean;
 }
 
 export interface RecordBuyResult {
@@ -157,11 +159,12 @@ async function ensureBuyFact(
       repos,
       createRawTransaction({ id: trade.id, kind: "BuyExecution", source: input.source ?? "manual", portfolioId: trade.portfolioId, ticker, payload }),
       diagnostics,
-      { writer: "TradeService.ts", function: "ensureBuyFact", file: "src/application/services/TradeService.ts", reason: "Wrote the BuyExecution fact backing a manually-recorded Buy" }
+      { writer: "TradeService.ts", function: "ensureBuyFact", file: "src/application/services/TradeService.ts", reason: "Wrote the BuyExecution fact backing a manually-recorded Buy" },
+      input.deferCommit ? { deferCommit: true } : undefined,
     );
     return appended.seq;
   } else {
-    await assignPortfolioToFact(repos, liveMatch.id, trade.portfolioId, diagnostics);
+    await assignPortfolioToFact(repos, liveMatch.id, trade.portfolioId, diagnostics, input.deferCommit ? { deferCommit: true } : undefined);
     return liveMatch.seq;
   }
 }
