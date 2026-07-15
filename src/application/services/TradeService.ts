@@ -1,4 +1,3 @@
-
 import { createTrade, isOpen, type Trade } from "@domain/entities/Trade";
 import { createTradeAllocation, realizedPnlMicros, type TradeAllocation } from "@domain/entities/TradeAllocation";
 import { createTimelineEvent } from "@domain/entities/TimelineEvent";
@@ -51,7 +50,7 @@ export interface RecordBuyInput {
   portfolioId: string;
   ticker: string;
   companyName?: string;
-  /** Explicit sector override. When omitted, falls back to the known-ticker sector lookup â€” never fabricated for an unmapped ticker. */
+  /** Explicit sector override. When omitted, falls back to the known-ticker sector lookup — never fabricated for an unmapped ticker. */
   sector?: string;
   shares: number;
   entryPrice: number;
@@ -61,7 +60,7 @@ export interface RecordBuyInput {
   executionTime: string;
   notes?: string;
   strategyTags?: string[];
-  /** Broker-assigned unique execution ID (e.g. Thndr's Invoice "Transaction No.") when the source document carried one â€” see Trade.transactionNumber. */
+  /** Broker-assigned unique execution ID (e.g. Thndr's Invoice "Transaction No.") when the source document carried one — see Trade.transactionNumber. */
   transactionNumber?: string;
   /** Evidence source when restoring a buy from a parsed broker document. Omitted for a genuinely manual entry. */
   source?: RawTransactionSource;
@@ -73,15 +72,15 @@ export interface RecordBuyResult {
 
 /**
  * Phase 9.8 fact writer: every recorded Buy now also lands in the immutable
- * RawTransaction log (when the repos bundle carries it â€” the app's real
+ * RawTransaction log (when the repos bundle carries it — the app's real
  * singleton always does), so a manual Record Buy is no longer invisible to
  * the canonical rebuild. Guarded by canonical-key lookup: an Import-flow Buy
  * whose fact was already written at extraction time (importRecording.ts)
- * appends nothing â€” it only gets its portfolio assignment confirmed. Same
+ * appends nothing — it only gets its portfolio assignment confirmed. Same
  * non-fatal isolation as every dual-write in this migration.
  *
  * The lookup only ever adopts a fact no OTHER existing Trade already owns
- * (`otherTradeIds`) â€” two genuinely distinct trades (e.g. two same-price
+ * (`otherTradeIds`) — two genuinely distinct trades (e.g. two same-price
  * same-day buys) can share an identical canonical key, and blindly adopting
  * whichever fact matches by value would silently leave the second trade
  * with no fact of its own, orphaning it from the next commit's projection
@@ -89,13 +88,13 @@ export interface RecordBuyResult {
  * exact value never adopts its fact").
  *
  * Returns the seq of the fact this trade now resolves to (freshly written or
- * adopted) â€” reused by `recordBuy` as its Writer Trace `factSeqCursor`
- * (docs/DIAGNOSTICS_CENTER_SPEC.md Part 2.3 Â§A) without an extra
+ * adopted) — reused by `recordBuy` as its Writer Trace `factSeqCursor`
+ * (docs/DIAGNOSTICS_CENTER_SPEC.md Part 2.3 §A) without an extra
  * `rawTransactions` read: an earlier draft of this instrumentation added a
  * fresh `getAll()` query for exactly this purpose, and that extra await
  * point measurably shifted async interleaving in this codebase's own
  * documented race-condition regression tests (ImportPage's ORWE/ABUK/ADPC
- * suites) â€” a stark, concrete reminder that Part 0's "never modifies
+ * suites) — a stark, concrete reminder that Part 0's "never modifies
  * business logic" has to include timing, not just data.
  */
 async function ensureBuyFact(
@@ -114,7 +113,7 @@ async function ensureBuyFact(
     if (t.kind !== "BuyExecution") return false;
     if (isRetracted(all, t.id)) return false;
     // Resolved through any live Correction (see rawTransactionFolds.ts's
-    // resolveCurrentTicker doc comment) â€” reading t.ticker directly here
+    // resolveCurrentTicker doc comment) — reading t.ticker directly here
     // caused the same "stops recognizing a renamed fact" bug already fixed
     // in isTickerFullyOfficialBrokerExcelSourced and findUnclaimedSellExecutionFact.
     const resolvedTicker = resolveCurrentTicker(all, t);
@@ -123,14 +122,14 @@ async function ensureBuyFact(
     const p = t.payload as BuyExecutionPayload;
     return canonicalKey({ side: "BUY", ticker, date: p.executionDate, shares: p.shares, price: p.price }) === key;
   });
-  // canonicalKey is time-blind (ticker/side/date/shares/price only) â€” two
+  // canonicalKey is time-blind (ticker/side/date/shares/price only) — two
   // genuinely distinct real Buys sharing every other field (e.g. two same-
   // price limit fills minutes apart) both land in sameValueCandidates. Prefer
   // whichever one's own executionTime actually agrees with this trade's, so
   // this trade adopts ITS OWN real fact rather than an arbitrary sibling's
   // (a real, reproduced bug: cross-linking two such facts spawned a phantom
   // extra Trade and left the other's row wrongly flagged "Duplicate" in
-  // Import â€” see this module's own regression test). Falls back to the
+  // Import — see this module's own regression test). Falls back to the
   // first candidate, unchanged from the prior behavior, when time can't
   // disambiguate (only one candidate, or none has a matching time).
   const liveMatch =
@@ -151,7 +150,7 @@ async function ensureBuyFact(
       transactionNumber: trade.transactionNumber,
       notes: trade.notes,
       strategyTags: trade.strategyTags.length > 0 ? trade.strategyTags : undefined,
-      // Only a genuine user override is a fact â€” a derivable sector is recomputed, never stored.
+      // Only a genuine user override is a fact — a derivable sector is recomputed, never stored.
       sector: input.sector,
     };
     const appended = await appendAndMaybeCommit(
@@ -246,11 +245,11 @@ export async function recordBuy(
 }
 
 /**
- * Undoes a mistaken buy â€” the real fix for ground-truth reconciliation's
+ * Undoes a mistaken buy — the real fix for ground-truth reconciliation's
  * (see reconciliation.ts) `quantityMismatch`, which usually means a
  * duplicate import. An earlier "Accept as current" action only re-labeled
  * the wrong computed total as verified rather than fixing anything, and was
- * removed for exactly that reason â€” this instead deletes the actual
+ * removed for exactly that reason — this instead deletes the actual
  * offending trade so the ledger becomes correct on its own, symmetrically
  * undoing exactly what `recordBuy` did: refunding the cash it debited and
  * removing the `Buy` timeline event and any journal entry that narrated it,
@@ -260,7 +259,7 @@ export async function recordBuy(
  * Guarded to only ever delete a trade with zero shares closed against it
  * (`remainingShares === shares`): once even one allocation exists, deleting
  * the trade out from under it would orphan that `TradeAllocation` and
- * silently corrupt realized P/L â€” this is refused outright rather than
+ * silently corrupt realized P/L — this is refused outright rather than
  * attempted, matching this app's ledger-never-lies philosophy (ADR-002).
  */
 export async function deleteTrade(repos: AppRepositories & Partial<CommitEngineRepos>, tradeId: string): Promise<void> {
@@ -270,7 +269,7 @@ export async function deleteTrade(repos: AppRepositories & Partial<CommitEngineR
   }
   if (trade.remainingShares !== trade.shares) {
     throw new Error(
-      "This trade has shares closed against it (a sell allocation exists) â€” it can't be deleted without corrupting that history."
+      "This trade has shares closed against it (a sell allocation exists) — it can't be deleted without corrupting that history."
     );
   }
 
@@ -296,11 +295,11 @@ export async function deleteTrade(repos: AppRepositories & Partial<CommitEngineR
   await repos.trades.delete(tradeId);
 
   // Migration dual-write: retract the matching RawTransaction (if this repos
-  // bundle is wired up for the new architecture â€” see presentation/lib/data.ts)
+  // bundle is wired up for the new architecture — see presentation/lib/data.ts)
   // so a deleted trade can't resurrect itself the next time this ticker's
   // portfolio assignment/commit runs. Best-effort and isolated for the same
   // reason as every other shadow write in this migration (see ImportPage.tsx's
-  // recordImportedRawTransactions/assignPortfolio calls) â€” a failure here must
+  // recordImportedRawTransactions/assignPortfolio calls) — a failure here must
   // never turn a successful, already-applied legacy delete into a thrown error.
   if (repos.rawTransactions && repos.committedLedger) {
     const commitRepos: CommitEngineRepos = { rawTransactions: repos.rawTransactions, committedLedger: repos.committedLedger };
@@ -312,12 +311,12 @@ export async function deleteTrade(repos: AppRepositories & Partial<CommitEngineR
 
 /**
  * Finds every live BuyExecution RawTransaction that corresponds to a legacy
- * Trade â€” same correlation key (ticker/side/date/shares/price)
+ * Trade — same correlation key (ticker/side/date/shares/price)
  * backfillRawTransactions and systemValidation already use to line up old
- * and new records â€” and retracts them ALL. Retracting only the first match
+ * and new records — and retracts them ALL. Retracting only the first match
  * used to be enough (nothing read the facts); with Phase 9.8's legacy
  * projection, any lingering live same-key fact would re-CREATE the deleted
- * trade as a freshly projected lot on the ticker's next commit â€” the exact
+ * trade as a freshly projected lot on the ticker's next commit — the exact
  * resurrection this retraction exists to prevent.
  *
  * canonicalKey alone is deliberately time-blind, so this ALSO requires the
@@ -325,7 +324,7 @@ export async function deleteTrade(repos: AppRepositories & Partial<CommitEngineR
  * deleted's (the same discriminator ensureBuyFact's own sameValueCandidates
  * tie-break already uses). Without it, deleting ONE of two legitimate same-
  * value/different-time trades (e.g. two 49-share ABUK buys two minutes
- * apart) would retract BOTH of their real facts â€” permanently destroying the
+ * apart) would retract BOTH of their real facts — permanently destroying the
  * SURVIVING sibling trade's own official-broker-excel provenance even though
  * that trade was never touched, silently degrading it to whatever
  * ensureLegacyFactsExist's gap-backfill reconstructs next (source
@@ -343,7 +342,7 @@ async function retractMatchingRawTransaction(repos: CommitEngineRepos, trade: Tr
     return canonicalKey({ side: "BUY", ticker, date: payload.executionDate, shares: payload.shares, price: payload.price }) === key;
   });
   // All but the last are appended without the commit trigger, so the ticker
-  // recommits ONCE against the fully retracted set â€” triggering per
+  // recommits ONCE against the fully retracted set — triggering per
   // retraction would let a mid-sequence commit see a half-retracted set and
   // transiently re-project a lot that's about to be voided.
   for (const match of matches.slice(0, -1)) {
@@ -356,7 +355,7 @@ async function retractMatchingRawTransaction(repos: CommitEngineRepos, trade: Tr
 }
 
 /**
- * Corrects a mistaken execution date on a Buy lot â€” the date twin of
+ * Corrects a mistaken execution date on a Buy lot — the date twin of
  * renameTickerEverywhere: a trade's fields are otherwise immutable, but the
  * user is the ledger's source of truth, and a wrongly-OCR'd date (or an
  * opening-balance placeholder once the real invoice turns up) misplaces the
@@ -364,7 +363,7 @@ async function retractMatchingRawTransaction(repos: CommitEngineRepos, trade: Tr
  * date: shares/price/fees/allocations are untouched, and the matching Buy
  * timeline event moves with it so the two never disagree. Refused when the
  * new date would land after a sell that already closed shares from this lot
- * â€” a lot can't be bought after part of it was sold.
+ * — a lot can't be bought after part of it was sold.
  */
 export async function correctTradeExecutionDate(repos: AppRepositories, tradeId: string, newDate: string): Promise<void> {
   assertWithinTrackingRange(newDate);
@@ -382,7 +381,7 @@ export async function correctTradeExecutionDate(repos: AppRepositories, tradeId:
   const earliestSell = allocations.map((a) => a.executionDate).sort()[0];
   if (earliestSell !== undefined && newDate > earliestSell) {
     throw new Error(
-      `This lot has a sell dated ${earliestSell} â€” its buy date can't be after shares from it were already sold.`
+      `This lot has a sell dated ${earliestSell} — its buy date can't be after shares from it were already sold.`
     );
   }
 
@@ -407,14 +406,187 @@ export interface RenameTickerResult {
  * Import page's pending pool: OCR ticker resolution can still be wrong (see
  * ThndrParser's confidence tiers), and now that Import auto-commits most
  * rows instead of waiting for a manual click, the pending-pool-only rename
- * is no longer the only place a correction is needed â€” a wrong ticker can
+ * is no longer the only place a correction is needed — a wrong ticker can
  * just as easily already be sitting in the real ledger by the time it's
  * noticed. Touches every table that carries a ticker field: `Trade`
- * (ticker, companyName, and sector â€” re-derived from the corrected ticker,
+ * (ticker, companyName, and sector — re-derived from the corrected ticker,
  * or cleared rather than left stale if the new ticker doesn't resolve),
  * `TradeAllocation`, `TimelineEvent`, and `PositionVerification`. Never
  * touches anything else about these rows (shares/price/dates/notes are
- * un…1670 tokens truncated…es.saveRemainingShares(trade.id, remainingShares);
+ * untouched) — this is purely a ticker-identity fix.
+ */
+export async function renameTickerEverywhere(
+  repos: AppRepositories & Partial<CommitEngineRepos>,
+  oldTickerRaw: string,
+  newTickerRaw: string
+): Promise<RenameTickerResult> {
+  const oldTicker = normalizeTicker(oldTickerRaw);
+  const newTicker = normalizeTicker(newTickerRaw);
+  const empty: RenameTickerResult = { tradesUpdated: 0, allocationsUpdated: 0, timelineEventsUpdated: 0, verificationsUpdated: 0 };
+  if (!newTicker || newTicker === oldTicker) {
+    return empty;
+  }
+
+  const [trades, allocations, timelineEvents, verifications] = await Promise.all([
+    repos.trades.getAll(),
+    repos.allocations.getAll(),
+    repos.timeline.getAll(),
+    repos.verifications.getAll(),
+  ]);
+
+  const matchingTrades = trades.filter((t) => normalizeTicker(t.ticker) === oldTicker);
+  for (const t of matchingTrades) {
+    await repos.trades.save({
+      ...t,
+      ticker: newTicker,
+      companyName: companyNameForTicker(newTicker) ?? t.companyName,
+      sector: sectorForTicker(newTicker),
+    });
+  }
+
+  const matchingAllocations = allocations.filter((a) => normalizeTicker(a.ticker) === oldTicker);
+  for (const a of matchingAllocations) {
+    await repos.allocations.save({ ...a, ticker: newTicker });
+  }
+
+  const matchingEvents = timelineEvents.filter((e) => e.ticker !== undefined && normalizeTicker(e.ticker) === oldTicker);
+  for (const e of matchingEvents) {
+    await repos.timeline.save({ ...e, ticker: newTicker });
+  }
+
+  const matchingVerifications = verifications.filter((v) => normalizeTicker(v.ticker) === oldTicker);
+  for (const v of matchingVerifications) {
+    await repos.verifications.save({
+      ...v,
+      ticker: newTicker,
+      companyName: companyNameForTicker(newTicker) ?? v.companyName,
+    });
+  }
+
+  // Migration dual-write: also corrects every still-live RawTransaction
+  // currently resolving to oldTicker (if this repos bundle is wired up for
+  // the new architecture — see presentation/lib/data.ts). Without this, a
+  // renamed ticker's raw transactions stay permanently orphaned under the
+  // old ticker — immutable, and never matched by assignPortfolio again —
+  // since RawTransaction has no update method to correct them in place.
+  // Best-effort and isolated for the same reason as every other shadow
+  // write in this migration.
+  if (repos.rawTransactions && repos.committedLedger) {
+    const commitRepos: CommitEngineRepos = { rawTransactions: repos.rawTransactions, committedLedger: repos.committedLedger };
+    await renameRawTransactionsTicker(commitRepos, oldTicker, newTicker).catch((err) => {
+      console.error("Raw transaction ticker correction failed (shadow write, non-fatal):", err);
+    });
+  }
+
+  return {
+    tradesUpdated: matchingTrades.length,
+    allocationsUpdated: matchingAllocations.length,
+    timelineEventsUpdated: matchingEvents.length,
+    verificationsUpdated: matchingVerifications.length,
+  };
+}
+
+export interface RecordSellAllocationInput {
+  tradeId: string;
+  shares: number;
+  exitPrice: number;
+  fees?: number;
+  taxes?: number;
+  notes?: string;
+  exitReason?: string;
+}
+
+export interface RecordSellInput {
+  portfolioId: string;
+  ticker: string;
+  sellGroupId?: string;
+  allocations: RecordSellAllocationInput[];
+  executionDate: string;
+  executionTime: string;
+  /** Broker-assigned unique execution ID for the sell order this allocates (e.g. Thndr's Invoice "Transaction No.") — applied to every resulting allocation row, same as sellGroupId. See TradeAllocation.transactionNumber. */
+  transactionNumber?: string;
+  /**
+   * Which document type this sell was actually read from (see
+   * ParsedTradeCandidate.source) — threaded through from the parsed
+   * candidate so the SellExecution fact ensureSellFacts writes reflects the
+   * real originating document instead of defaulting to "manual" for every
+   * sell, regardless of source. Undefined only for a genuinely
+   * user-typed sell with no document behind it (e.g. the Lot Manager's own
+   * manual entry), where "manual" is the correct, real answer.
+   */
+  source?: RawTransactionSource;
+}
+
+export interface RecordSellResult {
+  realizedPnl: Money;
+  allocations: TradeAllocation[];
+}
+
+export async function recordSell(
+  repos: AppRepositories & Partial<CommitEngineRepos>,
+  input: RecordSellInput,
+  diagnostics?: DiagnosticsRecorder
+): Promise<RecordSellResult> {
+  if (input.allocations.length === 0) {
+    throw new Error("recordSell requires at least one allocation");
+  }
+  assertWithinTrackingRange(input.executionDate);
+
+  const portfolio = await repos.portfolios.getById(input.portfolioId);
+  if (!portfolio) {
+    throw new Error(`Portfolio not found: ${input.portfolioId}`);
+  }
+
+  const ticker = normalizeTicker(input.ticker);
+  const sellGroupId = input.sellGroupId ?? generateId();
+
+  const createdAllocations: TradeAllocation[] = [];
+  const closedTrades: Trade[] = [];
+  const relatedTradeIds: string[] = [];
+  let netProceeds = Money.zero();
+  let realizedMicros = 0;
+  let fullyClosedCount = 0;
+
+  for (const line of input.allocations) {
+    const trade = await repos.trades.getById(line.tradeId);
+    if (!trade) {
+      throw new Error(`Trade not found: ${line.tradeId}`);
+    }
+    if (trade.portfolioId !== input.portfolioId) {
+      throw new Error(`Trade ${trade.id} does not belong to portfolio ${input.portfolioId}`);
+    }
+    if (normalizeTicker(trade.ticker) !== ticker) {
+      throw new Error(`Trade ${trade.id} ticker mismatch: expected ${ticker}, got ${trade.ticker}`);
+    }
+    if (line.shares > trade.remainingShares) {
+      throw new Error(
+        `Cannot close ${line.shares} shares of trade ${trade.id}: only ${trade.remainingShares} remain`
+      );
+    }
+
+    const allocation: TradeAllocation = createTradeAllocation({
+      id: generateId(),
+      sellGroupId,
+      portfolioId: input.portfolioId,
+      tradeId: trade.id,
+      ticker,
+      sharesClosed: line.shares,
+      exitPrice: line.exitPrice,
+      fees: line.fees,
+      taxes: line.taxes,
+      executionDate: input.executionDate,
+      executionTime: input.executionTime,
+      notes: line.notes,
+      exitReason: line.exitReason,
+      transactionNumber: input.transactionNumber,
+    });
+    await repos.allocations.save(allocation);
+    createdAllocations.push(allocation);
+    closedTrades.push(trade);
+    relatedTradeIds.push(trade.id);
+
+    const remainingShares = trade.remainingShares - line.shares;
+    await repos.trades.saveRemainingShares(trade.id, remainingShares);
     if (remainingShares === 0) {
       fullyClosedCount += 1;
     }
@@ -503,12 +675,12 @@ export interface RenameTickerResult {
  *
  * The SellExecution fact is ADOPTED, not always freshly written: this ticker
  * may already have a live SellExecution fact for this exact sell (ticker/
- * date/shares/price) sitting in the log â€” the one `recordImportedRawTransactions`
+ * date/shares/price) sitting in the log — the one `recordImportedRawTransactions`
  * wrote at extraction time, correctly sourced from the real originating
  * document (e.g. "official-broker-excel"). `findUnclaimedSellExecutionFact`
  * (rawTransactionFolds.ts) finds it, and this function reuses its id instead
  * of minting a new fact that would otherwise have to guess or hardcode a
- * source â€” this is the single, universal fix for a whole class of bug: a
+ * source — this is the single, universal fix for a whole class of bug: a
  * ticker whose ENTIRE history should be traceable to one document silently
  * lost that provenance the moment ANY sell got allocated, regardless of
  * which specific ticker or how the ticker's Buy side was recorded (see
@@ -526,7 +698,7 @@ export interface RenameTickerResult {
  * "claimed" by a previous sell, so two genuinely different sells sharing the
  * same value (same-price same-day orders are routine) silently merged onto
  * the SAME fact, orphaning the second sell's allocations. `sellExecutionId`
- * in the SellAllocationDecision below is what makes a fact "claimed" â€”
+ * in the SellAllocationDecision below is what makes a fact "claimed" —
  * findUnclaimedSellExecutionFact excludes any fact a live decision already
  * points at, so a second same-value sell correctly falls through to minting
  * its own fact instead of reusing (and silently merging into) the first
@@ -534,14 +706,14 @@ export interface RenameTickerResult {
  * another's exact value never merges with it").
  *
  * `lotRef` still references the real RawTransaction ids (via `resolveLotRef`
- * for each closed lot) instead of a recomputed canonical key â€” real ids are
+ * for each closed lot) instead of a recomputed canonical key — real ids are
  * always unique, so two coincidentally-identical lots can never be
  * conflated by the Allocation Engine, which resolves a reference by real id
  * first (see allocationEngine.indexEventsByReference) and only falls back to
  * the value-keyed identity for decisions written before this fix.
  */
 /**
- * Returns the SellAllocationDecision fact's own seq â€” the last (and
+ * Returns the SellAllocationDecision fact's own seq — the last (and
  * therefore highest-seq) fact this function writes, reused by `recordSell`
  * as its Writer Trace `factSeqCursor` without an extra `rawTransactions`
  * read (same reasoning as `ensureBuyFact`'s own doc comment above).
@@ -615,13 +787,13 @@ async function ensureSellFacts(
 }
 
 export interface MoveTradeResult {
-  /** Every trade actually moved â€” includes the requested trade plus any other lot pulled in because it shares a sellGroupId (a multi-lot sell can't be split across two portfolios). */
+  /** Every trade actually moved — includes the requested trade plus any other lot pulled in because it shares a sellGroupId (a multi-lot sell can't be split across two portfolios). */
   movedTradeIds: string[];
 }
 
 /**
  * Reassigns a trade (and everything economically tied to it) to a different
- * portfolio â€” for fixing a trade assigned to the wrong portfolio at import
+ * portfolio — for fixing a trade assigned to the wrong portfolio at import
  * time, or a change of mind about how holdings should be split. The buy's
  * original cost is refunded to the source portfolio and charged to the
  * target; any of its sells' net proceeds move the same way, so both
@@ -629,7 +801,7 @@ export interface MoveTradeResult {
  * cash history with it.
  *
  * If the trade was sold together with other lots in one multi-trade sell
- * (shared `sellGroupId`), all of those lots move too â€” a single sell action
+ * (shared `sellGroupId`), all of those lots move too — a single sell action
  * can't end up split across two portfolios.
  */
 export async function moveTrade(
@@ -728,7 +900,7 @@ export interface SplitTickerEntry {
 
 /**
  * A ticker held (nonzero remaining shares) in more than one portfolio is
- * usually a mistake, not intent â€” a broker account is one real position
+ * usually a mistake, not intent — a broker account is one real position
  * regardless of which app-side portfolio bucket a given buy landed in, and a
  * position split this way makes any single portfolio's own broker-screenshot
  * reconciliation compare an incomplete subset against the real total. This
@@ -769,12 +941,12 @@ export interface MisnamedTickerEntry {
  * tickerForCompanyNameFallback) means some trades were committed back when
  * that company wasn't yet in KNOWN_EGX_TICKERS, so OCR ticker resolution fell
  * back to filing the whole group under the raw name instead of the real
- * symbol â€” the same split Import's own one-click rename fixes for a still-
+ * symbol — the same split Import's own one-click rename fixes for a still-
  * pending batch (see knownTickers.ts's own doc comment), except these rows
  * are already fully committed and long since cleared from any Import
  * session, so that pending-pool-only fix can never reach them again. This
  * surfaces every such already-recorded ticker globally (not scoped to one
- * portfolio â€” the real symbol may already have its own trades elsewhere)
+ * portfolio — the real symbol may already have its own trades elsewhere)
  * so it can be pointed at renameTickerEverywhere.
  */
 export function findMisnamedTickers(trades: Trade[]): MisnamedTickerEntry[] {
@@ -804,7 +976,7 @@ export interface ConsolidateTickerResult {
  * mistake findTickersSplitAcrossPortfolios detects. Moves every trade for
  * the ticker (via moveTrade, so cash/sell-groups/timeline stay correct) plus
  * any broker-position verification recorded for it under a different
- * portfolio â€” a screenshot showing the real total belongs with wherever
+ * portfolio — a screenshot showing the real total belongs with wherever
  * that total's trades now live, not wherever it happened to be imported.
  */
 export async function consolidateTicker(
@@ -902,4 +1074,3 @@ export async function computePositions(
 
   return positions;
 }
-
