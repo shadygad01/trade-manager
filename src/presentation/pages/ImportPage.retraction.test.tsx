@@ -14,13 +14,13 @@ import { createFakeCommittedLedgerRepository } from "@application/testUtils/fake
  * Phase 9.7, task 5: proves Skip/Dismiss/Discard actions now emit a
  * RawTransaction Retraction (not just a localStorage session flag), and that
  * the canonical rebuild (commitEngine.commitTicker) correctly excludes the
- * retracted row afterward — the two things the audit's "blocker 1" gap
+ * retracted row afterward â€” the two things the audit's "blocker 1" gap
  * report said were still missing after Phase 9.6.
  *
  * Same seam as the sibling autoAssignPortfolio/reconciliation test files:
  * real ImportPage rendered against an in-memory repos mock, pending pool
  * seeded directly into localStorage (bypassing the OCR orchestrator). The
- * exact-duplicate auto-skip effect is the trigger here — it needs no button
+ * exact-duplicate auto-skip effect is the trigger here â€” it needs no button
  * interaction (fires automatically once a pending candidate matches an
  * existing committed trade), and it shares the exact same
  * retractRawTransactionKeys helper every other Skip/Dismiss/Discard site in
@@ -77,7 +77,7 @@ vi.mock("@presentation/lib/data", () => ({
 }));
 
 // The pending candidate's key ("dup-1") matches the RawTransaction id seeded
-// below — exactly what recordImportedRawTransactions now guarantees (Phase
+// below â€” exactly what recordImportedRawTransactions now guarantees (Phase
 // 9.7, task 1) for any row extracted after this change ships.
 localStorage.setItem(
   "portfolio-os:import-session",
@@ -95,6 +95,7 @@ localStorage.setItem(
     dismissedKeys: [],
     addedTradeIds: {},
     addedAllocationIds: {},
+    recordedRawFactKeys: ["dup-1"],
     tickerPortfolio: {},
     uploadSeq: 1,
     filesProcessed: 1,
@@ -121,7 +122,7 @@ describe("Skip/Dismiss/Discard actions emit a RawTransaction Retraction (Phase 9
     state.rawTransactions = [{ ...createRawTransaction({ id: "dup-1", kind: "BuyExecution", source: "statement", ticker: "COMI", payload }), seq: 1 }];
   });
 
-  // One combined test, not two — importSession is a true module-level
+  // One combined test, not two â€” importSession is a true module-level
   // singleton (backed by localStorage, loaded once at import time), so a
   // second `it()` in this file would see the first test's already-mutated
   // skippedKeys and never re-fire the auto-skip effect. Sequencing both
@@ -139,7 +140,7 @@ describe("Skip/Dismiss/Discard actions emit a RawTransaction Retraction (Phase 9
       expect(retractions[0].payload.targetId).toBe("dup-1");
     });
 
-    // The original BuyExecution is untouched (immutable) — only a new
+    // The original BuyExecution is untouched (immutable) â€” only a new
     // Retraction fact was appended, per RawTransaction.ts's own contract.
     const original = state.rawTransactions.find((t) => t.id === "dup-1")!;
     expect(original.kind).toBe("BuyExecution");
@@ -163,13 +164,14 @@ describe("Skip/Dismiss/Discard actions emit a RawTransaction Retraction (Phase 9
     };
 
     // Directly assign the target row (bypassing assignPortfolio's own
-    // ticker-wide semantics — this test only needs the one row) so
+    // ticker-wide semantics â€” this test only needs the one row) so
     // commitTicker has something in scope to evaluate.
     const target = state.rawTransactions.find((t) => t.id === "dup-1")!;
     target.portfolioId = "p1";
 
-    expect(await shouldCommit(commitRepos, "p1", "COMI")).toBe(false); // nothing live left to verify — the only candidate is retracted
+    expect(await shouldCommit(commitRepos, "p1", "COMI")).toBe(false); // nothing live left to verify â€” the only candidate is retracted
     await commitTicker(commitRepos, "p1", "COMI");
     expect(await commitRepos.committedLedger.getLedgerEvents("p1", "COMI")).toEqual([]);
   });
 });
+
