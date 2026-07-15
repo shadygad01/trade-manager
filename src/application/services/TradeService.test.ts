@@ -1,4 +1,3 @@
-
 import { describe, it, expect } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createFakeRepositories, createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
@@ -18,7 +17,7 @@ import { commitTicker, assignPortfolio, resolveCurrentPortfolioId, type CommitEn
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
 import { isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
 
-/** The migration dual-write is opt-in per repos bundle â€” plain createFakeRepositories() output doesn't satisfy it, matching the app's real repos singleton (which always does). */
+/** The migration dual-write is opt-in per repos bundle — plain createFakeRepositories() output doesn't satisfy it, matching the app's real repos singleton (which always does). */
 function withMigrationRepos(repos: ReturnType<typeof createFakeRepositories>): ReturnType<typeof createFakeRepositories> & CommitEngineRepos {
   return { ...repos, rawTransactions: createFakeRawTransactionRepository(), committedLedger: createFakeCommittedLedgerRepository() };
 }
@@ -233,7 +232,7 @@ describe("deleteTrade", () => {
   });
 
   describe("migration dual-write", () => {
-    it("retracts EVERY live matching RawTransaction so a re-commit can't resurrect the deleted trade â€” including the fact recordBuy itself now writes (Phase 9.8)", async () => {
+    it("retracts EVERY live matching RawTransaction so a re-commit can't resurrect the deleted trade — including the fact recordBuy itself now writes (Phase 9.8)", async () => {
       const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
       const { trade } = await recordBuy(repos, {
         portfolioId: "p1",
@@ -244,7 +243,7 @@ describe("deleteTrade", () => {
         executionTime: "10:30",
       });
       // A second, duplicate fact for the same execution (as an earlier
-      // backfill would have written) â€” deleteTrade must retract BOTH, or the
+      // backfill would have written) — deleteTrade must retract BOTH, or the
       // survivor would re-project the deleted trade on the next commit.
       const payload: BuyExecutionPayload = { ticker: "COMI", shares: 10, price: 50, executionDate: "2026-01-05", executionTime: "10:30" };
       const raw = await repos.rawTransactions.append(
@@ -268,7 +267,7 @@ describe("deleteTrade", () => {
     it("is a harmless no-op when no matching RawTransaction exists (a trade recorded before any fact writer existed)", async () => {
       // The trade is created against a repos bundle WITHOUT the raw log (so
       // recordBuy's own Phase 9.8 fact writer stays dormant), then deleted
-      // against one WITH it â€” the exact shape of a trade recorded before the
+      // against one WITH it — the exact shape of a trade recorded before the
       // dual-write shipped.
       const legacyOnly = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
       const { trade } = await recordBuy(legacyOnly, {
@@ -301,7 +300,7 @@ describe("deleteTrade", () => {
     });
 
     it("real bug shape (ABUK): deleting ONE of two same-value/different-time twin trades never retracts the SURVIVING sibling's own real fact", async () => {
-      // canonicalKey (ticker/side/date/shares/price) is time-blind â€” before
+      // canonicalKey (ticker/side/date/shares/price) is time-blind — before
       // the fix, retractMatchingRawTransaction's filter matched BOTH twin
       // facts (10:32AM and 10:34AM) purely on shared value and retracted
       // them BOTH, even though only the 10:32 trade was being deleted. That
@@ -493,12 +492,363 @@ describe("renameTickerEverywhere", () => {
     expect(updated?.sector).toBeUndefined();
   });
 
-  it("is a …4026 tokens truncated…ker-excel");
+  it("is a no-op when the new ticker is the same as the old one", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const result = await renameTickerEverywhere(repos, "COMI", "comi");
+    expect(result).toEqual({ tradesUpdated: 0, allocationsUpdated: 0, timelineEventsUpdated: 0, verificationsUpdated: 0 });
+  });
+
+  describe("migration dual-write", () => {
+    it("corrects the matching RawTransaction's ticker too, so it doesn't stay orphaned under the old, now-corrected-away ticker", async () => {
+      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+      await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "ZZZZ",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2026-01-05",
+        executionTime: "10:30",
+      });
+      // Mirrors what an earlier import/backfill would already have written
+      // (source csv, per commitEngine.test.ts's own convention for an
+      // unassigned raw transaction).
+      const payload: BuyExecutionPayload = { ticker: "ZZZZ", shares: 10, price: 50, executionDate: "2026-01-05", executionTime: "10:30" };
+      await repos.rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "csv", ticker: "ZZZZ", payload }));
+
+      await renameTickerEverywhere(repos, "ZZZZ", "COMI");
+
+      const all = await repos.rawTransactions.getAll();
+      // Two live ZZZZ facts exist by the time the rename runs — the one
+      // recordBuy itself now writes (Phase 9.8) plus the csv mirror above —
+      // and the rename must correct BOTH, or one would stay orphaned.
+      expect(all.filter((t) => t.kind === "Correction")).toHaveLength(2);
+      expect(all.filter((t) => t.kind === "BuyExecution")[0].ticker).toBe("ZZZZ"); // immutable — the original field never changes
+
+      // The old ticker no longer resolves this row at all — only the new one does.
+      await assignPortfolio(repos, "ZZZZ", "p1");
+      expect((await repos.rawTransactions.getAll()).filter((t) => t.kind === "PortfolioAssignment")).toHaveLength(0);
+      await assignPortfolio(repos, "COMI", "p1");
+      expect((await repos.rawTransactions.getAll()).filter((t) => t.kind === "PortfolioAssignment")).toHaveLength(1);
+    });
+
+    it("plain AppRepositories (no rawTransactions/committedLedger) still renames normally", async () => {
+      const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+      await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "ZZZZ",
+        shares: 10,
+        entryPrice: 50,
+        executionDate: "2026-01-05",
+        executionTime: "10:30",
+      });
+
+      const result = await renameTickerEverywhere(repos, "ZZZZ", "COMI");
+      expect(result.tradesUpdated).toBe(1);
+    });
+  });
+});
+
+describe("recordSell", () => {
+  it("fully closes a single trade and emits a Sell event with realized P/L", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      fees: 20,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    const { realizedPnl, allocations } = await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [{ tradeId: trade.id, shares: 100, exitPrice: 60, fees: 10 }],
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+
+    expect(allocations).toHaveLength(1);
+    expect(realizedPnl.toNumber()).toBeCloseTo(60 * 100 - 10 - (50 * 100 + 20));
+
+    const updatedTrade = await repos.trades.getById(trade.id);
+    expect(updatedTrade?.remainingShares).toBe(0);
+
+    const events = await repos.timeline.getByPortfolio("p1");
+    const sellEvent = events.find((e) => e.type === "Sell" || e.type === "PartialSell");
+    expect(sellEvent?.type).toBe("Sell");
+
+    const portfolio = await repos.portfolios.getById("p1");
+    expect(portfolio?.cash).toBeCloseTo(10_000 - (100 * 50 + 20) + (100 * 60 - 10));
+  });
+
+  it("persists a broker-assigned transaction number onto every allocation row from one sell order", async () => {
+    const repos = createFakeRepositories({ portfolios: [seedPortfolio(10_000)] });
+    const buy1 = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 30,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+    const buy2 = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 15,
+      entryPrice: 48,
+      executionDate: "2026-01-06",
+      executionTime: "10:30",
+    });
+
+    const { allocations } = await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [
+        { tradeId: buy1.trade.id, shares: 30, exitPrice: 60 },
+        { tradeId: buy2.trade.id, shares: 15, exitPrice: 60 },
+      ],
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+      transactionNumber: "N000000000099",
+    });
+
+    expect(allocations.every((a) => a.transactionNumber === "N000000000099")).toBe(true);
+  });
+
+  // CLHO regression: verifying and allocating a sell recorded from the
+  // official broker Excel export used to always write its SellExecution
+  // RawTransaction fact with source "manual", hardcoded — regardless of the
+  // real originating document — which silently broke
+  // isTickerFullyOfficialBrokerExcelSourced's "every live fact for this
+  // ticker is Excel-sourced" check the moment ANY sell was allocated,
+  // reintroducing "Closed — needs corroborating evidence" for a ticker that
+  // should never need it. Root-caused to ensureSellFacts (TradeService.ts)
+  // rather than any UI code.
+  it("stamps the SellExecution fact with the caller's real source instead of hardcoding 'manual'", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      shares: 3000,
+      entryPrice: 0.38,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      allocations: [{ tradeId: trade.id, shares: 3000, exitPrice: 0.5 }],
+      executionDate: "2026-01-10",
+      executionTime: "10:00",
+      source: "official-broker-excel",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFact = facts.find((f) => f.kind === "SellExecution");
+    expect(sellFact?.source).toBe("official-broker-excel");
+  });
+
+  it("still defaults the SellExecution fact's source to 'manual' when the caller provides none — a genuinely user-typed sell", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-01-05",
+      executionTime: "10:30",
+    });
+
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      allocations: [{ tradeId: trade.id, shares: 100, exitPrice: 60 }],
+      executionDate: "2026-02-01",
+      executionTime: "11:00",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFact = facts.find((f) => f.kind === "SellExecution");
+    expect(sellFact?.source).toBe("manual");
+  });
+
+  // The actual architectural fix, exercised end-to-end exactly like a real
+  // Import → Verify → Allocate lifecycle: a SellExecution fact already
+  // exists (written at extraction time, before the user ever opens the
+  // allocation modal — see recordImportedRawTransactions), correctly
+  // sourced. recordSell is called with NO explicit `source` at all (the
+  // shape PortfolioDetailPage's PendingExecution-confirmed sells use, and
+  // any future caller that never learns about the `source` field) — the
+  // fix must still work by ADOPTING the pre-existing fact, not by relying
+  // on every caller remembering to thread a source through.
+  it("adopts an already-existing SellExecution fact (written at extraction time) instead of minting a duplicate 'manual' one — works even when the caller passes no source at all", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+
+    // Simulates recordImportedRawTransactions' extraction-time write: the
+    // Buy candidate is already a live fact before recordBuy ever runs, so
+    // ensureBuyFact's own live-match check adopts it instead of writing its
+    // own "manual" one — this is what lets the ticker's Buy side start out
+    // fully Excel-sourced.
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "CLHO",
+        payload: { ticker: "CLHO", shares: 3000, price: 0.38, executionDate: "2026-01-05", executionTime: "10:00" },
+      }),
+    );
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      shares: 3000,
+      entryPrice: 0.38,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+
+    // Simulates recordImportedRawTransactions' extraction-time write: the
+    // Sell candidate is already a live fact before any allocation happens,
+    // correctly sourced.
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-sell-1",
+        kind: "SellExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "CLHO",
+        payload: { ticker: "CLHO", shares: 3000, price: 0.5, executionDate: "2026-01-10", executionTime: "10:00" },
+      }),
+    );
+
+    // No `source` passed here at all — proving the fix doesn't depend on it.
+    await recordSell(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      allocations: [{ tradeId: trade.id, shares: 3000, exitPrice: 0.5 }],
+      executionDate: "2026-01-10",
+      executionTime: "10:00",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    const sellFacts = facts.filter((f) => f.kind === "SellExecution");
+    // Exactly one SellExecution fact for this sell — the pre-existing one,
+    // adopted, never duplicated.
+    expect(sellFacts).toHaveLength(1);
+    expect(sellFacts[0].id).toBe("extracted-sell-1");
+    expect(sellFacts[0].source).toBe("official-broker-excel");
+
+    const decision = facts.find((f) => f.kind === "SellAllocationDecision");
+    expect((decision?.payload as { sellExecutionId: string }).sellExecutionId).toBe("extracted-sell-1");
 
     expect(isTickerFullyOfficialBrokerExcelSourced(facts, "CLHO")).toBe(true);
   });
 
-  it("never merges two genuinely different sells that coincidentally share the same ticker/date/shares/price â€” each still gets its own fact", async () => {
+  // Real, reported bug: two genuinely distinct real Buys sharing every field
+  // EXCEPT execution time (a common pattern — splitting a large order into
+  // smaller fills at the same limit price, minutes apart) both extracted
+  // as separate, still-unassigned BuyExecution facts. ensureBuyFact's own
+  // live-match search used to be time-blind (canonicalKey is
+  // ticker/side/date/shares/price only), so it could adopt whichever fact
+  // came first in array order rather than the one actually matching this
+  // trade's own execution time — leaving the WRONG fact "claimed" and the
+  // CORRECT one still unassigned, which spawned a phantom extra Trade for
+  // it during the next ledger projection, plus a false "Duplicate" badge in
+  // the Import UI. Both facts are seeded first in the array in the OPPOSITE
+  // order from the one under test, so an order-dependent (unfixed) search
+  // would fail this — a fix limited to only working when things happen to
+  // already be in the right order wouldn't be a real fix.
+  it("adopts the BuyExecution fact matching its OWN execution time, not just whichever same-value fact comes first", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1034am",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        ticker: "ABUK",
+        payload: { ticker: "ABUK", shares: 49, price: 42.4, executionDate: "2026-02-01", executionTime: "10:34AM" },
+      }),
+    );
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1032am",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        ticker: "ABUK",
+        payload: { ticker: "ABUK", shares: 49, price: 42.4, executionDate: "2026-02-01", executionTime: "10:32AM" },
+      }),
+    );
+
+    // The SECOND-inserted fact (10:32AM) is the one under test here — a
+    // naive `.find()` over the array would hit "extracted-buy-1034am" first
+    // regardless of which trade is asking.
+    const { trade } = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "ABUK",
+      shares: 49,
+      entryPrice: 42.4,
+      executionDate: "2026-02-01",
+      executionTime: "10:32AM",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    // No phantom third fact minted — the trade adopted one of the two
+    // pre-existing ones instead of writing its own.
+    expect(facts.filter((f) => f.kind === "BuyExecution")).toHaveLength(2);
+    const fact1034 = facts.find((f) => f.id === "extracted-buy-1034am")!;
+    const fact1032 = facts.find((f) => f.id === "extracted-buy-1032am")!;
+    // Only the time-matching fact gets claimed for this trade's portfolio.
+    expect(resolveCurrentPortfolioId(facts, fact1032)).toBe(trade.portfolioId);
+    expect(resolveCurrentPortfolioId(facts, fact1034)).toBeUndefined();
+  });
+
+  it("adopts an already-existing BuyExecution fact even when it was extracted under a ticker later renamed via a Correction fact", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+
+    // Extraction-time write under an OCR-misread ticker name.
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        id: "extracted-buy-1",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        portfolioId: "p1",
+        ticker: "CLHOA",
+        payload: { ticker: "CLHOA", shares: 3000, price: 0.38, executionDate: "2026-01-05", executionTime: "10:00" },
+      }),
+    );
+    // A Correction fixes the ticker name (e.g. via renameTickerEverywhere)
+    // BEFORE the user ever confirms the buy — the fact's own `.ticker` field
+    // stays "CLHOA" forever; only a live Correction records the rename.
+    await repos.rawTransactions.append(
+      createRawTransaction({ kind: "Correction", source: "manual", payload: { targetId: "extracted-buy-1", patch: { ticker: "CLHO" } } }),
+    );
+
+    // recordBuy is called under the CORRECTED name — ensureBuyFact must
+    // still recognize "extracted-buy-1" as the live match and adopt it,
+    // not read its immutable, stale `.ticker` field directly and miss it.
+    await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "CLHO",
+      shares: 3000,
+      entryPrice: 0.38,
+      executionDate: "2026-01-05",
+      executionTime: "10:00",
+    });
+
+    const facts = await repos.rawTransactions.getAll();
+    const buyFacts = facts.filter((f) => f.kind === "BuyExecution");
+    expect(buyFacts).toHaveLength(1);
+    expect(buyFacts[0].id).toBe("extracted-buy-1");
+    expect(buyFacts[0].source).toBe("official-broker-excel");
+
+    expect(isTickerFullyOfficialBrokerExcelSourced(facts, "CLHO")).toBe(true);
+  });
+
+  it("never merges two genuinely different sells that coincidentally share the same ticker/date/shares/price — each still gets its own fact", async () => {
     const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(100_000)] }));
     const buy1 = await recordBuy(repos, {
       portfolioId: "p1",
@@ -532,7 +882,7 @@ describe("renameTickerEverywhere", () => {
     expect(sellFacts).toHaveLength(2);
     const decisions = facts.filter((f) => f.kind === "SellAllocationDecision");
     const claimedIds = new Set(decisions.map((d) => (d.payload as { sellExecutionId: string }).sellExecutionId));
-    // Each decision claims a DIFFERENT SellExecution fact â€” neither sell's
+    // Each decision claims a DIFFERENT SellExecution fact — neither sell's
     // allocation was orphaned by the other.
     expect(claimedIds.size).toBe(2);
   });
@@ -997,4 +1347,3 @@ describe("consolidateTicker", () => {
     expect(result.movedVerificationIds).toEqual([]);
   });
 });
-
