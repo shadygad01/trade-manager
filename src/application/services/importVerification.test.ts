@@ -90,7 +90,7 @@ describe("checkTickerMatch", () => {
       existingRemainingShares: 0,
       verifiedUnits: undefined,
     });
-    expect(result.matched).toBe(false);
+    expect(result.matched).toBe(true);
     expect(result.reason).toBe("closed-position");
     expect(result.netShares).toBe(0);
     expect(result.discrepancySide).toBeUndefined();
@@ -635,7 +635,7 @@ describe("checkTickerMatch Verification decision (Diagnostics Center)", () => {
       ticker: "JUFO",
       diagnostics,
     });
-    expect(diagnostics.decisions[0].decision).toBe("Closed — needs corroborating evidence");
+    expect(diagnostics.decisions[0].decision).toBe("Closed — sold out");
   });
 
   it("records nothing when diagnostics is not passed (default, zero-cost behavior unchanged)", () => {

@@ -179,7 +179,7 @@ function describeMatchDecision(result: TickerMatchStatus): string {
     case "orders-verified":
       return "Verified (orders history)";
     case "closed-position":
-      return result.matched ? "Closed — sold out (corroborated)" : "Closed — needs corroborating evidence";
+      return "Closed — sold out";
     case "no-verification":
       return result.netShares < -1e-6 ? "Missing buy history" : "Needs broker screenshot";
     case "matched":
@@ -294,6 +294,10 @@ export function checkTickerMatch(params: {
     if (params.allPendingOrderConfirmed) {
       return decide({ matched: true, reason: "orders-verified", netShares, ...common });
     }
+    // A closed position is terminal: no Holdings screenshot can ever show
+    // zero units. Once the canonical net is exactly zero, do not repeatedly
+    // ask for Orders History/Statement evidence that cannot improve the
+    // current-position fact.
     if (Math.abs(netShares) < 1e-6) {
       // Net-zero with NO independent corroboration: never auto-matched (see
       // the doc comment above). Never a "get a My Position screenshot" ask
@@ -301,7 +305,7 @@ export function checkTickerMatch(params: {
       // only ever lists open holdings; the caller's evidence-recommendation
       // step (completenessEngine.recoveryPlan) is what names the actual next
       // document to request.
-      return decide({ matched: false, reason: "closed-position", netShares, ...common });
+      return decide({ matched: true, reason: "closed-position", netShares, ...common });
     }
     // No broker screenshot and no alternative verification — indicate which
     // side the surplus/shortage sits on so the user knows where to look.
