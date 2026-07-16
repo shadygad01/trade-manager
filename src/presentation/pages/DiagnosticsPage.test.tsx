@@ -10,6 +10,7 @@ describe("DiagnosticsPage", () => {
     render(<DiagnosticsPage />);
 
     expect(await screen.findByText("No diagnostic cases recorded yet.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run reconciliation sweep" })).toBeInTheDocument();
     expect(
       await screen.findByText(/No events recorded yet/)
     ).toBeInTheDocument();
