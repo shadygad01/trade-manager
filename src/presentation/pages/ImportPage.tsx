@@ -1257,10 +1257,11 @@ export function ImportPage() {
    * (same ticker/date/shares, a different price) still commits, since
    * that's usually the same real trade parsed from a different document
    * format, but keeps showing its duplicate badge so it stays visible for a
-   * later look. Sells are deliberately excluded — which lot(s) a sell
-   * closes is an explicit financial decision this app never auto-picks
-   * (ADR-002), so "Allocate Sell" stays a manual action, gated separately on
-   * the same match status.
+   * later look. Ambiguous screenshot/manual sells remain excluded because
+   * choosing their lots is an explicit financial decision. Native broker
+   * Excel sells are applied below with strict FIFO: they are authoritative
+   * execution history, and leaving them unallocated would make Holdings show
+   * gross buys instead of the broker's real net position.
    */
   async function commitTickerGroup(ticker: string) {
     const portfolioId = resolvedPortfolioId(ticker);
@@ -1462,6 +1463,94 @@ export function ImportPage() {
       // durable writes did not commit.
       importSession.update(() => stateBeforeBatch);
       throw err;
+    }
+
+    // A native Thndr workbook is transaction evidence, not an ambiguous
+    // position screenshot. Once its buys are durable, apply its sells in
+    // execution order using the same date-safe FIFO policy as Smart Allocate.
+    // Without this step Confirm records only gross buys, so a fully closed
+    // broker position incorrectly survives in Holdings as an open position.
+    const officialSells = state.pendingCandidates
+      .filter(
+        (e) =>
+          normalizeTicker(e.candidate.ticker) === ticker &&
+          e.candidate.side === "SELL" &&
+          e.candidate.source === "official-broker-excel" &&
+          !e.candidate.needsConfirmation &&
+          !state.addedKeys.includes(e.key) &&
+          !state.skippedKeys.includes(e.key) &&
+          !state.dismissedKeys.includes(e.key) &&
+          !inFlightKeys.has(e.key),
+      )
+      .sort(
+        (a, b) =>
+          a.candidate.date.localeCompare(b.candidate.date) ||
+          (a.candidate.time ?? "00:00").localeCompare(b.candidate.time ?? "00:00"),
+      );
+
+    for (const entry of officialSells) {
+      inFlightKeys.add(entry.key);
+      try {
+        const currentAllocations = await repos.allocations.getAll();
+        const duplicate = findDuplicateSellMatch(entry.candidate, currentAllocations);
+        if (duplicate && (duplicate.matchType === "exact" || pricesWithinOcrNoise(duplicate.matchedPrice, entry.candidate.price))) {
+          batchState.skippedKeys.push(entry.key);
+          continue;
+        }
+
+        const openLots = (await repos.trades.getByPortfolio(portfolioId))
+          .filter(
+            (trade) =>
+              normalizeTicker(trade.ticker) === ticker &&
+              trade.remainingShares > 0 &&
+              isLotEligibleForSell(trade, entry.candidate),
+          )
+          .sort(
+            (a, b) =>
+              a.executionDate.localeCompare(b.executionDate) ||
+              a.executionTime.localeCompare(b.executionTime),
+          );
+
+        let remainingToSell = entry.candidate.shares;
+        const lines: { tradeId: string; shares: number }[] = [];
+        for (const lot of openLots) {
+          if (remainingToSell <= 0) break;
+          const shares = Math.min(lot.remainingShares, remainingToSell);
+          if (shares <= 0) continue;
+          lines.push({ tradeId: lot.id, shares });
+          remainingToSell -= shares;
+        }
+        if (remainingToSell > 0) {
+          throw new Error(
+            `Official broker sell cannot be allocated: need ${entry.candidate.shares}, only ${entry.candidate.shares - remainingToSell} eligible open shares for ${ticker}.`,
+          );
+        }
+
+        const totalShares = entry.candidate.shares;
+        const result = await recordSell(
+          repos,
+          {
+            portfolioId,
+            ticker,
+            allocations: lines.map((line) => ({
+              tradeId: line.tradeId,
+              shares: line.shares,
+              exitPrice: entry.candidate.price,
+              fees: ((entry.candidate.fees ?? 0) / totalShares) * line.shares,
+              taxes: ((entry.candidate.taxes ?? 0) / totalShares) * line.shares,
+            })),
+            executionDate: entry.candidate.date,
+            executionTime: entry.candidate.time ?? "00:00",
+            transactionNumber: entry.candidate.transactionNumber,
+            source: entry.candidate.source,
+          },
+          diagnostics,
+        );
+        batchState.addedKeys.push(entry.key);
+        batchState.addedAllocationIds[entry.key] = result.allocations.map((allocation) => allocation.id);
+      } finally {
+        inFlightKeys.delete(entry.key);
+      }
     }
 
     // All Buy/assignment facts above are durable now and were appended without
