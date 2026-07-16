@@ -22,6 +22,7 @@ import {
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
   findOfficialBrokerExcelReuploadDuplicateKeys,
+  alreadyAllocatedSharesForSell,
   parseTimeToMinutes,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
@@ -1498,6 +1499,13 @@ export function ImportPage() {
           continue;
         }
 
+        const alreadyAllocatedShares = alreadyAllocatedSharesForSell(entry.candidate, currentAllocations);
+        const sharesToAllocate = entry.candidate.shares - alreadyAllocatedShares;
+        if (sharesToAllocate <= 0) {
+          batchState.skippedKeys.push(entry.key);
+          continue;
+        }
+
         const openLots = (await repos.trades.getByPortfolio(portfolioId))
           .filter(
             (trade) =>
@@ -1511,7 +1519,7 @@ export function ImportPage() {
               a.executionTime.localeCompare(b.executionTime),
           );
 
-        let remainingToSell = entry.candidate.shares;
+        let remainingToSell = sharesToAllocate;
         const lines: { tradeId: string; shares: number }[] = [];
         for (const lot of openLots) {
           if (remainingToSell <= 0) break;
@@ -1522,7 +1530,7 @@ export function ImportPage() {
         }
         if (remainingToSell > 0) {
           throw new Error(
-            `Official broker sell cannot be allocated: need ${entry.candidate.shares}, only ${entry.candidate.shares - remainingToSell} eligible open shares for ${ticker}.`,
+            `Official broker sell cannot be allocated: need ${sharesToAllocate} remaining shares, only ${sharesToAllocate - remainingToSell} eligible open shares for ${ticker}.`,
           );
         }
 

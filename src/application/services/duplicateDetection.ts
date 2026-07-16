@@ -863,6 +863,30 @@ export function findDateMisreadDuplicateHints(
 }
 
 /**
+ * Returns the part of a broker sell already represented by one legacy sell
+ * group. This is intentionally separate from full duplicate detection: an
+ * older import may have allocated only part of a real order, and a repair
+ * must allocate only the residual rather than replaying the whole sell.
+ */
+export function alreadyAllocatedSharesForSell(
+  candidate: ParsedTradeCandidate,
+  existingAllocations: TradeAllocation[],
+): number {
+  const groups = [...groupSellAllocationsByOrder(existingAllocations, candidate.ticker).values()];
+  if (candidate.transactionNumber) {
+    const byTransaction = groups.find((group) => sameExecution(group.transactionNumber, candidate.transactionNumber));
+    if (byTransaction) return Math.min(candidate.shares, byTransaction.totalShares);
+  }
+
+  const compatible = groups.filter((group) => {
+    if (group.date !== candidate.date || timesConflict(candidate.time, group.executionTime)) return false;
+    return Math.abs(group.price - candidate.price) <= Math.max(0.0001, candidate.price * 0.01);
+  });
+  if (compatible.length !== 1) return 0;
+  return Math.min(candidate.shares, compatible[0].totalShares);
+}
+
+/**
  * A native broker Excel row carries its exact execution time, unlike OCR.
  * When that same execution is already resolved in this Import session, a
  * later re-upload must never leave a second "Ready" row that the user could

@@ -14,6 +14,7 @@ import {
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
   findOfficialBrokerExcelReuploadDuplicateKeys,
+  alreadyAllocatedSharesForSell,
 } from "./duplicateDetection";
 import { createTrade } from "@domain/entities/Trade";
 import { createTradeAllocation } from "@domain/entities/TradeAllocation";
@@ -1034,6 +1035,49 @@ describe("findDateMisreadDuplicateHints", () => {
     const pending = { key: "s1", candidate: buyCandidate({ ticker: "RMDA", side: "SELL" as const, shares: 500, price: 2.8, date: "2023-01-07" }) };
     const hints = findDateMisreadDuplicateHints([pending], [], [allocation]);
     expect(hints.get("s1")).toBe("2023-01-17");
+  });
+});
+
+describe("alreadyAllocatedSharesForSell", () => {
+  it("recognizes the already-recorded part of a partially allocated broker sell", () => {
+    const allocation = createTradeAllocation({
+      id: "a1",
+      sellGroupId: "legacy-partial",
+      portfolioId: "p1",
+      tradeId: "t1",
+      ticker: "ARAB",
+      sharesClosed: 3000,
+      exitPrice: 0.48,
+      executionDate: "2023-01-11",
+      executionTime: "10:42AM",
+    });
+    const candidate = buyCandidate({
+      ticker: "ARAB",
+      side: "SELL",
+      shares: 6000,
+      price: 0.48,
+      date: "2023-01-11",
+      time: "10:42AM",
+    });
+
+    expect(alreadyAllocatedSharesForSell(candidate, [allocation])).toBe(3000);
+  });
+
+  it("does not borrow shares from an ambiguous different sell order", () => {
+    const base = {
+      portfolioId: "p1",
+      ticker: "ARAB",
+      exitPrice: 0.48,
+      executionDate: "2023-01-11",
+      executionTime: "10:42AM",
+    };
+    const allocations = [
+      createTradeAllocation({ ...base, id: "a1", sellGroupId: "sg1", tradeId: "t1", sharesClosed: 2000 }),
+      createTradeAllocation({ ...base, id: "a2", sellGroupId: "sg2", tradeId: "t2", sharesClosed: 1000 }),
+    ];
+    const candidate = buyCandidate({ ticker: "ARAB", side: "SELL", shares: 6000, price: 0.48, date: "2023-01-11", time: "10:42AM" });
+
+    expect(alreadyAllocatedSharesForSell(candidate, allocations)).toBe(0);
   });
 });
 
