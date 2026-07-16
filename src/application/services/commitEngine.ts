@@ -610,10 +610,19 @@ export async function reconcileDuplicateAuthority(
         const compatibleTrades = (buysByKey?.get(key) ?? []).filter((trade) =>
           facts.every((fact) => !timesConflict(timeOf(fact), trade.executionTime)),
         );
-        // Two compatible legacy trades means the facts still cannot be
-        // tied to one business execution safely (including an unknown-time
-        // backfill), so retain the conservative twin-lot behavior.
-        if (compatibleTrades.length >= 2) continue;
+        // Projection can contain two Trade rows for the very duplicate fact
+        // pair we are trying to converge. Count distinct broker/time claims,
+        // not rows, so those derived duplicates do not masquerade as genuine
+        // twin lots. Different transaction numbers or execution times remain
+        // separate real executions and retain the conservative guard.
+        const distinctExecutionClaims = new Set(
+          compatibleTrades.map((trade) =>
+            trade.transactionNumber
+              ? `number:${trade.transactionNumber}`
+              : `time:${trade.executionTime || "unknown"}`,
+          ),
+        );
+        if (distinctExecutionClaims.size >= 2) continue;
       }
 
       const best = facts.reduce((a, b) => (authorityRank(b.source) > authorityRank(a.source) ? b : a));
