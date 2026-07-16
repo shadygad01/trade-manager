@@ -129,6 +129,60 @@ describe("reconcileDuplicateAuthority — generic authority-based convergence", 
     expect((liveDecisions[0].payload as SellAllocationDecisionPayload).sellExecutionId).toBe(excelSell.id);
     expect((liveDecisions[0].payload as SellAllocationDecisionPayload).allocations).toEqual([{ lotRef: lot.id, shares: 60 }]);
   });
+
+  it("Buy-side: re-points allocation lotRefs when a higher-authority Buy fact replaces the legacy lot", async () => {
+    const buyPayload: BuyExecutionPayload = { ticker: "SYNTH8", shares: 100, price: 10, executionDate: "2026-01-01" };
+    const legacyBuy = await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "backfill", ticker: "SYNTH8", payload: buyPayload }));
+    const excelBuy = await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", ticker: "SYNTH8", payload: buyPayload }));
+    const sell = await rawTransactions.append(createRawTransaction({
+      kind: "SellExecution",
+      source: "official-broker-excel",
+      ticker: "SYNTH8",
+      payload: { ticker: "SYNTH8", shares: 100, price: 12, executionDate: "2026-02-01" } satisfies SellExecutionPayload,
+    }));
+    const decision = await rawTransactions.append(createRawTransaction({
+      kind: "SellAllocationDecision",
+      source: "backfill",
+      ticker: "SYNTH8",
+      payload: { sellExecutionId: sell.id, allocations: [{ lotRef: legacyBuy.id, shares: 100 }] } satisfies SellAllocationDecisionPayload,
+    }));
+
+    await reconcileDuplicateAuthority(repos, "SYNTH8");
+
+    const all = await rawTransactions.getAll();
+    expect(isRetracted(all, legacyBuy.id)).toBe(true);
+    expect(isRetracted(all, excelBuy.id)).toBe(false);
+    expect(isRetracted(all, decision.id)).toBe(true);
+    const liveDecisions = all.filter((transaction) => transaction.kind === "SellAllocationDecision" && !isRetracted(all, transaction.id));
+    expect(liveDecisions).toHaveLength(1);
+    expect((liveDecisions[0].payload as SellAllocationDecisionPayload).allocations).toEqual([{ lotRef: excelBuy.id, shares: 100 }]);
+  });
+
+  it("repairs an already-dangling lotRef left by an older provenance convergence", async () => {
+    const buyPayload: BuyExecutionPayload = { ticker: "SYNTH9", shares: 275, price: 3.4, executionDate: "2025-01-10" };
+    const legacyBuy = await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "backfill", ticker: "SYNTH9", payload: buyPayload }));
+    const excelBuy = await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", ticker: "SYNTH9", payload: buyPayload }));
+    await rawTransactions.append(createRawTransaction({ kind: "Retraction", source: "manual", payload: { targetId: legacyBuy.id, reason: "old convergence" } }));
+    const sell = await rawTransactions.append(createRawTransaction({
+      kind: "SellExecution",
+      source: "official-broker-excel",
+      ticker: "SYNTH9",
+      payload: { ticker: "SYNTH9", shares: 275, price: 4, executionDate: "2025-02-10" } satisfies SellExecutionPayload,
+    }));
+    const dangling = await rawTransactions.append(createRawTransaction({
+      kind: "SellAllocationDecision",
+      source: "backfill",
+      ticker: "SYNTH9",
+      payload: { sellExecutionId: sell.id, allocations: [{ lotRef: legacyBuy.id, shares: 275 }] } satisfies SellAllocationDecisionPayload,
+    }));
+
+    await reconcileDuplicateAuthority(repos, "SYNTH9");
+
+    const all = await rawTransactions.getAll();
+    expect(isRetracted(all, dangling.id)).toBe(true);
+    const liveDecision = all.find((transaction) => transaction.kind === "SellAllocationDecision" && !isRetracted(all, transaction.id));
+    expect((liveDecision!.payload as SellAllocationDecisionPayload).allocations).toEqual([{ lotRef: excelBuy.id, shares: 275 }]);
+  });
 });
 
 describe("commitTicker — reconcileDuplicateAuthority runs automatically through the real commit choke point", () => {
