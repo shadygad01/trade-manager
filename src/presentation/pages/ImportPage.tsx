@@ -99,6 +99,11 @@ export function isLotEligibleForSell(
   return lotMinutes === undefined || sellMinutes === undefined || lotMinutes <= sellMinutes;
 }
 
+/** Whether the verification gate has any real inventory left to evaluate. */
+export function hasSharesToReconcile(pendingRowCount: number, existingRemainingShares: number): boolean {
+  return pendingRowCount > 0 || Math.abs(existingRemainingShares) >= 1e-6;
+}
+
 /**
  * Position-verification and dividend candidates carry no per-transaction
  * identity of their own (unlike a Buy/Sell, which has a date+price+shares
@@ -2103,7 +2108,13 @@ export function ImportPage() {
       map.set(
         ticker,
         checkTickerMatch({
-          hasShares: group.buys.length + group.sells.length > 0,
+          // Reconciliation is about shares that still exist or rows that
+          // still need a decision. Counting every historical row in the
+          // card kept this true after all of them had already been added,
+          // skipped, or dismissed. A fully-resolved ticker then reached
+          // checkTickerMatch as `0 + 0 - 0` with hasShares=true and was
+          // incorrectly labelled "Closed — needs corroborating evidence".
+          hasShares: hasSharesToReconcile(remainingBuysAndSells.length, existingRemainingShares),
           pendingBuyShares,
           pendingSellShares,
           existingRemainingShares,

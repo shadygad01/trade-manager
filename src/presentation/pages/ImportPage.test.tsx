@@ -2,8 +2,20 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { isLotEligibleForSell, TickerGroupCard } from "./ImportPage";
+import { hasSharesToReconcile, isLotEligibleForSell, TickerGroupCard } from "./ImportPage";
+
 import type { CandidateEntry, OrderEvidenceEntry } from "@presentation/lib/importSession";
+
+describe("hasSharesToReconcile", () => {
+  it("does not treat a fully resolved zero-opening ticker as an uncorroborated closed position", () => {
+    expect(hasSharesToReconcile(0, 0)).toBe(false);
+  });
+
+  it("still evaluates pending rows and existing open inventory", () => {
+    expect(hasSharesToReconcile(1, 0)).toBe(true);
+    expect(hasSharesToReconcile(0, 25)).toBe(true);
+  });
+});
 
 const PORTFOLIOS = [
   { id: "p-smc", name: "smc test" },
