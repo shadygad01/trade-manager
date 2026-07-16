@@ -27,6 +27,12 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Several integration suites intentionally exercise one shared fake
+    // IndexedDB/runtime. Running files concurrently makes those suites race
+    // each other's module-level state and fail nondeterministically despite
+    // passing in isolation. Keep test files serial; individual tests and all
+    // production workers remain unaffected.
+    fileParallelism: false,
     setupFiles: ["./src/infrastructure/db/test-setup.ts", "./src/presentation/testUtils/setupTests.ts"],
   },
 });

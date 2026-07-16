@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Route, Switch, Redirect, Router } from "wouter";
-import { Menu } from "lucide-react";
+import { Menu, ShieldCheck } from "lucide-react";
 import { Sidebar } from "@presentation/components/Sidebar";
+import { PageErrorBoundary } from "@presentation/components/PageErrorBoundary";
 import { useT } from "@presentation/i18n/translations";
 import { useLanguage } from "@presentation/i18n/language";
 import { isDeveloperModeEnabled } from "@presentation/lib/developerMode";
@@ -60,24 +61,31 @@ function AppShell() {
   }, [language]);
 
   return (
-    <div className="flex min-h-screen bg-slate-950 text-slate-100">
+    <div className="app-shell flex min-h-screen text-slate-100">
       <Sidebar open={navOpen} onNavigate={() => setNavOpen(false)} />
       {navOpen ? (
-        <div className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setNavOpen(false)} />
+        <div className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm lg:hidden" onClick={() => setNavOpen(false)} />
       ) : null}
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-3 border-b border-slate-800/80 bg-slate-950 px-4 py-3 lg:hidden">
+        <div className="app-mobile-bar sticky top-0 z-30 flex items-center gap-3 border-b border-white/10 px-4 py-3 lg:hidden">
           <button
             onClick={() => setNavOpen(true)}
             aria-label={t("app.openMenu")}
-            className="rounded-md p-1.5 text-slate-300 hover:bg-slate-900"
+            className="rounded-lg border border-white/10 p-2 text-slate-300 hover:bg-white/5"
           >
             <Menu size={20} />
           </button>
-          <p className="text-sm font-semibold text-slate-100">{t("app.brand")}</p>
+          <p className="flex-1 text-sm font-semibold text-slate-100">{t("app.brand")}</p>
+          <ShieldCheck size={17} className="text-teal-400" />
         </div>
-        <main className="min-w-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-10 lg:py-8">
-          <Suspense fallback={<p className="text-sm text-slate-500">{t("common.loading")}</p>}>
+        <header className="hidden h-16 items-center justify-between border-b border-white/[.07] px-8 lg:flex">
+          <div className="flex items-center gap-2 text-xs text-slate-500"><span className="h-2 w-2 rounded-full bg-teal-400 shadow-[0_0_12px_rgba(45,212,191,.7)]" /> {t("app.brand")}</div>
+          <div className="flex items-center gap-2 rounded-full border border-teal-400/15 bg-teal-400/[.07] px-3 py-1.5 text-xs font-medium text-teal-300"><ShieldCheck size={14} /> EGX</div>
+        </header>
+        <main className="min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+          <div className="app-content">
+          <PageErrorBoundary>
+          <Suspense fallback={<div className="app-loading" role="status" aria-label={t("common.loading")} />}>
             <Switch>
               <Route path="/" component={DashboardPage} />
               <Route path="/portfolios" component={PortfoliosPage} />
@@ -95,6 +103,8 @@ function AppShell() {
               </Route>
             </Switch>
           </Suspense>
+          </PageErrorBoundary>
+          </div>
         </main>
       </div>
     </div>

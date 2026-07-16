@@ -54,34 +54,34 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
 
   return (
     <aside
-      className={`fixed inset-y-0 start-0 z-50 flex h-screen w-64 shrink-0 flex-col border-e border-slate-800/80 bg-slate-950 text-slate-300 transition-transform duration-200 lg:static lg:translate-x-0 ${
+      className={`fixed inset-y-0 start-0 z-50 flex h-screen w-[17.5rem] shrink-0 flex-col border-e border-white/[.07] bg-[#090e19]/95 text-slate-300 shadow-2xl shadow-black/30 backdrop-blur-xl transition-transform duration-200 lg:sticky lg:top-0 lg:translate-x-0 lg:shadow-none ${
         open ? "translate-x-0" : "max-lg:-translate-x-full max-lg:rtl:translate-x-full"
       }`}
     >
-      <div className="flex items-center gap-2 border-b border-slate-800/80 px-5 py-5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-cyan-500/10 text-cyan-400 font-bold">
-          P
+      <div className="flex items-center gap-3 border-b border-white/[.07] px-5 py-5">
+        <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-teal-300/20 bg-gradient-to-br from-teal-400/20 to-blue-500/10 text-sm font-bold text-teal-300 shadow-[0_0_28px_rgba(45,212,191,.08)]">
+          PO
         </div>
         <div className="flex-1">
-          <p className="text-sm font-semibold text-slate-50 leading-none">{t("app.brand")}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">{t("sidebar.tagline")}</p>
+          <p className="text-sm font-semibold tracking-[-.01em] text-slate-50 leading-none">{t("app.brand")}</p>
+          <p className="mt-1 text-[10px] uppercase tracking-[.13em] text-slate-500">{t("sidebar.tagline")}</p>
         </div>
         <button
           onClick={() => languageStore.set(language === "en" ? "ar" : "en")}
           title={t("sidebar.languageToggle")}
-          className="flex items-center gap-1 rounded-md border border-slate-800 px-2 py-1 text-xs font-medium text-slate-300 hover:bg-slate-900 hover:text-slate-50"
+          className="flex items-center gap-1 rounded-lg border border-white/[.08] bg-white/[.025] px-2 py-1.5 text-xs font-medium text-slate-400 hover:border-white/15 hover:bg-white/[.05] hover:text-slate-50"
         >
           <Languages size={13} />
           {t("sidebar.languageToggle")}
         </button>
       </div>
 
-      <nav className="px-3 py-3">
+      <nav className="px-3 py-4">
         <Link
           href="/import"
           onClick={onNavigate}
-          className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-            location.startsWith("/import") ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
+          className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+            location.startsWith("/import") ? "border border-teal-400/10 bg-teal-400/10 text-teal-300" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <UploadCloud size={16} />
@@ -90,8 +90,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         <Link
           href="/"
           onClick={onNavigate}
-          className={`mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-            dashboardParams ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
+          className={`mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+            dashboardParams ? "border border-teal-400/10 bg-teal-400/10 text-teal-300" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <LayoutDashboard size={16} />
@@ -100,7 +100,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         <Link
           href="/portfolios"
           onClick={onNavigate}
-          className="mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate-300 transition-colors hover:bg-slate-900 hover:text-slate-50"
+          className="mt-1 flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-sm font-medium text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
         >
           <Briefcase size={16} />
           {t("sidebar.portfolios")}
@@ -108,8 +108,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         <Link
           href="/data"
           onClick={onNavigate}
-          className={`mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-            location.startsWith("/data") ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
+          className={`mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
+            location.startsWith("/data") ? "border border-teal-400/10 bg-teal-400/10 text-teal-300" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <Database size={16} />
@@ -123,7 +123,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
             <div className="relative mb-2">
               <button
                 onClick={() => setSwitcherOpen((v) => !v)}
-                className="flex w-full items-center justify-between rounded-md border border-slate-800 bg-slate-900/60 px-3 py-2 text-start"
+                className="flex w-full items-center justify-between rounded-xl border border-white/[.08] bg-white/[.035] px-3 py-2.5 text-start hover:border-white/[.14]"
               >
                 <span className="truncate text-sm font-medium text-slate-100">
                   {activePortfolio?.name ?? t("sidebar.portfolioFallback")}
@@ -162,8 +162,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                   key={item.key}
                   href={href}
                   onClick={onNavigate}
-                  className={`mt-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-                    isActive ? "bg-cyan-500/10 text-cyan-400" : "text-slate-300 hover:bg-slate-900 hover:text-slate-50"
+                  className={`mt-1 flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${
+                    isActive ? "border-teal-400/10 bg-teal-400/10 text-teal-300" : "border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
                   }`}
                 >
                   <Icon size={16} />
@@ -179,7 +179,8 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         )}
       </div>
 
-      <div className="border-t border-slate-800/80 px-5 py-3 text-[11px] text-slate-600">
+      <div className="mx-3 mb-3 rounded-xl border border-white/[.06] bg-white/[.025] px-3 py-3 text-[10px] leading-4 text-slate-500">
+        <div className="mb-1 flex items-center gap-2 font-medium text-slate-400"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Local-first & secure</div>
         {t("sidebar.footer")}
       </div>
 

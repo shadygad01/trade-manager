@@ -20,7 +20,7 @@ import { TrendingUp, TrendingDown, Wallet, PieChart as PieChartIcon, Layers, Cir
 import { repos } from "@presentation/lib/data";
 import type { PositionAggregate } from "@application/services/TradeService";
 import { computeCanonicalPositions } from "@application/services/canonicalHoldings";
-import { computeAnalytics } from "@application/analytics/AnalyticsEngine";
+import { computeAnalyticsBatch } from "@application/analytics/analyticsWorker";
 import { sectorAllocation } from "@application/analytics/calculators/sectorAllocation";
 import { UNCLASSIFIED_SECTOR } from "@domain/value-objects/knownSectors";
 import { realizedPnlMicros } from "@domain/entities/TradeAllocation";
@@ -101,7 +101,7 @@ export function DashboardPage() {
     const priceHistory = Object.fromEntries(
       await Promise.all(tickers.map(async (ticker) => [ticker, await repos.prices.getPriceHistory(ticker)] as const)),
     );
-    const summaries: PortfolioSummary[] = await Promise.all(
+    const portfolioData = await Promise.all(
       portfolios.map(async (portfolio) => {
         const [positions, trades, allocations, timelineEvents] = await Promise.all([
           computeCanonicalPositions(repos, portfolio.id, priceMap),
@@ -109,7 +109,6 @@ export function DashboardPage() {
           repos.tradeAllocations.getByPortfolio(portfolio.id),
           repos.timeline.getByPortfolio(portfolio.id),
         ]);
-        const analytics = computeAnalytics({ trades, allocations, timelineEvents, priceMap, cash: portfolio.cash, priceHistory });
         const tradeMap = new Map(trades.map((t) => [t.id, t]));
         const realizedPnl = allocations.reduce((sum: number, alloc) => {
           const trade = tradeMap.get(alloc.tradeId);
@@ -120,10 +119,29 @@ export function DashboardPage() {
         const costBasis = positions.reduce((sum, p) => sum + p.costBasis, 0);
         const unrealizedPnl = positions.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
         const dividends = timelineEvents.reduce((sum, e) => (e.type === "Dividend" ? sum + (e.amount ?? 0) : sum), 0);
-        return { portfolio, positions, analytics, marketValue, costBasis, realizedPnl, unrealizedPnl, dividends };
+        return { portfolio, positions, trades, allocations, timelineEvents, marketValue, costBasis, realizedPnl, unrealizedPnl, dividends };
       }),
     );
-    return summaries;
+    const analytics = await computeAnalyticsBatch(
+      portfolioData.map((entry) => ({
+        trades: entry.trades,
+        allocations: entry.allocations,
+        timelineEvents: entry.timelineEvents,
+        priceMap,
+        cash: entry.portfolio.cash,
+        priceHistory,
+      })),
+    );
+    return portfolioData.map<PortfolioSummary>((entry, index) => ({
+      portfolio: entry.portfolio,
+      positions: entry.positions,
+      analytics: analytics[index],
+      marketValue: entry.marketValue,
+      costBasis: entry.costBasis,
+      realizedPnl: entry.realizedPnl,
+      unrealizedPnl: entry.unrealizedPnl,
+      dividends: entry.dividends,
+    }));
   }, []);
 
   const totals = useMemo(() => {

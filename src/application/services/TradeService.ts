@@ -47,6 +47,11 @@ function microsToMoney(totalMicros: number): Money {
   return Money.from(totalMicros / 1_000_000);
 }
 
+// Projection can refine a lot's canonical id while the current UI still
+// holds the id returned by recordBuy. This session-only alias is sufficient:
+// after a reload every screen reads the new canonical ids from IndexedDB.
+const recentTradeAliases = new Map<string, Trade>();
+
 export interface RecordBuyInput {
   portfolioId: string;
   ticker: string;
@@ -286,7 +291,7 @@ async function ensureBuyFact(
   trade: Trade,
   input: RecordBuyInput,
   diagnostics?: DiagnosticsRecorder
-): Promise<number | undefined> {
+): Promise<{ seq: number; factId: string } | undefined> {
   const ticker = normalizeTicker(trade.ticker);
   const key = canonicalKey({ side: "BUY", ticker, date: trade.executionDate, shares: trade.shares, price: trade.entryPrice });
   const all = await repos.rawTransactions.getAll();
@@ -302,7 +307,6 @@ async function ensureBuyFact(
     // in isTickerFullyOfficialBrokerExcelSourced and findUnclaimedSellExecutionFact.
     const resolvedTicker = resolveCurrentTicker(all, t);
     if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== ticker) return false;
-    if (otherTradeIds.has(t.id)) return false;
     const p = t.payload as BuyExecutionPayload;
     return canonicalKey({ side: "BUY", ticker, date: p.executionDate, shares: p.shares, price: p.price }) === key;
   });
@@ -316,10 +320,17 @@ async function ensureBuyFact(
   // Import — see this module's own regression test). Falls back to the
   // first candidate, unchanged from the prior behavior, when time can't
   // disambiguate (only one candidate, or none has a matching time).
-  const liveMatch =
-    sameValueCandidates.length > 1
-      ? (sameValueCandidates.find((t) => !timesConflict(trade.executionTime, (t.payload as BuyExecutionPayload).executionTime)) ?? sameValueCandidates[0])
-      : sameValueCandidates[0];
+  const sameTimeCandidates = sameValueCandidates.filter(
+    (t) => !timesConflict(trade.executionTime, (t.payload as BuyExecutionPayload).executionTime),
+  );
+  // A unique time match is stronger evidence than the current projected
+  // Trade id. During a rebuild, a colliding sibling can temporarily inherit
+  // another fact id; excluding that id first makes the next confirmation
+  // adopt the wrong fact and leaves its own execution unassigned forever.
+  // Keep the ownership guard for genuinely ambiguous/unknown-time matches.
+  const liveMatch = sameTimeCandidates.length === 1
+    ? sameTimeCandidates[0]
+    : sameValueCandidates.find((t) => !otherTradeIds.has(t.id));
 
   if (!liveMatch) {
     const payload: BuyExecutionPayload = {
@@ -344,10 +355,10 @@ async function ensureBuyFact(
       { writer: "TradeService.ts", function: "ensureBuyFact", file: "src/application/services/TradeService.ts", reason: "Wrote the BuyExecution fact backing a manually-recorded Buy" },
       input.deferCommit ? { deferCommit: true } : undefined,
     );
-    return appended.seq;
+    return { seq: appended.seq, factId: appended.id };
   } else {
     await assignPortfolioToFact(repos, liveMatch.id, trade.portfolioId, diagnostics, input.deferCommit ? { deferCommit: true } : undefined);
-    return liveMatch.seq;
+    return { seq: liveMatch.seq, factId: liveMatch.id };
   }
 }
 
@@ -404,11 +415,26 @@ export async function recordBuy(
   );
 
   let factSeqCursor: number | undefined;
+  let durableTrade = trade;
   if (repos.rawTransactions && repos.committedLedger) {
-    factSeqCursor = await ensureBuyFact(repos as AppRepositories & CommitEngineRepos, trade, input, diagnostics).catch((err) => {
+    const fact = await ensureBuyFact(repos as AppRepositories & CommitEngineRepos, trade, input, diagnostics).catch((err) => {
       console.error("ensureBuyFact failed (fact write, non-fatal):", err);
       return undefined;
     });
+    factSeqCursor = fact?.seq;
+    // Adoption may cause projection to replace the temporary legacy Trade
+    // with a canonical event row. Resolve the row that actually survived the
+    // projection; its id is the only safe reference for a later allocation.
+    if (fact && fact.factId !== trade.id) {
+      const projectedTrades = await repos.trades.getByPortfolio(trade.portfolioId);
+      durableTrade = projectedTrades.find((candidate) =>
+        normalizeTicker(candidate.ticker) === normalizedTicker &&
+        candidate.executionDate === trade.executionDate &&
+        candidate.executionTime === trade.executionTime &&
+        candidate.shares === trade.shares &&
+        candidate.entryPrice === trade.entryPrice
+      ) ?? trade;
+    }
   }
 
   if (diagnostics && factSeqCursor !== undefined) {
@@ -426,7 +452,9 @@ export async function recordBuy(
     });
   }
 
-  return { trade };
+  recentTradeAliases.set(durableTrade.id, durableTrade);
+  recentTradeAliases.set(trade.id, durableTrade);
+  return { trade: durableTrade };
 }
 
 /**
@@ -733,7 +761,51 @@ export async function recordSell(
   let fullyClosedCount = 0;
 
   for (const line of input.allocations) {
-    const trade = await repos.trades.getById(line.tradeId);
+    let trade = await repos.trades.getById(line.tradeId);
+    let usingFactBackedAlias = false;
+    // A projection may replace a just-recorded legacy UUID with its
+    // canonical lot identity between the Buy screen and a later Sell. The
+    // immutable Buy timeline event preserves that old reference, allowing a
+    // safe exact date/time/share lookup of the surviving lot instead of
+    // rejecting a valid allocation with "Trade not found".
+    if (!trade) {
+      const alias = recentTradeAliases.get(line.tradeId);
+      if (alias) {
+        const candidates = await repos.trades.getByPortfolio(input.portfolioId);
+        trade = candidates.find((candidate) =>
+          normalizeTicker(candidate.ticker) === normalizeTicker(alias.ticker) &&
+          candidate.executionDate === alias.executionDate &&
+          !timesConflict(candidate.executionTime, alias.executionTime) &&
+          candidate.shares === alias.shares &&
+          candidate.entryPrice === alias.entryPrice
+        );
+        // A commit triggered by selling a sibling lot can transiently replace
+        // this projected row before its own allocation is written. The raw
+        // BuyExecution still exists and resolveLotRef below can identify it
+        // by its exact date/time/value, so retain the immutable buy snapshot
+        // as the allocation input and let the ensuing commit rebuild the
+        // canonical row. This is deliberately limited to fact-backed repos.
+        if (!trade && repos.rawTransactions && repos.committedLedger) {
+          trade = alias;
+          usingFactBackedAlias = true;
+        }
+      }
+    }
+    if (!trade) {
+      const events = await repos.timeline.getByPortfolio(input.portfolioId);
+      const buyEvent = events.find((event) => event.type === "Buy" && event.relatedTradeIds?.includes(line.tradeId));
+      if (buyEvent?.ticker && buyEvent.shares !== undefined) {
+        const executionDate = buyEvent.timestamp.slice(0, 10);
+        const executionTime = buyEvent.timestamp.slice(11);
+        const candidates = await repos.trades.getByPortfolio(input.portfolioId);
+        trade = candidates.find((candidate) =>
+          normalizeTicker(candidate.ticker) === normalizeTicker(buyEvent.ticker!) &&
+          candidate.executionDate === executionDate &&
+          candidate.executionTime === executionTime &&
+          candidate.shares === buyEvent.shares
+        );
+      }
+    }
     if (!trade) {
       throw new Error(`Trade not found: ${line.tradeId}`);
     }
@@ -771,7 +843,9 @@ export async function recordSell(
     relatedTradeIds.push(trade.id);
 
     const remainingShares = trade.remainingShares - line.shares;
-    await repos.trades.saveRemainingShares(trade.id, remainingShares);
+    if (!usingFactBackedAlias) {
+      await repos.trades.saveRemainingShares(trade.id, remainingShares);
+    }
     if (remainingShares === 0) {
       fullyClosedCount += 1;
     }

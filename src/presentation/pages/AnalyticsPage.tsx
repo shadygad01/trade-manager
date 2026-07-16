@@ -13,7 +13,7 @@ import {
   Legend,
 } from "recharts";
 import { repos } from "@presentation/lib/data";
-import { computeAnalytics } from "@application/analytics/AnalyticsEngine";
+import { computeAnalyticsBatch } from "@application/analytics/analyticsWorker";
 import { PageHeader } from "@presentation/components/PageHeader";
 import { PriceFreshness } from "@presentation/components/PriceFreshness";
 import { StatTile } from "@presentation/components/StatTile";
@@ -44,7 +44,10 @@ export function AnalyticsPage() {
     const priceHistory = Object.fromEntries(
       await Promise.all(tickers.map(async (ticker) => [ticker, await repos.prices.getPriceHistory(ticker)] as const))
     );
-    return computeAnalytics({ trades, allocations, timelineEvents, priceMap, cash: portfolio.cash, journalEntries, priceHistory });
+    const [result] = await computeAnalyticsBatch([
+      { trades, allocations, timelineEvents, priceMap, cash: portfolio.cash, journalEntries, priceHistory },
+    ]);
+    return result;
   }, [portfolioId]);
 
   if (analytics === undefined) {
