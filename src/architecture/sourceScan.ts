@@ -38,7 +38,7 @@ export function allSourceFiles(): SourceFile[] {
       if (!/\.tsx?$/.test(entry)) continue;
       if (/\.test\.tsx?$/.test(entry)) continue;
       if (relative(SRC_ROOT, full).startsWith("architecture" + sep)) continue;
-      files.push({ path: relative(SRC_ROOT, full), content: readFileSync(full, "utf-8") });
+      files.push({ path: relative(SRC_ROOT, full).split(sep).join("/"), content: readFileSync(full, "utf-8") });
     }
   }
   walk(SRC_ROOT);

@@ -1,20 +1,112 @@
 @import "tailwindcss";
 
+:root {
+  color-scheme: dark;
+  --app-bg: #070b14;
+  --app-panel: #0d1422;
+  --app-panel-raised: #111b2d;
+  --app-border: rgba(148, 163, 184, 0.14);
+  --app-border-strong: rgba(148, 163, 184, 0.24);
+  --app-accent: #2dd4bf;
+  --app-accent-bright: #5eead4;
+  --app-accent-soft: rgba(45, 212, 191, 0.12);
+  --app-blue: #60a5fa;
+}
+
 @layer base {
+  * { box-sizing: border-box; }
+
   html {
-    font-family:
-      system-ui,
-      -apple-system,
-      "Segoe UI",
-      sans-serif;
+    font-family: Inter, "Segoe UI", Tahoma, Arial, sans-serif;
+    background: var(--app-bg);
+    text-rendering: optimizeLegibility;
   }
 
   body {
-    @apply bg-slate-950 text-slate-100;
+    @apply m-0 min-w-0 text-slate-100 antialiased;
+    background:
+      radial-gradient(circle at 78% -10%, rgba(45, 212, 191, 0.08), transparent 28rem),
+      radial-gradient(circle at 15% 115%, rgba(59, 130, 246, 0.07), transparent 32rem),
+      var(--app-bg);
     font-variant-numeric: tabular-nums;
   }
 
-  ::selection {
-    @apply bg-cyan-500/30;
+  button, a, input, select, textarea { transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease, box-shadow 160ms ease, transform 160ms ease; }
+  button:not(:disabled) { cursor: pointer; }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+    outline: 2px solid var(--app-accent);
+    outline-offset: 2px;
   }
+  input, select, textarea { color-scheme: dark; }
+  ::selection { background: rgba(45, 212, 191, 0.28); color: white; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #263247; border: 2px solid transparent; border-radius: 999px; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: #3b4b64; }
+}
+
+@layer components {
+  .app-shell { min-height: 100vh; background: transparent; }
+  .app-content { width: 100%; max-width: 1600px; margin-inline: auto; }
+  .app-mobile-bar { backdrop-filter: blur(18px); background: rgba(7, 11, 20, 0.84); }
+  .app-loading { min-height: 55vh; display: grid; place-items: center; }
+  .app-loading::before { content: ""; width: 28px; height: 28px; border: 2px solid rgba(148,163,184,.2); border-top-color: var(--app-accent); border-radius: 999px; animation: app-spin .8s linear infinite; }
+
+  /* Existing page surfaces inherit the design system without changing their data contracts. */
+  main .rounded-xl.border.border-slate-800,
+  main .rounded-lg.border.border-slate-800,
+  main .rounded-md.border.border-slate-800 {
+    border-color: var(--app-border);
+    background-color: rgba(13, 20, 34, 0.78);
+    box-shadow: 0 1px 0 rgba(255,255,255,.025), 0 18px 45px rgba(0,0,0,.12);
+    backdrop-filter: blur(10px);
+  }
+  main .rounded-xl.border.border-slate-800:hover { border-color: var(--app-border-strong); }
+  main table { border-collapse: separate; border-spacing: 0; }
+  main thead { background: rgba(17, 27, 45, .82); }
+  main th { letter-spacing: .045em; }
+  main tbody tr { transition: background-color 140ms ease; }
+  main tbody tr:hover { background: rgba(45, 212, 191, .035); }
+
+  main input:not([type="checkbox"]):not([type="radio"]),
+  main select,
+  main textarea {
+    border-color: rgba(148, 163, 184, .18);
+    background-color: rgba(7, 11, 20, .72);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.018);
+  }
+  main input:not([type="checkbox"]):not([type="radio"]):hover,
+  main select:hover,
+  main textarea:hover { border-color: rgba(148, 163, 184, .3); }
+  main input:not([type="checkbox"]):not([type="radio"]):focus,
+  main select:focus,
+  main textarea:focus {
+    border-color: rgba(45, 212, 191, .55);
+    box-shadow: 0 0 0 3px rgba(45, 212, 191, .08);
+  }
+  main button.bg-cyan-500,
+  main a.bg-cyan-500 {
+    border: 1px solid rgba(94, 234, 212, .3);
+    background: linear-gradient(135deg, #2dd4bf, #22b8cf);
+    color: #041317;
+    box-shadow: 0 8px 24px rgba(45, 212, 191, .14);
+  }
+  main button.bg-cyan-500:hover,
+  main a.bg-cyan-500:hover { filter: brightness(1.08); transform: translateY(-1px); }
+  main button:disabled { cursor: not-allowed; filter: saturate(.45); opacity: .55; transform: none !important; }
+  main .overflow-x-auto { scrollbar-gutter: stable; }
+  main .recharts-responsive-container { overflow: hidden; border-radius: .75rem; }
+  main .recharts-cartesian-grid line { stroke-opacity: .78; }
+  main .recharts-tooltip-wrapper { filter: drop-shadow(0 16px 28px rgba(0,0,0,.34)); }
+  main hr, main .border-t, main .border-b { border-color: rgba(148, 163, 184, .12); }
+  .performance-list > * {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 520px;
+  }
+}
+
+@keyframes app-spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }

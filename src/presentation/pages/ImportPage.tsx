@@ -1815,6 +1815,21 @@ export function ImportPage() {
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [pendingCandidates, pendingVerifications, pendingDividends, pendingOrderEvidences]);
 
+  // Import sessions can contain thousands of rows. Index durable data once
+  // per Dexie snapshot instead of rescanning the full arrays for every ticker
+  // in each derived verification pass. This is a read-only representation;
+  // matching, reconciliation and commit rules remain unchanged.
+  const existingVerificationsByTicker = useMemo(() => {
+    const map = new Map<string, typeof existingVerifications>();
+    for (const verification of existingVerifications) {
+      const ticker = normalizeTicker(verification.ticker);
+      const rows = map.get(ticker) ?? [];
+      rows.push(verification);
+      map.set(ticker, rows);
+    }
+    return map;
+  }, [existingVerifications]);
+
   /**
    * Nothing dedupes a pending Buy/Sell candidate against its own siblings in
    * the same batch the way processFiles already dedupes verifications and
@@ -2048,8 +2063,8 @@ export function ImportPage() {
       const allSessionCandidatesFromOfficialBrokerExcel =
         sessionCandidatesForTicker.length > 0 && sessionCandidatesForTicker.every((candidate) => candidate.source === "official-broker-excel");
       const durableOfficialCandidates = officialUploadCandidatesByTicker.get(ticker) ?? [];
-      const existingRemainingShares = existingTrades
-        .filter((t) => normalizeTicker(t.ticker) === ticker)
+      const tradesForTicker = existingTradesByTicker.get(ticker) ?? [];
+      const existingRemainingShares = tradesForTicker
         .reduce((sum, t) => sum + t.remainingShares, 0);
       const allPendingFromOfficialBrokerExcel =
         remainingBuysAndSells.length > 0
@@ -2078,7 +2093,7 @@ export function ImportPage() {
             orderConfirmedKeys.has(e.key),
         );
       const verificationCandidates = [
-        ...existingVerifications.filter((v) => normalizeTicker(v.ticker) === ticker),
+        ...(existingVerificationsByTicker.get(ticker) ?? []),
         ...group.verifications.map((e) => e.verification),
       ];
       const latestVerification = verificationCandidates.length
@@ -2109,8 +2124,8 @@ export function ImportPage() {
     addedKeys,
     skippedKeys,
     dismissedKeys,
-    existingTrades,
-    existingVerifications,
+    existingTradesByTicker,
+    existingVerificationsByTicker,
     existingRawTransactions,
     existingRawTransactionsRaw,
     session.discardedCandidates,
@@ -2236,7 +2251,7 @@ export function ImportPage() {
       // Still needed for cost basis (a quantity checkTickerMatch doesn't
       // track at all, unlike share counts) — the individual trades, not just
       // their remainingShares sum, are required to weight entryPrice per lot.
-      const existingForTicker = existingTrades.filter((t) => normalizeTicker(t.ticker) === ticker);
+      const existingForTicker = existingTradesByTicker.get(ticker) ?? [];
       const suggestion = suggestRemovalsToReconcile({
         rows: stillPending.map((e) => ({
           key: e.key,
@@ -2255,7 +2270,7 @@ export function ImportPage() {
       if (suggestion) map.set(ticker, suggestion);
     }
     return map;
-  }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, existingTrades]);
+  }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, existingTradesByTicker]);
 
   /**
    * The one case where alreadyFullyRecorded's "discard all pending" is the
@@ -2277,7 +2292,7 @@ export function ImportPage() {
       if (!status || status.reason !== "mismatch" || !status.alreadyFullyRecorded || status.verifiedUnits === undefined) continue;
       const pendingNet = status.netShares - (status.existingRemainingShares ?? 0);
       if (Math.abs(pendingNet - status.verifiedUnits) >= 1e-6) continue;
-      const existingOpen = existingTrades.filter((t) => normalizeTicker(t.ticker) === ticker && t.remainingShares > 0);
+      const existingOpen = (existingTradesByTicker.get(ticker) ?? []).filter((t) => t.remainingShares > 0);
       if (existingOpen.length === 0) continue;
       const allDeletablePlaceholders = existingOpen.every(
         (t) => t.notes?.startsWith("Opening balance") && t.remainingShares === t.shares,
@@ -2285,7 +2300,7 @@ export function ImportPage() {
       if (allDeletablePlaceholders) map.set(ticker, existingOpen.map((t) => t.id));
     }
     return map;
-  }, [tickerGroups, tickerMatchStatuses, existingTrades]);
+  }, [tickerGroups, tickerMatchStatuses, existingTradesByTicker]);
 
   const [replacingPlaceholderFor, setReplacingPlaceholderFor] = useState<string | null>(null);
   async function replacePlaceholderLots(ticker: string, tradeIds: string[]) {
@@ -2563,6 +2578,7 @@ export function ImportPage() {
             </div>
           ) : null}
 
+          <div className="performance-list contents">
           {activeTickerGroups.map(([ticker, group]) => {
             const existingIds = existingPortfoliosByTicker.get(ticker);
             const existingNames = existingIds ? [...existingIds].map((id) => portfolios.find((p) => p.id === id)?.name ?? "?") : [];
@@ -2618,6 +2634,7 @@ export function ImportPage() {
               />
             );
           })}
+          </div>
         </div>
       ) : null}
 

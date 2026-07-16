@@ -26,8 +26,8 @@ export function PriceFreshness() {
   if (info === undefined) return null;
   if (info === null) {
     return (
-      <p className="mb-4 flex items-center gap-1.5 text-xs text-amber-300">
-        <AlertTriangle size={12} />
+      <p className="mb-5 inline-flex items-center gap-2 rounded-lg border border-amber-400/15 bg-amber-400/[.06] px-3 py-2 text-xs text-amber-300">
+        <AlertTriangle size={14} />
         {t("priceFreshness.none")}
       </p>
     );
@@ -41,15 +41,15 @@ export function PriceFreshness() {
 
   if (stale) {
     return (
-      <p className="mb-4 flex items-center gap-1.5 text-xs text-amber-300">
-        <AlertTriangle size={12} />
+      <p className="mb-5 inline-flex items-center gap-2 rounded-lg border border-amber-400/15 bg-amber-400/[.06] px-3 py-2 text-xs text-amber-300">
+        <AlertTriangle size={14} />
         {t("priceFreshness.stale", { time: displayTime })}
       </p>
     );
   }
   return (
-    <p className="mb-4 flex items-center gap-1.5 text-xs text-slate-500">
-      <Clock size={12} />
+    <p className="mb-5 inline-flex items-center gap-2 rounded-lg border border-white/[.06] bg-white/[.025] px-3 py-2 text-xs text-slate-500">
+      <Clock size={14} className="text-teal-400" />
       {t("priceFreshness.fresh", { time: displayTime, quoteSuffix: usingQuoteTime ? t("priceFreshness.lastMarketClose") : "" })}
     </p>
   );

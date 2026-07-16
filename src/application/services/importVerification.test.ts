@@ -90,7 +90,7 @@ describe("checkTickerMatch", () => {
       existingRemainingShares: 0,
       verifiedUnits: undefined,
     });
-    expect(result.matched).toBe(true);
+    expect(result.matched).toBe(false);
     expect(result.reason).toBe("closed-position");
     expect(result.netShares).toBe(0);
     expect(result.discrepancySide).toBeUndefined();

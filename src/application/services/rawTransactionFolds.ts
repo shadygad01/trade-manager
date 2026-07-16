@@ -154,6 +154,13 @@ export function findLiveExecutionFact(
   // Same time-blind-value-key fix as findUnclaimedSellExecutionFact above —
   // prefer whichever candidate's own executionTime actually agrees with
   // match.time when more than one shares the plain value.
-  if (candidates.length <= 1) return candidates[0];
-  return candidates.find((t) => !timesConflict(match.time, (t.payload as BuyExecutionPayload | SellExecutionPayload).executionTime)) ?? candidates[0];
+  if (candidates.length <= 1) {
+    const candidate = candidates[0];
+    if (!candidate) return undefined;
+    const payload = candidate.payload as BuyExecutionPayload | SellExecutionPayload;
+    return timesConflict(match.time, payload.executionTime) ? undefined : candidate;
+  }
+  return candidates.find(
+    (t) => !timesConflict(match.time, (t.payload as BuyExecutionPayload | SellExecutionPayload).executionTime),
+  );
 }
