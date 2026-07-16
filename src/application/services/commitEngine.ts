@@ -629,7 +629,42 @@ export async function reconcileDuplicateAuthority(
           })
         );
 
-        if (kind === "SellExecution") {
+        if (kind === "BuyExecution") {
+          // Allocation decisions reference the concrete BuyExecution id as
+          // their lotRef. When provenance convergence replaces a legacy Buy
+          // with the broker-Excel fact, every live decision pointing at the
+          // loser must move too; otherwise the Allocation Engine drops those
+          // decisions as orphaned and Holdings jumps back to gross purchases.
+          const freshAll = await repos.rawTransactions.getAll();
+          const affectedDecisions = freshAll.filter((transaction) => {
+            if (transaction.kind !== "SellAllocationDecision" || isRetracted(freshAll, transaction.id)) return false;
+            return (transaction.payload as SellAllocationDecisionPayload).allocations.some((allocation) => allocation.lotRef === loser.id);
+          });
+          for (const decision of affectedDecisions) {
+            await repos.rawTransactions.append(
+              createRawTransaction({
+                kind: "Retraction",
+                source: "manual",
+                payload: { targetId: decision.id, reason: "Provenance upgrade: re-pointed allocation lots at the higher-authority BuyExecution fact." },
+              }),
+            );
+            const payload = decision.payload as SellAllocationDecisionPayload;
+            await repos.rawTransactions.append(
+              createRawTransaction({
+                kind: "SellAllocationDecision",
+                source: "manual",
+                portfolioId: decision.portfolioId,
+                ticker: decision.ticker,
+                payload: {
+                  sellExecutionId: payload.sellExecutionId,
+                  allocations: payload.allocations.map((allocation) =>
+                    allocation.lotRef === loser.id ? { ...allocation, lotRef: best.id } : allocation,
+                  ),
+                },
+              }),
+            );
+          }
+        } else {
           const freshAll = await repos.rawTransactions.getAll();
           const decision = freshAll.find(
             (t) =>
@@ -657,6 +692,60 @@ export async function reconcileDuplicateAuthority(
         convergedCount += 1;
       }
     }
+  }
+
+  // Repair data produced before Buy-side re-pointing existed: the duplicate
+  // Buy may already be retracted, leaving no live duplicate pair for the loop
+  // above to visit, while old decisions still point at that dead lot id.
+  const repairSnapshot = await repos.rawTransactions.getAll();
+  const liveBuys = repairSnapshot.filter(
+    (transaction): transaction is RawTransaction & { payload: BuyExecutionPayload } =>
+      transaction.kind === "BuyExecution" && !isRetracted(repairSnapshot, transaction.id),
+  );
+  const danglingDecisions = repairSnapshot.filter(
+    (transaction) => transaction.kind === "SellAllocationDecision" && !isRetracted(repairSnapshot, transaction.id),
+  );
+  for (const decision of danglingDecisions) {
+    const payload = decision.payload as SellAllocationDecisionPayload;
+    let changed = false;
+    const repairedAllocations = payload.allocations.map((allocation) => {
+      const referenced = repairSnapshot.find((transaction) => transaction.id === allocation.lotRef);
+      if (!referenced || referenced.kind !== "BuyExecution" || !isRetracted(repairSnapshot, referenced.id)) return allocation;
+      const oldBuy = referenced.payload as BuyExecutionPayload;
+      const replacement = liveBuys
+        .filter((candidate) => {
+          const buy = candidate.payload;
+          return (
+            normalizeTicker(buy.ticker) === normalizeTicker(oldBuy.ticker) &&
+            buy.executionDate === oldBuy.executionDate &&
+            buy.shares === oldBuy.shares &&
+            buy.price === oldBuy.price &&
+            !timesConflict(buy.executionTime, oldBuy.executionTime)
+          );
+        })
+        .sort((a, b) => authorityRank(b.source) - authorityRank(a.source))[0];
+      if (!replacement) return allocation;
+      changed = true;
+      return { ...allocation, lotRef: replacement.id };
+    });
+    if (!changed) continue;
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        kind: "Retraction",
+        source: "manual",
+        payload: { targetId: decision.id, reason: "Repair: allocation referenced a BuyExecution superseded by higher-authority evidence." },
+      }),
+    );
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        kind: "SellAllocationDecision",
+        source: "manual",
+        portfolioId: decision.portfolioId,
+        ticker: decision.ticker,
+        payload: { sellExecutionId: payload.sellExecutionId, allocations: repairedAllocations },
+      }),
+    );
+    convergedCount += 1;
   }
 
   return convergedCount;
