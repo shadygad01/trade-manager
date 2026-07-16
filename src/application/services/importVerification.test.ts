@@ -184,7 +184,7 @@ describe("checkTickerMatch", () => {
     expect(result.netShares).toBe(37);
   });
 
-  it("never lets an official broker Excel sell create an impossible negative inventory", () => {
+  it("accepts the official broker Excel even when the selected export window starts after the opening buy", () => {
     const result = checkTickerMatch({
       hasShares: true,
       pendingBuyShares: 0,
@@ -194,10 +194,9 @@ describe("checkTickerMatch", () => {
       allPendingFromOfficialBrokerExcel: true,
     });
     expect(result).toMatchObject({
-      matched: false,
-      reason: "no-verification",
+      matched: true,
+      reason: "broker-excel-verified",
       netShares: -4,
-      discrepancySide: "sell",
     });
   });
 
