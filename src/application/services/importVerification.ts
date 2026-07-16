@@ -117,8 +117,8 @@ export interface TickerMatchStatus {
  * authoritative even against a DISAGREEING "My Position" screenshot, not
  * just a missing one (checked before the verifiedUnits branch entirely, see
  * the code below). Per the broker-record trust policy, only the Excel
- * file's own internal consistency can withhold verification from an
- * Excel-sourced batch; a disagreeing screenshot is surfaced via
+ * no secondary document or locally reconstructed inventory can withhold
+ * verification from an Excel-sourced batch; a disagreeing screenshot is surfaced via
  * `secondaryMismatch` for the user to review, never as a block.
  *
  * A fourth way, one level broader — the dual-source rule: a ticker whose
@@ -249,23 +249,15 @@ export function checkTickerMatch(params: {
       verifiedAvgCost: params.verifiedAvgCost,
     });
   }
-  // A trusted source proves that its row was read faithfully; it cannot make
-  // an impossible inventory valid.  A negative result means this sell has no
-  // sufficient earlier buy history in the ledger, so it must be stopped
-  // before the broker-Excel shortcut below would otherwise mark it Verified.
-  // This is not a request for a My Position screenshot: the precise repair is
-  // to restore the missing Buy history (or correct an extra Sell).
-  if (netShares < -1e-6) {
-    return decide({ matched: false, reason: "no-verification", netShares, ...common, discrepancySide: "sell" });
-  }
-
   // The official broker Excel export is authoritative even against a
   // DISAGREEING secondary source — checked before the verifiedUnits/screenshot
   // branch below (unlike every other corroboration signal, which only ever
   // substitutes for a MISSING screenshot and still blocks on a real,
-  // present mismatch). Per the broker-record trust policy, only the Excel
-  // file's own internal consistency can block a batch sourced entirely from
-  // it; a "My Position" screenshot that disagrees is surfaced as a
+  // present mismatch). It also remains authoritative when the selected
+  // export window begins after the opening Buy, making the visible net
+  // inventory negative: that is a limitation of the imported date range,
+  // not a reason to demand another document. A "My Position" screenshot
+  // that disagrees is surfaced as a
   // non-blocking `secondaryMismatch` for the user to review, never as a
   // reason to withhold verification from the Excel-sourced transaction.
   if (params.allPendingFromOfficialBrokerExcel) {
@@ -279,6 +271,13 @@ export function checkTickerMatch(params: {
       verifiedAvgCost: params.verifiedAvgCost,
       secondaryMismatch,
     });
+  }
+  // For every non-authoritative source, a negative result means this sell
+  // has no sufficient earlier buy history in the ledger. Stop it before any
+  // weaker screenshot/invoice shortcut can mark an impossible inventory as
+  // verified. The official broker Excel path above is the sole exception.
+  if (netShares < -1e-6) {
+    return decide({ matched: false, reason: "no-verification", netShares, ...common, discrepancySide: "sell" });
   }
   if (params.verifiedUnits === undefined) {
     // Corroboration checked BEFORE the closed-position shortcut, and applies
