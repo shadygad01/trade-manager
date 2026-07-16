@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Route, Switch, Redirect, Router } from "wouter";
-import { Menu, ShieldCheck, Bell, Search } from "lucide-react";
+import { Menu, ShieldCheck, Bell, Search, Activity, Command } from "lucide-react";
 import { Sidebar } from "@presentation/components/Sidebar";
 import { PageErrorBoundary } from "@presentation/components/PageErrorBoundary";
 import { useT } from "@presentation/i18n/translations";
@@ -78,13 +78,14 @@ function AppShell() {
           <p className="flex-1 text-sm font-semibold text-slate-100">{t("app.brand")}</p>
           <ShieldCheck size={17} className="text-teal-400" />
         </div>
-        <header className="app-topbar sticky top-0 z-20 hidden h-[4.5rem] items-center justify-between border-b border-white/[.06] px-8 lg:flex">
+        <header className="app-topbar sticky top-0 z-20 hidden h-[4.75rem] items-center justify-between border-b border-white/[.065] px-8 lg:flex">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 min-w-72 items-center gap-2 rounded-xl border border-white/[.07] bg-white/[.025] px-3 text-xs text-slate-500"><Search size={14} /> {t("app.brand")}</div>
+            <div className="flex h-10 min-w-80 items-center gap-2.5 rounded-xl border border-white/[.075] bg-white/[.025] px-3.5 text-xs text-slate-500 shadow-inner"><Search size={14} /> Search intelligence <span className="ms-auto flex items-center gap-1 rounded-md border border-white/[.07] px-1.5 py-0.5 text-[9px]"><Command size={9} /> K</span></div>
           </div>
           <div className="flex items-center gap-2">
+            <div className="me-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[.16em] text-slate-500"><Activity size={13} className="text-emerald-400" /> Systems operational</div>
             <button aria-label="Notifications" className="grid h-9 w-9 place-items-center rounded-xl border border-white/[.07] bg-white/[.025] text-slate-400 hover:bg-white/[.06] hover:text-white"><Bell size={15} /></button>
-            <div className="flex items-center gap-2 rounded-xl border border-emerald-400/15 bg-emerald-400/[.06] px-3 py-2 text-xs font-medium text-emerald-300"><ShieldCheck size={14} /> EGX · Secure</div>
+            <div className="flex items-center gap-2 rounded-xl border border-blue-400/15 bg-blue-400/[.07] px-3 py-2 text-xs font-medium text-blue-200"><ShieldCheck size={14} /> EGX · Institutional</div>
           </div>
         </header>
         <main className="min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-9 xl:px-10">

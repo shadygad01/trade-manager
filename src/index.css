@@ -2,18 +2,19 @@
 
 :root {
   color-scheme: dark;
-  --app-bg: #060914;
-  --app-panel: #0b1120;
-  --app-panel-raised: #10182a;
+  --app-bg: #05070b;
+  --app-panel: #0b0f16;
+  --app-panel-raised: #111722;
   --app-border: rgba(148, 163, 184, 0.12);
   --app-border-strong: rgba(148, 163, 184, 0.22);
-  --app-accent: #818cf8;
-  --app-accent-bright: #a5b4fc;
-  --app-accent-soft: rgba(99, 102, 241, 0.13);
-  --app-blue: #38bdf8;
-  --app-success: #34d399;
-  --app-radius: 1rem;
-  --app-shadow: 0 24px 65px rgba(0, 0, 0, .22);
+  --app-accent: #4f8cff;
+  --app-accent-bright: #79a7ff;
+  --app-accent-soft: rgba(79, 140, 255, 0.12);
+  --app-blue: #42d4ff;
+  --app-success: #51d6a2;
+  --app-gold: #d9bd7a;
+  --app-radius: 1.125rem;
+  --app-shadow: 0 28px 80px rgba(0, 0, 0, .30);
 }
 
 @layer base {
@@ -28,9 +29,12 @@
   body {
     @apply m-0 min-w-0 text-slate-100 antialiased;
     background:
-      radial-gradient(circle at 82% -12%, rgba(99, 102, 241, 0.12), transparent 34rem),
-      radial-gradient(circle at 12% 105%, rgba(14, 165, 233, 0.07), transparent 36rem),
+      linear-gradient(rgba(255,255,255,.012) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.012) 1px, transparent 1px),
+      radial-gradient(circle at 82% -12%, rgba(32, 94, 220, 0.16), transparent 38rem),
+      radial-gradient(circle at 8% 110%, rgba(32, 186, 220, 0.06), transparent 38rem),
       var(--app-bg);
+    background-size: 44px 44px, 44px 44px, auto, auto, auto;
     font-variant-numeric: tabular-nums;
   }
 
@@ -52,9 +56,9 @@
   .app-shell { min-height: 100vh; background: transparent; }
   .app-content { width: 100%; max-width: 1720px; margin-inline: auto; }
   .app-mobile-bar { backdrop-filter: blur(22px); background: rgba(6, 9, 20, 0.86); }
-  .app-topbar { background: rgba(6, 9, 20, .62); backdrop-filter: blur(20px); }
+  .app-topbar { background: rgba(5, 7, 11, .76); backdrop-filter: blur(24px); }
   .app-page { animation: page-enter .32s ease both; }
-  .surface-card { border: 1px solid var(--app-border); border-radius: var(--app-radius); background: linear-gradient(145deg, rgba(16,24,42,.94), rgba(9,15,28,.88)); box-shadow: var(--app-shadow); }
+  .surface-card { border: 1px solid var(--app-border); border-radius: var(--app-radius); background: linear-gradient(145deg, rgba(18,24,35,.95), rgba(9,13,20,.92)); box-shadow: var(--app-shadow); }
   .app-loading { min-height: 55vh; display: grid; place-items: center; }
   .app-loading::before { content: ""; width: 28px; height: 28px; border: 2px solid rgba(148,163,184,.2); border-top-color: var(--app-accent); border-radius: 999px; animation: app-spin .8s linear infinite; }
 
@@ -64,7 +68,7 @@
   main .rounded-md.border.border-slate-800 {
     border-color: var(--app-border);
     border-radius: var(--app-radius);
-    background: linear-gradient(145deg, rgba(16,24,42,.9), rgba(9,15,28,.86));
+    background: linear-gradient(145deg, rgba(18,24,35,.92), rgba(8,12,18,.9));
     box-shadow: 0 1px 0 rgba(255,255,255,.03), var(--app-shadow);
     backdrop-filter: blur(14px);
   }
@@ -73,7 +77,7 @@
   main thead { background: rgba(17, 27, 45, .82); }
   main th { letter-spacing: .045em; }
   main tbody tr { transition: background-color 140ms ease; }
-  main tbody tr:hover { background: rgba(99, 102, 241, .055); }
+  main tbody tr:hover { background: rgba(79, 140, 255, .055); }
   main th { padding-block: .9rem; color: #94a3b8; font-size: .68rem; text-transform: uppercase; }
   main td { border-color: rgba(148,163,184,.08); }
 
@@ -90,21 +94,23 @@
   main input:not([type="checkbox"]):not([type="radio"]):focus,
   main select:focus,
   main textarea:focus {
-    border-color: rgba(129, 140, 248, .62);
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, .12);
+    border-color: rgba(79, 140, 255, .65);
+    box-shadow: 0 0 0 3px rgba(79, 140, 255, .12);
   }
   main button.bg-cyan-500,
   main a.bg-cyan-500 {
-    border: 1px solid rgba(165, 180, 252, .32);
-    background: linear-gradient(135deg, #818cf8, #6366f1);
+    border: 1px solid rgba(121, 167, 255, .35);
+    background: linear-gradient(135deg, #4f8cff, #3268db);
     color: white !important;
-    box-shadow: 0 10px 28px rgba(79, 70, 229, .22);
+    box-shadow: 0 12px 32px rgba(32, 94, 220, .25);
   }
   main button.bg-cyan-500:hover,
   main a.bg-cyan-500:hover { filter: brightness(1.08); transform: translateY(-1px); }
   main button:disabled { cursor: not-allowed; filter: saturate(.45); opacity: .55; transform: none !important; }
-  main .text-cyan-400, main .text-teal-400 { color: #a5b4fc; }
-  main .border-cyan-500\/40, main .border-cyan-400\/40 { border-color: rgba(129,140,248,.4); }
+  main .text-cyan-400, main .text-teal-400 { color: #79a7ff; }
+  main .border-cyan-500\/40, main .border-cyan-400\/40 { border-color: rgba(79,140,255,.4); }
+  main section, main article { scroll-margin-top: 6rem; }
+  main .shadow-lg, main .shadow-xl { box-shadow: var(--app-shadow); }
   main .overflow-x-auto { scrollbar-gutter: stable; }
   main .recharts-responsive-container { overflow: hidden; border-radius: .75rem; }
   main .recharts-default-tooltip { padding: .75rem 1rem !important; border-radius: .8rem !important; backdrop-filter: blur(16px); }
