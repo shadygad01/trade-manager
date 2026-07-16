@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Route, Switch, Redirect, Router } from "wouter";
-import { Menu, ShieldCheck } from "lucide-react";
+import { Menu, ShieldCheck, Bell, Search } from "lucide-react";
 import { Sidebar } from "@presentation/components/Sidebar";
 import { PageErrorBoundary } from "@presentation/components/PageErrorBoundary";
 import { useT } from "@presentation/i18n/translations";
@@ -78,12 +78,17 @@ function AppShell() {
           <p className="flex-1 text-sm font-semibold text-slate-100">{t("app.brand")}</p>
           <ShieldCheck size={17} className="text-teal-400" />
         </div>
-        <header className="hidden h-16 items-center justify-between border-b border-white/[.07] px-8 lg:flex">
-          <div className="flex items-center gap-2 text-xs text-slate-500"><span className="h-2 w-2 rounded-full bg-teal-400 shadow-[0_0_12px_rgba(45,212,191,.7)]" /> {t("app.brand")}</div>
-          <div className="flex items-center gap-2 rounded-full border border-teal-400/15 bg-teal-400/[.07] px-3 py-1.5 text-xs font-medium text-teal-300"><ShieldCheck size={14} /> EGX</div>
+        <header className="app-topbar sticky top-0 z-20 hidden h-[4.5rem] items-center justify-between border-b border-white/[.06] px-8 lg:flex">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 min-w-72 items-center gap-2 rounded-xl border border-white/[.07] bg-white/[.025] px-3 text-xs text-slate-500"><Search size={14} /> {t("app.brand")}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button aria-label="Notifications" className="grid h-9 w-9 place-items-center rounded-xl border border-white/[.07] bg-white/[.025] text-slate-400 hover:bg-white/[.06] hover:text-white"><Bell size={15} /></button>
+            <div className="flex items-center gap-2 rounded-xl border border-emerald-400/15 bg-emerald-400/[.06] px-3 py-2 text-xs font-medium text-emerald-300"><ShieldCheck size={14} /> EGX · Secure</div>
+          </div>
         </header>
-        <main className="min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          <div className="app-content">
+        <main className="min-w-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 lg:py-9 xl:px-10">
+          <div className="app-content app-page">
           <PageErrorBoundary>
           <Suspense fallback={<div className="app-loading" role="status" aria-label={t("common.loading")} />}>
             <Switch>

@@ -54,12 +54,12 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
 
   return (
     <aside
-      className={`fixed inset-y-0 start-0 z-50 flex h-screen w-[17.5rem] shrink-0 flex-col border-e border-white/[.07] bg-[#090e19]/95 text-slate-300 shadow-2xl shadow-black/30 backdrop-blur-xl transition-transform duration-200 lg:sticky lg:top-0 lg:translate-x-0 lg:shadow-none ${
+      className={`fixed inset-y-0 start-0 z-50 flex h-screen w-[18.25rem] shrink-0 flex-col border-e border-white/[.065] bg-[#070b16]/96 text-slate-300 shadow-2xl shadow-black/30 backdrop-blur-2xl transition-transform duration-200 lg:sticky lg:top-0 lg:translate-x-0 lg:shadow-none ${
         open ? "translate-x-0" : "max-lg:-translate-x-full max-lg:rtl:translate-x-full"
       }`}
     >
-      <div className="flex items-center gap-3 border-b border-white/[.07] px-5 py-5">
-        <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-teal-300/20 bg-gradient-to-br from-teal-400/20 to-blue-500/10 text-sm font-bold text-teal-300 shadow-[0_0_28px_rgba(45,212,191,.08)]">
+      <div className="flex items-center gap-3 border-b border-white/[.065] px-5 py-[1.15rem]">
+        <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-indigo-300/20 bg-gradient-to-br from-indigo-400/25 to-sky-500/10 text-sm font-bold text-indigo-200 shadow-[0_0_32px_rgba(99,102,241,.12)]">
           PO
         </div>
         <div className="flex-1">
@@ -76,12 +76,12 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
         </button>
       </div>
 
-      <nav className="px-3 py-4">
+      <nav className="px-3 py-5">
         <Link
           href="/import"
           onClick={onNavigate}
           className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-            location.startsWith("/import") ? "border border-teal-400/10 bg-teal-400/10 text-teal-300" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
+            location.startsWith("/import") ? "border border-indigo-400/15 bg-indigo-400/[.11] text-indigo-200 shadow-[inset_3px_0_0_#818cf8]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <UploadCloud size={16} />
@@ -91,7 +91,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
           href="/"
           onClick={onNavigate}
           className={`mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-            dashboardParams ? "border border-teal-400/10 bg-teal-400/10 text-teal-300" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
+            dashboardParams ? "border border-indigo-400/15 bg-indigo-400/[.11] text-indigo-200 shadow-[inset_3px_0_0_#818cf8]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <LayoutDashboard size={16} />
@@ -109,7 +109,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
           href="/data"
           onClick={onNavigate}
           className={`mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-            location.startsWith("/data") ? "border border-teal-400/10 bg-teal-400/10 text-teal-300" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
+            location.startsWith("/data") ? "border border-indigo-400/15 bg-indigo-400/[.11] text-indigo-200 shadow-[inset_3px_0_0_#818cf8]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <Database size={16} />
@@ -163,7 +163,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                   href={href}
                   onClick={onNavigate}
                   className={`mt-1 flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${
-                    isActive ? "border-teal-400/10 bg-teal-400/10 text-teal-300" : "border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
+                    isActive ? "border-indigo-400/15 bg-indigo-400/[.11] text-indigo-200 shadow-[inset_3px_0_0_#818cf8]" : "border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
                   }`}
                 >
                   <Icon size={16} />
@@ -180,7 +180,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
       </div>
 
       <div className="mx-3 mb-3 rounded-xl border border-white/[.06] bg-white/[.025] px-3 py-3 text-[10px] leading-4 text-slate-500">
-        <div className="mb-1 flex items-center gap-2 font-medium text-slate-400"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />Local-first & secure</div>
+        <div className="mb-1 flex items-center gap-2 font-medium text-slate-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,.7)]" />Local-first & secure</div>
         {t("sidebar.footer")}
       </div>
 

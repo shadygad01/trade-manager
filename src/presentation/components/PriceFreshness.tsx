@@ -48,8 +48,8 @@ export function PriceFreshness() {
     );
   }
   return (
-    <p className="mb-5 inline-flex items-center gap-2 rounded-lg border border-white/[.06] bg-white/[.025] px-3 py-2 text-xs text-slate-500">
-      <Clock size={14} className="text-teal-400" />
+    <p className="mb-6 inline-flex items-center gap-2 rounded-xl border border-white/[.065] bg-white/[.025] px-3.5 py-2 text-xs text-slate-500">
+      <Clock size={14} className="text-indigo-300" />
       {t("priceFreshness.fresh", { time: displayTime, quoteSuffix: usingQuoteTime ? t("priceFreshness.lastMarketClose") : "" })}
     </p>
   );
