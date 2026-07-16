@@ -200,9 +200,21 @@ export function ImportPage() {
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [distributing, setDistributing] = useState(false);
   const [completedExpanded, setCompletedExpanded] = useState(false);
+  const [reviewDataSettled, setReviewDataSettled] = useState(false);
 
   const session = useImportSession();
   const { pendingCandidates, pendingVerifications, pendingDividends, pendingOrderEvidences, tickerPortfolio, filesProcessed } = session;
+
+  // Navigation unmounts this page. Persistently remove a terminal session at
+  // that boundary so returning to Import cannot hydrate already-completed
+  // rows before IndexedDB has finished loading. Never touch an active job.
+  useEffect(() => {
+    return () => {
+      if (importJob.getState()?.status === "running") return;
+      importSession.clearIfFullyResolved();
+      importSession.flush();
+    };
+  }, []);
 
   /**
    * Every extraction path already filters a Buy/Sell candidate dated before
@@ -402,6 +414,21 @@ export function ImportPage() {
     existingVerificationsRaw !== undefined &&
     existingTimelineRaw !== undefined &&
     existingRawTransactionsRaw !== undefined;
+
+  /**
+   * A persisted import session is available synchronously, while the durable
+   * ledger queries resolve asynchronously.  On a remount that used to expose
+   * one render of already-completed rows as pending before the duplicate and
+   * reconciliation effects below could classify them.  Keep the review area
+   * hidden through one settled task after all durable reads complete, giving
+   * those effects a chance to publish their final skipped/completed state.
+   */
+  useEffect(() => {
+    setReviewDataSettled(false);
+    if (!initialDataLoaded) return;
+    const timer = window.setTimeout(() => setReviewDataSettled(true), 0);
+    return () => window.clearTimeout(timer);
+  }, [initialDataLoaded, pendingTickerKey]);
 
   /**
    * `ownTradeId` (Buys) / `ownAllocationIds` (Sells) exclude a candidate's
@@ -2506,7 +2533,7 @@ export function ImportPage() {
         </p>
       </div>
 
-      {tickerGroups.length > 0 ? (
+      {reviewDataSettled && tickerGroups.length > 0 ? (
         <div className="mt-4 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
             <div>

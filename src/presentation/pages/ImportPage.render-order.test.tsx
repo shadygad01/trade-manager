@@ -151,6 +151,14 @@ describe("Hypothesis 1 instrumentation: render-order relative to duplicate skip"
     const firstCommitShowsConfirmEnabled =
       firstCommitBody.includes("Confirm") && !document.querySelector("button[disabled]");
 
+    // A restored session must not paint its review rows until the durable
+    // ledger has loaded and the duplicate/reconciliation pass has settled.
+    // This is the user-visible regression: navigating back to Import used to
+    // flash an already-recorded BUY as pending for a moment.
+    expect(firstCommitBody).not.toContain("BUY");
+    expect(firstCommitBody).not.toContain("Mismatch");
+    expect(firstCommitBody).not.toContain("Needs broker screenshot");
+
     // Poll every distinct badge state observed between the first commit and
     // settlement, to catch any transient "Mismatch"/"Needs broker
     // screenshot" frame that appears once real data has loaded but before

@@ -143,6 +143,28 @@ export const importSession = {
   clear(): void {
     setState(emptyState());
   },
+  /**
+   * Removes a finished review session once every actionable row has reached
+   * a terminal state. This prevents completed candidates from being restored
+   * on the next Import-page mount while the durable ledger is still loading.
+   */
+  clearIfFullyResolved(): boolean {
+    const actionableCount = state.pendingCandidates.length + state.pendingVerifications.length + state.pendingDividends.length;
+    if (actionableCount === 0) return false;
+
+    const candidateResolved = new Set([...state.addedKeys, ...state.skippedKeys, ...state.dismissedKeys]);
+    const verificationResolved = new Set([...state.acceptedKeys, ...state.dismissedKeys]);
+    const dividendResolved = new Set([...state.addedKeys, ...state.dismissedKeys]);
+    const hasUnresolvedRow =
+      state.pendingCandidates.some((entry) => !candidateResolved.has(entry.key)) ||
+      state.pendingVerifications.some((entry) => !verificationResolved.has(entry.key)) ||
+      state.pendingDividends.some((entry) => !dividendResolved.has(entry.key));
+    if (hasUnresolvedRow) return false;
+
+    setState(emptyState());
+    this.flush();
+    return true;
+  },
   flush(): void {
     if (persistTimer !== undefined) {
       clearTimeout(persistTimer);
