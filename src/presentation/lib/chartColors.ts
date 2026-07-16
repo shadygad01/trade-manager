@@ -6,18 +6,18 @@
  * floor band, which is why charts pair color with direct labels/legends
  * rather than relying on hue alone).
  */
-export const CHART_SURFACE = "#0b1222";
-export const CHART_GRID = "#253047";
-export const CHART_AXIS = "#4b5871";
-export const CHART_TEXT_MUTED = "#8793a8";
+export const CHART_SURFACE = "#0b0f16";
+export const CHART_GRID = "#242c39";
+export const CHART_AXIS = "#475365";
+export const CHART_TEXT_MUTED = "#8390a2";
 export const CHART_TEXT_SECONDARY = "#d1d7e3";
 
 export const CATEGORICAL = [
-  "#818cf8",
-  "#38bdf8",
-  "#34d399",
-  "#f59e0b",
-  "#c084fc",
+  "#4f8cff",
+  "#42d4ff",
+  "#51d6a2",
+  "#d9bd7a",
+  "#a58bff",
   "#fb7185",
   "#22d3ee",
   "#f97316",

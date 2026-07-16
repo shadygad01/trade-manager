@@ -54,17 +54,17 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
 
   return (
     <aside
-      className={`fixed inset-y-0 start-0 z-50 flex h-screen w-[18.25rem] shrink-0 flex-col border-e border-white/[.065] bg-[#070b16]/96 text-slate-300 shadow-2xl shadow-black/30 backdrop-blur-2xl transition-transform duration-200 lg:sticky lg:top-0 lg:translate-x-0 lg:shadow-none ${
+      className={`fixed inset-y-0 start-0 z-50 flex h-screen w-[18.75rem] shrink-0 flex-col border-e border-white/[.065] bg-[#06080d]/97 text-slate-300 shadow-2xl shadow-black/30 backdrop-blur-2xl transition-transform duration-200 lg:sticky lg:top-0 lg:translate-x-0 lg:shadow-none ${
         open ? "translate-x-0" : "max-lg:-translate-x-full max-lg:rtl:translate-x-full"
       }`}
     >
       <div className="flex items-center gap-3 border-b border-white/[.065] px-5 py-[1.15rem]">
-        <div className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-indigo-300/20 bg-gradient-to-br from-indigo-400/25 to-sky-500/10 text-sm font-bold text-indigo-200 shadow-[0_0_32px_rgba(99,102,241,.12)]">
-          PO
+        <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-xl border border-blue-300/20 bg-gradient-to-br from-blue-400/30 via-blue-500/15 to-cyan-400/10 text-sm font-bold text-white shadow-[0_0_36px_rgba(79,140,255,.16)]">
+          <span className="absolute inset-x-2 top-2 h-px bg-white/50" /> P
         </div>
         <div className="flex-1">
-          <p className="text-sm font-semibold tracking-[-.01em] text-slate-50 leading-none">{t("app.brand")}</p>
-          <p className="mt-1 text-[10px] uppercase tracking-[.13em] text-slate-500">{t("sidebar.tagline")}</p>
+          <p className="text-[15px] font-semibold tracking-[-.02em] text-white leading-none">Portfolio OS</p>
+          <p className="mt-1.5 text-[9px] font-semibold uppercase tracking-[.22em] text-blue-300/70">Investment Command</p>
         </div>
         <button
           onClick={() => languageStore.set(language === "en" ? "ar" : "en")}
@@ -81,7 +81,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
           href="/import"
           onClick={onNavigate}
           className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-            location.startsWith("/import") ? "border border-indigo-400/15 bg-indigo-400/[.11] text-indigo-200 shadow-[inset_3px_0_0_#818cf8]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
+            location.startsWith("/import") ? "border border-blue-400/15 bg-blue-400/[.10] text-blue-100 shadow-[inset_3px_0_0_#4f8cff]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <UploadCloud size={16} />
@@ -91,7 +91,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
           href="/"
           onClick={onNavigate}
           className={`mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-            dashboardParams ? "border border-indigo-400/15 bg-indigo-400/[.11] text-indigo-200 shadow-[inset_3px_0_0_#818cf8]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
+            dashboardParams ? "border border-blue-400/15 bg-blue-400/[.10] text-blue-100 shadow-[inset_3px_0_0_#4f8cff]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <LayoutDashboard size={16} />
@@ -109,7 +109,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
           href="/data"
           onClick={onNavigate}
           className={`mt-1 flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors ${
-            location.startsWith("/data") ? "border border-indigo-400/15 bg-indigo-400/[.11] text-indigo-200 shadow-[inset_3px_0_0_#818cf8]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
+            location.startsWith("/data") ? "border border-blue-400/15 bg-blue-400/[.10] text-blue-100 shadow-[inset_3px_0_0_#4f8cff]" : "border border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
           }`}
         >
           <Database size={16} />
@@ -163,7 +163,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate: () =>
                   href={href}
                   onClick={onNavigate}
                   className={`mt-1 flex items-center gap-3 rounded-xl border px-3 py-2.5 text-sm font-medium transition-colors ${
-                    isActive ? "border-indigo-400/15 bg-indigo-400/[.11] text-indigo-200 shadow-[inset_3px_0_0_#818cf8]" : "border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
+                    isActive ? "border-blue-400/15 bg-blue-400/[.10] text-blue-100 shadow-[inset_3px_0_0_#4f8cff]" : "border-transparent text-slate-400 hover:bg-white/[.04] hover:text-slate-100"
                   }`}
                 >
                   <Icon size={16} />
