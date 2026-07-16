@@ -79,6 +79,28 @@ describe("runReconciliationSweep â€” manual, user-initiated retroactive pas
     expect(isRetracted(all, excelFact.id)).toBe(false);
   });
 
+  it("does not mistake duplicate projected Trade rows for two genuine executions", async () => {
+    const payload: BuyExecutionPayload = {
+      ticker: "SWEEPPROJECTION",
+      shares: 75,
+      price: 18.2,
+      executionDate: "2026-03-08",
+      executionTime: "11:15",
+    };
+    await trades.save(createTrade({ id: "legacy-projection", portfolioId: PORTFOLIO, ticker: payload.ticker, shares: payload.shares, entryPrice: payload.price, executionDate: payload.executionDate, executionTime: payload.executionTime! }));
+    await trades.save(createTrade({ id: "excel-projection", portfolioId: PORTFOLIO, ticker: payload.ticker, shares: payload.shares, entryPrice: payload.price, executionDate: payload.executionDate, executionTime: payload.executionTime! }));
+    const backfillFact = await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: PORTFOLIO, ticker: payload.ticker, payload }));
+    const excelFact = await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", portfolioId: PORTFOLIO, ticker: payload.ticker, payload }));
+
+    const report = await runReconciliationSweep(repos);
+
+    expect(report.factsRetracted).toBe(1);
+    expect(report.factsSkipped).toBe(0);
+    const all = await rawTransactions.getAll();
+    expect(isRetracted(all, backfillFact.id)).toBe(true);
+    expect(isRetracted(all, excelFact.id)).toBe(false);
+  });
+
   it("is idempotent â€” a second run over the same data reports zero, nothing left to converge", async () => {
     const payload: BuyExecutionPayload = { ticker: "SWEEP2", shares: 50, price: 26.5, executionDate: "2026-03-04" };
     await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: PORTFOLIO, ticker: "SWEEP2", payload }));
