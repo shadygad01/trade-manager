@@ -47,7 +47,15 @@ describe("runReconciliationSweep â€” manual, user-initiated retroactive pas
     expect(report.factsSkipped).toBe(0);
     expect(report.errors).toEqual([]);
     expect(report.perTicker).toEqual([
-      { portfolioId: PORTFOLIO, ticker: "SWEEP1", duplicateGroupsFound: 1, factsRetracted: 1, factsSkipped: 0 },
+      {
+        portfolioId: PORTFOLIO,
+        ticker: "SWEEP1",
+        duplicateGroupsFound: 1,
+        factsRetracted: 1,
+        factsSkipped: 0,
+        officialBrokerDuplicatesRetracted: 1,
+        officialBrokerAllocationsRepaired: 0,
+      },
     ]);
 
     const all = await rawTransactions.getAll();
@@ -188,7 +196,15 @@ describe("runReconciliationSweep â€” manual, user-initiated retroactive pas
     expect(report.errors[0]).toEqual({ portfolioId: PORTFOLIO, ticker: "SWEEPERR", message: "simulated transient read failure" });
 
     const okResult = report.perTicker.find((r) => r.ticker === "SWEEPOK");
-    expect(okResult).toEqual({ portfolioId: PORTFOLIO, ticker: "SWEEPOK", duplicateGroupsFound: 1, factsRetracted: 1, factsSkipped: 0 });
+    expect(okResult).toEqual({
+      portfolioId: PORTFOLIO,
+      ticker: "SWEEPOK",
+      duplicateGroupsFound: 1,
+      factsRetracted: 1,
+      factsSkipped: 0,
+      officialBrokerDuplicatesRetracted: 1,
+      officialBrokerAllocationsRepaired: 0,
+    });
   });
 
   /**

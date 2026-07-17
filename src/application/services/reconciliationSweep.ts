@@ -44,6 +44,8 @@ export interface ReconciliationSweepTickerResult {
   duplicateGroupsFound: number;
   factsRetracted: number;
   factsSkipped: number;
+  officialBrokerDuplicatesRetracted: number;
+  officialBrokerAllocationsRepaired: number;
   error?: string;
   /** `err.name`/`err.stack`/`err.cause`, captured only on failure — surfaced directly in the panel so pinning down a real browser-only failure (e.g. Dexie's own "Transaction committed too early") doesn't require the user to dig through DevTools themselves. */
   errorDetail?: string;
@@ -54,6 +56,8 @@ export interface ReconciliationSweepReport {
   duplicateGroupsFound: number;
   factsRetracted: number;
   factsSkipped: number;
+  officialBrokerDuplicatesRetracted: number;
+  officialBrokerAllocationsRepaired: number;
   errors: { portfolioId: string; ticker: string; message: string }[];
   perTicker: ReconciliationSweepTickerResult[];
 }
@@ -148,17 +152,17 @@ async function commitTickerWithRetry(
   portfolioId: string,
   ticker: string,
   diagnostics?: DiagnosticsRecorder,
-): Promise<void> {
+): ReturnType<typeof commitTicker> {
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      await commitTicker(repos, portfolioId, ticker, diagnostics, { repairOfficialBrokerAllocations: true });
-      return;
+      return await commitTicker(repos, portfolioId, ticker, diagnostics, { repairOfficialBrokerAllocations: true });
     } catch (err) {
       if (attempt === maxAttempts || !isTransientDexieCommitRace(err)) throw err;
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
   }
+  throw new Error(`Reconciliation retry loop exhausted for ${ticker}.`);
 }
 
 export async function runReconciliationSweep(
@@ -180,7 +184,7 @@ export async function runReconciliationSweep(
       // trades/allocations access, so its twin-lot guard applies exactly as
       // it would in normal operation). Wrapped with a narrow, same-error-only
       // retry — see commitTickerWithRetry's doc comment.
-      await commitTickerWithRetry(repos, portfolioId, ticker, diagnostics);
+      const repair = await commitTickerWithRetry(repos, portfolioId, ticker, diagnostics);
 
       const after = await repos.rawTransactions.getAll();
       let factsRetracted = 0;
@@ -195,7 +199,15 @@ export async function runReconciliationSweep(
         if (stillLive.length > 1) factsSkipped += stillLive.length;
       }
 
-      perTicker.push({ portfolioId, ticker, duplicateGroupsFound: groupsBefore.length, factsRetracted, factsSkipped });
+      perTicker.push({
+        portfolioId,
+        ticker,
+        duplicateGroupsFound: groupsBefore.length,
+        factsRetracted,
+        factsSkipped,
+        officialBrokerDuplicatesRetracted: repair.officialBrokerDuplicatesRetracted,
+        officialBrokerAllocationsRepaired: repair.officialBrokerAllocationsRepaired,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       errors.push({ portfolioId, ticker, message });
@@ -205,6 +217,8 @@ export async function runReconciliationSweep(
         duplicateGroupsFound: 0,
         factsRetracted: 0,
         factsSkipped: 0,
+        officialBrokerDuplicatesRetracted: 0,
+        officialBrokerAllocationsRepaired: 0,
         error: message,
         errorDetail: describeError(err),
       });
@@ -216,6 +230,14 @@ export async function runReconciliationSweep(
     duplicateGroupsFound: perTicker.reduce((sum, r) => sum + r.duplicateGroupsFound, 0),
     factsRetracted: perTicker.reduce((sum, r) => sum + r.factsRetracted, 0),
     factsSkipped: perTicker.reduce((sum, r) => sum + r.factsSkipped, 0),
+    officialBrokerDuplicatesRetracted: perTicker.reduce(
+      (sum, r) => sum + r.officialBrokerDuplicatesRetracted,
+      0,
+    ),
+    officialBrokerAllocationsRepaired: perTicker.reduce(
+      (sum, r) => sum + r.officialBrokerAllocationsRepaired,
+      0,
+    ),
     errors,
     perTicker,
   };

@@ -43,7 +43,14 @@ export function ReconciliationSweepPanel() {
     }
   }
 
-  const rowsToShow = report?.perTicker.filter((r) => r.duplicateGroupsFound > 0 || r.error) ?? [];
+  const rowsToShow =
+    report?.perTicker.filter(
+      (r) =>
+        r.duplicateGroupsFound > 0 ||
+        r.officialBrokerDuplicatesRetracted > 0 ||
+        r.officialBrokerAllocationsRepaired > 0 ||
+        r.error,
+    ) ?? [];
 
   return (
     <div className="space-y-4 rounded-md border border-cyan-700/50 bg-cyan-950/20 p-4">
@@ -67,11 +74,13 @@ export function ReconciliationSweepPanel() {
 
       {report ? (
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-7">
             <Stat label="tickers scanned" value={report.tickersScanned} />
             <Stat label="duplicate groups found" value={report.duplicateGroupsFound} />
             <Stat label="facts retracted" value={report.factsRetracted} tone="text-emerald-400" />
             <Stat label="facts skipped" value={report.factsSkipped} tone="text-amber-400" />
+            <Stat label="broker duplicates removed" value={report.officialBrokerDuplicatesRetracted} tone="text-emerald-400" />
+            <Stat label="sell allocations repaired" value={report.officialBrokerAllocationsRepaired} tone="text-emerald-400" />
             <Stat label="errors" value={report.errors.length} tone={report.errors.length > 0 ? "text-rose-400" : undefined} />
           </div>
 
@@ -85,6 +94,8 @@ export function ReconciliationSweepPanel() {
                     <th className="py-1 pr-3">duplicate groups</th>
                     <th className="py-1 pr-3">retracted</th>
                     <th className="py-1 pr-3">skipped</th>
+                    <th className="py-1 pr-3">broker duplicates removed</th>
+                    <th className="py-1 pr-3">sell allocations repaired</th>
                     <th className="py-1 pr-3">error</th>
                   </tr>
                 </thead>
@@ -96,6 +107,8 @@ export function ReconciliationSweepPanel() {
                       <td className="py-1 pr-3">{r.duplicateGroupsFound}</td>
                       <td className="py-1 pr-3 text-emerald-400">{r.factsRetracted}</td>
                       <td className="py-1 pr-3 text-amber-400">{r.factsSkipped}</td>
+                      <td className="py-1 pr-3 text-emerald-400">{r.officialBrokerDuplicatesRetracted}</td>
+                      <td className="py-1 pr-3 text-emerald-400">{r.officialBrokerAllocationsRepaired}</td>
                       <td className="py-1 pr-3 text-rose-400">{r.error ?? "—"}</td>
                     </tr>
                   ))}
