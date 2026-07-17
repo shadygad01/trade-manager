@@ -158,9 +158,11 @@ export async function commitTicker(
   ticker: string,
   diagnostics?: DiagnosticsRecorder,
   options?: { repairOfficialBrokerAllocations?: boolean },
-): Promise<void> {
+): Promise<{ officialBrokerDuplicatesRetracted: number; officialBrokerAllocationsRepaired: number }> {
   const normalizedTicker = normalizeTicker(ticker);
   const correlationId = generateId();
+  let officialBrokerDuplicatesRetracted = 0;
+  let officialBrokerAllocationsRepaired = 0;
 
   // Phase 9.8: when the caller's repos bundle carries the legacy tables (the
   // app's real singleton always does; bare CommitEngineRepos test bundles
@@ -182,6 +184,14 @@ export async function commitTicker(
     }
   }
 
+  if (options?.repairOfficialBrokerAllocations) {
+    officialBrokerDuplicatesRetracted = await convergeOfficialBrokerAuthority(
+      repos,
+      portfolioId,
+      normalizedTicker,
+    );
+  }
+
   // Converges any live facts of this ticker left duplicated by a writer
   // other than Import's own duplicateMatch/upgradeFact path — most notably
   // ensureLegacyFactsExist just above, which has no reconciliation step of
@@ -196,7 +206,11 @@ export async function commitTicker(
   }
 
   if (options?.repairOfficialBrokerAllocations) {
-    await repairOfficialBrokerSellAllocations(repos, portfolioId, normalizedTicker);
+    officialBrokerAllocationsRepaired = await repairOfficialBrokerSellAllocations(
+      repos,
+      portfolioId,
+      normalizedTicker,
+    );
   }
 
   const relevant = await relevantTradeTransactions(repos, portfolioId, normalizedTicker);
@@ -293,6 +307,7 @@ export async function commitTicker(
   const transactionRunner = (repos as CommitEngineRepos & { runInTransaction?: <T>(work: () => Promise<T>) => Promise<T> }).runInTransaction;
   if (transactionRunner) await transactionRunner(writeProjection);
   else await writeProjection();
+  return { officialBrokerDuplicatesRetracted, officialBrokerAllocationsRepaired };
 }
 
 /**
@@ -595,6 +610,63 @@ function lotWasOpenBeforeSell(buy: BuyExecutionPayload, sell: SellExecutionPaylo
   const buyMinutes = parseTimeToMinutes(buy.executionTime ?? "");
   const sellMinutes = parseTimeToMinutes(sell.executionTime ?? "");
   return buyMinutes === undefined || sellMinutes === undefined || buyMinutes <= sellMinutes;
+}
+
+/**
+ * The broker workbook is authoritative for each execution it contains.
+ * Older clients can also represent that same execution as a derived
+ * legacy/backfill fact. The generic reconciler deliberately preserves
+ * ambiguous twin lots, but retaining a lower-authority copy beside an
+ * official fact counts one real execution twice.
+ *
+ * Only lower-authority facts with a matching official canonical execution
+ * are retracted. Unmatched backfills remain live, preserving genuine opening
+ * inventory from before the workbook's date range.
+ */
+export async function convergeOfficialBrokerAuthority(
+  repos: CommitEngineRepos,
+  portfolioId: string,
+  ticker: string,
+): Promise<number> {
+  const normalized = normalizeTicker(ticker);
+  const all = await repos.rawTransactions.getAll();
+  const liveHere = all.filter((transaction) => {
+    if (transaction.kind !== "BuyExecution" && transaction.kind !== "SellExecution") return false;
+    if (isRetracted(all, transaction.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(all, transaction);
+    return (
+      resolvedTicker !== undefined &&
+      normalizeTicker(resolvedTicker) === normalized &&
+      resolveCurrentPortfolioId(all, transaction) === portfolioId
+    );
+  }) as (RawTransaction & { payload: BuyExecutionPayload | SellExecutionPayload })[];
+
+  const keyFor = (transaction: (typeof liveHere)[number]) =>
+    transaction.kind === "BuyExecution"
+      ? buyKey(normalized, transaction.payload as BuyExecutionPayload)
+      : sellKey(normalized, transaction.payload as SellExecutionPayload);
+  const officialKeys = new Set(
+    liveHere
+      .filter((transaction) => transaction.source === "official-broker-excel")
+      .map(keyFor),
+  );
+
+  let retracted = 0;
+  for (const transaction of liveHere) {
+    if (transaction.source === "official-broker-excel" || !officialKeys.has(keyFor(transaction))) continue;
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        kind: "Retraction",
+        source: "manual",
+        payload: {
+          targetId: transaction.id,
+          reason: "Repair: official broker execution supersedes its derived legacy/backfill duplicate.",
+        },
+      }),
+    );
+    retracted += 1;
+  }
+  return retracted;
 }
 
 /**

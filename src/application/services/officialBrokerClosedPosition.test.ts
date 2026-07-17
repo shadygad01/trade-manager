@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import type { ParsedTradeCandidate } from "@domain/entities/Upload";
-import type { SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
+import { createRawTransaction, type SellAllocationDecisionPayload } from "@domain/entities/RawTransaction";
 import {
   createFakeCommittedLedgerRepository,
   createFakeRawTransactionRepository,
@@ -178,5 +178,64 @@ describe("official broker closed-position import", () => {
     const factCountAfterRepair = all.length;
     await commitTicker(repos, portfolioId, ticker, undefined, { repairOfficialBrokerAllocations: true });
     expect((await repos.rawTransactions.getAll()).length).toBe(factCountAfterRepair);
+  });
+
+  it("removes lower-authority legacy copies before repairing the official closed position", async () => {
+    const base = createFakeRepositories({
+      portfolios: [createPortfolio({ id: portfolioId, name: "Old School", kind: "Investment", initialCash: 100_000 })],
+    });
+    const repos = {
+      ...base,
+      rawTransactions: createFakeRawTransactionRepository(),
+      committedLedger: createFakeCommittedLedgerRepository(),
+    } as AppRepositories & CommitEngineRepos;
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "upload-official-with-backfills",
+      candidates: candidates.map((item, index) => ({ key: `official-${index}`, candidate: item })),
+      verifications: [],
+      dividends: [],
+      orderEvidences: [],
+      cancelledOrders: [],
+    });
+    await assignPortfolio(repos, ticker, portfolioId, undefined, { deferCommit: true });
+
+    for (const [index, item] of candidates.entries()) {
+      await repos.rawTransactions.append(
+        createRawTransaction({
+          id: `legacy-copy-${index}`,
+          kind: item.side === "BUY" ? "BuyExecution" : "SellExecution",
+          source: "backfill",
+          portfolioId,
+          ticker,
+          payload: {
+            ticker,
+            shares: item.shares,
+            price: item.price,
+            executionDate: item.date,
+            executionTime: item.time,
+          },
+        }),
+      );
+    }
+
+    const result = await commitTicker(repos, portfolioId, ticker, undefined, {
+      repairOfficialBrokerAllocations: true,
+    });
+    expect(result.officialBrokerDuplicatesRetracted).toBe(candidates.length);
+    expect(result.officialBrokerAllocationsRepaired).toBe(4);
+    expect(
+      (await repos.trades.getByPortfolio(portfolioId)).reduce(
+        (sum, trade) => sum + trade.remainingShares,
+        0,
+      ),
+    ).toBe(0);
+
+    const second = await commitTicker(repos, portfolioId, ticker, undefined, {
+      repairOfficialBrokerAllocations: true,
+    });
+    expect(second).toEqual({
+      officialBrokerDuplicatesRetracted: 0,
+      officialBrokerAllocationsRepaired: 0,
+    });
   });
 });
