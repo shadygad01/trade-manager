@@ -23,8 +23,9 @@ function candidate(
   price: number,
   date: string,
   time: string,
+  candidateTicker = ticker,
 ): ParsedTradeCandidate {
-  return { ticker, side, shares, price, date, time, confidence: "high", source: "official-broker-excel" };
+  return { ticker: candidateTicker, side, shares, price, date, time, confidence: "high", source: "official-broker-excel" };
 }
 
 const candidates = [
@@ -43,6 +44,16 @@ const candidates = [
   candidate("BUY", 270, 1.16, "2022-10-16", "11:54AM"),
   candidate("BUY", 199, 1.16, "2022-10-16", "10:49AM"),
   candidate("BUY", 1000, 1.18, "2022-10-16", "10:03AM"),
+];
+
+const egasCandidates = [
+  candidate("BUY", 100, 38.62, "2023-01-25", "2:13PM", "EGAS"),
+  candidate("BUY", 50, 38.6, "2023-01-29", "11:28AM", "EGAS"),
+  candidate("BUY", 60, 38, "2023-01-30", "10:52AM", "EGAS"),
+  candidate("BUY", 50, 38, "2023-01-30", "11:05AM", "EGAS"),
+  candidate("SELL", 50, 37.71, "2023-01-30", "11:59AM", "EGAS"),
+  candidate("SELL", 100, 37.71, "2023-01-30", "12:00PM", "EGAS"),
+  candidate("SELL", 110, 37.71, "2023-01-30", "12:01PM", "EGAS"),
 ];
 
 describe("official broker closed-position import", () => {
@@ -285,5 +296,69 @@ describe("official broker closed-position import", () => {
       officialBrokerAllocationsRepaired: 0,
     });
     expect((await repos.rawTransactions.getAll()).length).toBe(countBefore);
+  });
+
+  it("closes EGAS when legacy facts aggregate the same broker day at different shares and prices", async () => {
+    const egas = "EGAS";
+    const base = createFakeRepositories({
+      portfolios: [createPortfolio({ id: portfolioId, name: "Old School", kind: "Investment", initialCash: 100_000 })],
+    });
+    const repos = {
+      ...base,
+      rawTransactions: createFakeRawTransactionRepository(),
+      committedLedger: createFakeCommittedLedgerRepository(),
+    } as AppRepositories & CommitEngineRepos;
+    await recordImportedRawTransactions(repos, {
+      sourceUploadId: "upload-egas",
+      candidates: egasCandidates.map((item, index) => ({ key: `egas-${index}`, candidate: item })),
+      verifications: [],
+      dividends: [],
+      orderEvidences: [],
+      cancelledOrders: [],
+    });
+    await assignPortfolio(repos, egas, portfolioId, undefined, { deferCommit: true });
+    for (const fact of [
+      createRawTransaction({
+        id: "egas-legacy-buy-remainder",
+        kind: "BuyExecution",
+        source: "backfill",
+        portfolioId,
+        ticker: egas,
+        payload: {
+          ticker: egas,
+          shares: 10,
+          price: 38.01,
+          executionDate: "2023-01-30",
+          executionTime: "10:52AM",
+        },
+      }),
+      createRawTransaction({
+        id: "egas-legacy-sell-aggregate",
+        kind: "SellExecution",
+        source: "backfill",
+        portfolioId,
+        ticker: egas,
+        payload: {
+          ticker: egas,
+          shares: 260,
+          price: 37.7,
+          executionDate: "2023-01-30",
+          executionTime: "12:01PM",
+        },
+      }),
+    ]) {
+      await repos.rawTransactions.append(fact);
+    }
+
+    const result = await commitTicker(repos, portfolioId, egas, undefined, {
+      repairOfficialBrokerAllocations: true,
+    });
+    expect(result.officialBrokerDuplicatesRetracted).toBe(2);
+    expect(result.officialBrokerAllocationsRepaired).toBe(3);
+    expect(
+      (await repos.trades.getByPortfolio(portfolioId))
+        .filter((trade) => trade.ticker === egas)
+        .reduce((sum, trade) => sum + trade.remainingShares, 0),
+    ).toBe(0);
   });
 });

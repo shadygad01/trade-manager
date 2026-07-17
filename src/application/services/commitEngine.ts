@@ -639,20 +639,15 @@ async function findOfficialBrokerDuplicateIds(
     );
   }) as (RawTransaction & { payload: BuyExecutionPayload | SellExecutionPayload })[];
 
-  // Legacy projection facts can represent only the still-open remainder of
-  // an original execution, so their share count may be smaller than the
-  // authoritative broker row. Match dominance on side/date/price; the
-  // official workbook still preserves every genuine same-price fill as its
-  // own fact, while a projected remainder must not survive as a new trade.
+  // Legacy projection facts can represent a partial remainder or an
+  // aggregate allocation, so both their share count and price can differ
+  // from the authoritative execution rows. The broker workbook enumerates
+  // every fill for that side/ticker/day; therefore a lower-authority fact on
+  // the same side/day is derived overlap, while unmatched earlier dates
+  // remain available as genuine opening inventory.
   const keyFor = (transaction: (typeof liveHere)[number]) => {
     const payload = transaction.payload as BuyExecutionPayload | SellExecutionPayload;
-    return canonicalKey({
-      side: transaction.kind === "BuyExecution" ? "BUY" : "SELL",
-      ticker: normalized,
-      date: payload.executionDate,
-      shares: 0,
-      price: payload.price,
-    });
+    return `${transaction.kind}|${normalized}|${payload.executionDate}`;
   };
   const officialKeys = new Set(
     liveHere
