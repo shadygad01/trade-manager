@@ -2672,3 +2672,53 @@ exact shape (a Dividend-only ticker DIVX queued behind a Sell-broken ticker BADY
 confirms it fails (times out — DIVX's dividend never appears) against the pre-fix commit (`1102c05`)
 and passes with this session's fix. No additional code changes were needed — the same isolation already
 closes this case. 1092 tests total (2 new across both regression files); `tsc --noEmit`/`arch:check` clean.
+
+**Correction, same session — the import-isolation fix above was NOT the actual cause of the original
+closed-positions report.** User pushed back: the Import page was already empty (every ticker fully
+distributed, nothing pending) for the tickers still wrongly showing open — ruling out the batch-abort
+theory entirely for those specific tickers, since there was no stuck queue to unblock. Told not to reply
+again without concrete verification. Re-investigated `canonicalHoldings.ts` directly instead of guessing
+further, and reproduced a second, independent, and more fundamental bug with a synthetic fixture (real
+committed Buy + a real, fully-covering `SellAllocationDecision` in the canonical ledger, but a
+deliberately stale legacy `Trade.remainingShares` left at its original value, simulating exactly what a
+legacy-projection staleness bug — e.g. the reconcileDuplicateAuthority/reconciliationSweep class from
+Sprint 16/17 — leaves behind): `computeCanonicalPositions` still returned the ticker as an OPEN
+`legacy-fallback` position with the full stale share count.
+
+**Root cause**: `tryComputeCanonicalByTicker` called `computeHoldings(events, allocations, priceMap)` for
+every ticker with any RawTransaction fact, and only ever recorded a map entry when `computeHoldings`
+returned a holding. A ticker whose canonical ledger correctly computed ZERO open shares (every lot fully
+allocated) produced no holding — structurally indistinguishable, in the resulting map, from a ticker that
+had never reached the canonical ledger at all. Both cases hit `computeCanonicalPositions`'s `!canonical`
+branch and fell back to whatever the legacy `Trade` row said, no matter how stale.
+
+**The fix**: `tryComputeCanonicalByTicker` now checks `events.length === 0` first (unchanged
+"never committed" case, still legacy-fallback, still covered by this file's own first test) — but when
+real committed ledger events exist and `computeHoldings` nets them to nothing, it now records an explicit
+`CLOSED` sentinel instead of silently omitting the ticker. `computeCanonicalPositions` checks for `CLOSED`
+before every other branch and skips the ticker entirely (nothing to show for a closed position), trusting
+the canonical verdict over a possibly-stale legacy row. Deliberately narrow: a canonical verdict of
+"closed" requires a real, committed `SellAllocationDecision` fact — a Sell can only ever reduce canonical
+shares, never invent them, so this is asymmetrically more trustworthy than an open-vs-open share-count
+disagreement (left untouched — still legacy-first, per the existing third test) or the "never computed"
+case (also left untouched, per the existing first test).
+
+**Verified**: new test in `canonicalHoldings.test.ts` — a ticker with a real committed Buy (legacy Trade
+still showing 50 shares open) and a real committed canonical allocation fully closing those same 50 shares
+— confirmed to return no Holdings row for the ticker. Confirmed to fail against the pre-fix code (returned
+`legacy-fallback` / 50 shares) before the fix existed, and pass after. All 3 pre-existing tests in the same
+file still pass unchanged, including the one this fix was most at risk of regressing (a ticker with a real
+Trade but zero canonical ledger events still correctly stays `legacy-fallback`, never silently dropped).
+Full suite: 1093 tests (1 new; same 2 pre-existing unrelated failures noted above); `tsc --noEmit`/
+`arch:check` clean.
+- **Files modified**: `src/application/services/canonicalHoldings.ts`,
+  `src/application/services/canonicalHoldings.test.ts` (1 new test).
+- **Deliberately NOT done, and why**: not verified against the user's real production data (no access to
+  their browser/IndexedDB in this sandboxed session) — this ships the fix, verified against a faithful
+  synthetic reproduction of the reported bug shape (a stale legacy Trade next to a confidently-closed
+  canonical ledger), for the user to confirm resolves their specific tickers once deployed. If any of the
+  user's affected tickers are STILL showing open after this ships, that would mean the canonical ledger
+  itself hasn't reached a "confidently closed" state for them yet (e.g. a missing/uncommitted
+  SellAllocationDecision, or a duplicate-authority pair the reconciliation sweep hasn't converged) rather
+  than this specific display-layer bug — worth checking the Diagnostics Center's `TickerAuthorityPanel`/
+  `ReconciliationSweepPanel` for those tickers next.

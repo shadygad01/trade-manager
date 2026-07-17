@@ -89,4 +89,42 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
     expect(hrho.totalShares).toBe(50); // the recorded trade's own number, never silently replaced
     expect(hrho.fallbackReason).toContain("disagrees");
   });
+
+  it("a ticker the canonical ledger has confidently closed (real committed Buy + a fully-covering Sell allocation) never shows as open, even when a stale legacy Trade row still has shares", async () => {
+    // Real user-reported bug: closed positions kept showing as open Holdings
+    // despite the sell having been fully allocated. Root cause — a canonical
+    // ledger that correctly computed zero open shares was indistinguishable,
+    // in computeCanonicalPositions, from a ticker that simply never reached
+    // the canonical ledger at all; both cases fell back to whatever the
+    // legacy Trade row said, silently trusting a stale remainingShares that
+    // a legacy-projection bug never reduced (see the reconcileDuplicateAuthority/
+    // reconciliationSweep sprints for the class of bug that leaves this kind
+    // of staleness behind).
+    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Investment", initialCash: 100_000 });
+    const base = createFakeRepositories({ portfolios: [portfolio] });
+    const rawTransactions = createFakeRawTransactionRepository();
+    const committedLedger = createFakeCommittedLedgerRepository();
+    const repos = { ...base, rawTransactions, committedLedger };
+
+    // Legacy Trade row is stale: still shows all 50 shares open, as if the
+    // sell's allocation never reduced remainingShares.
+    await recordBuy(repos, { portfolioId: "p1", ticker: "SKPC", shares: 50, entryPrice: 14.7, executionDate: "2026-01-20", executionTime: "12:00" });
+
+    // The canonical ledger, however, has real committed facts proving the
+    // position is fully closed: the lot opened, and a real allocation
+    // closing every one of its shares.
+    const eventId = "SKPC|BUY|2026-01-20|50|14.7";
+    await committedLedger.commitTicker({
+      portfolioId: "p1",
+      ticker: "SKPC",
+      events: [{ type: "LotOpened", eventId, executionDate: "2026-01-20", ticker: "SKPC", shares: 50, price: 14.7, sourceTransactionIds: ["x"] }],
+      allocations: [
+        { id: "a1", lotEventId: eventId, sellEventId: "y", shares: 50, price: 16, fees: 0, taxes: 0, executionDate: "2026-02-01" },
+      ],
+    });
+
+    const positions = await computeCanonicalPositions(repos, "p1", {});
+
+    expect(positions.find((p) => p.ticker === "SKPC")).toBeUndefined();
+  });
 });
