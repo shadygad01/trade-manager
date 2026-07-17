@@ -18,7 +18,7 @@ import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
 import { ensureLegacyFactsExist, projectLegacyTicker, type LegacyLedgerRepos } from "./ledgerProjection";
 import { canonicalKey } from "./ledgerRebuild";
 import { authorityRank } from "./evidenceAuthority";
-import { timesConflict } from "./duplicateDetection";
+import { parseTimeToMinutes, timesConflict } from "./duplicateDetection";
 
 /**
  * Commit Engine: the only code path that ever writes to ledgerCache /
@@ -156,7 +156,8 @@ export async function commitTicker(
   repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
   portfolioId: string,
   ticker: string,
-  diagnostics?: DiagnosticsRecorder
+  diagnostics?: DiagnosticsRecorder,
+  options?: { repairOfficialBrokerAllocations?: boolean },
 ): Promise<void> {
   const normalizedTicker = normalizeTicker(ticker);
   const correlationId = generateId();
@@ -192,6 +193,10 @@ export async function commitTicker(
     await reconcileDuplicateAuthority(projection ?? repos, normalizedTicker);
   } catch (err) {
     console.error("reconcileDuplicateAuthority failed — continuing commit with facts as-is:", err);
+  }
+
+  if (options?.repairOfficialBrokerAllocations) {
+    await repairOfficialBrokerSellAllocations(repos, portfolioId, normalizedTicker);
   }
 
   const relevant = await relevantTradeTransactions(repos, portfolioId, normalizedTicker);
@@ -552,6 +557,201 @@ export async function retractRawTransaction(
  * has none — there is no `WriterContext`-carrying choke point available at
  * this recursion depth that doesn't reintroduce the same hazard.
  */
+function executionOrder(
+  a: RawTransaction & { payload: BuyExecutionPayload | SellExecutionPayload },
+  b: RawTransaction & { payload: BuyExecutionPayload | SellExecutionPayload },
+): number {
+  const ap = a.payload;
+  const bp = b.payload;
+  const byDate = ap.executionDate.localeCompare(bp.executionDate);
+  if (byDate !== 0) return byDate;
+  const aMinutes = parseTimeToMinutes(ap.executionTime ?? "") ?? 0;
+  const bMinutes = parseTimeToMinutes(bp.executionTime ?? "") ?? 0;
+  return aMinutes - bMinutes || a.seq - b.seq;
+}
+
+function buyKey(ticker: string, payload: BuyExecutionPayload): string {
+  return canonicalKey({
+    side: "BUY",
+    ticker,
+    date: payload.executionDate,
+    shares: payload.shares,
+    price: payload.price,
+  });
+}
+
+function sellKey(ticker: string, payload: SellExecutionPayload): string {
+  return canonicalKey({
+    side: "SELL",
+    ticker,
+    date: payload.executionDate,
+    shares: payload.shares,
+    price: payload.price,
+  });
+}
+
+function lotWasOpenBeforeSell(buy: BuyExecutionPayload, sell: SellExecutionPayload): boolean {
+  if (buy.executionDate !== sell.executionDate) return buy.executionDate < sell.executionDate;
+  const buyMinutes = parseTimeToMinutes(buy.executionTime ?? "");
+  const sellMinutes = parseTimeToMinutes(sell.executionTime ?? "");
+  return buyMinutes === undefined || sellMinutes === undefined || buyMinutes <= sellMinutes;
+}
+
+/**
+ * Rebuilds the allocation decisions for official broker Excel sells using
+ * the same strict-FIFO policy Import uses. This is deliberately narrow:
+ * non-broker sells keep their explicit user decisions untouched. The repair
+ * makes the immutable fact log self-healing when an older client marked an
+ * Import row complete even though its SellAllocationDecision write failed,
+ * or when a later provenance cleanup left that decision orphaned.
+ */
+export async function repairOfficialBrokerSellAllocations(
+  repos: CommitEngineRepos,
+  portfolioId: string,
+  ticker: string,
+): Promise<number> {
+  const normalized = normalizeTicker(ticker);
+  const all = await repos.rawTransactions.getAll();
+  const belongsHere = (transaction: RawTransaction) => {
+    if (isRetracted(all, transaction.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(all, transaction);
+    return (
+      resolvedTicker !== undefined &&
+      normalizeTicker(resolvedTicker) === normalized &&
+      resolveCurrentPortfolioId(all, transaction) === portfolioId
+    );
+  };
+
+  const buys = all
+    .filter(
+      (transaction): transaction is RawTransaction & { payload: BuyExecutionPayload } =>
+        transaction.kind === "BuyExecution" && belongsHere(transaction),
+    )
+    .sort(executionOrder);
+  const sells = all
+    .filter(
+      (transaction): transaction is RawTransaction & { payload: SellExecutionPayload } =>
+        transaction.kind === "SellExecution" && belongsHere(transaction),
+    )
+    .sort(executionOrder);
+  if (!sells.some((sell) => sell.source === "official-broker-excel")) return 0;
+
+  const decisions = all.filter(
+    (transaction): transaction is RawTransaction & { payload: SellAllocationDecisionPayload } =>
+      transaction.kind === "SellAllocationDecision" && belongsHere(transaction),
+  );
+  const buyByRef = new Map<string, (typeof buys)[number]>();
+  for (const buy of buys) {
+    buyByRef.set(buy.id, buy);
+    const key = buyKey(normalized, buy.payload);
+    if (!buyByRef.has(key)) buyByRef.set(key, buy);
+  }
+  const sellByRef = new Map<string, (typeof sells)[number]>();
+  for (const sell of sells) {
+    sellByRef.set(sell.id, sell);
+    const key = sellKey(normalized, sell.payload);
+    if (!sellByRef.has(key)) sellByRef.set(key, sell);
+  }
+  const decisionsBySell = new Map<string, (typeof decisions)[number][]>();
+  for (const decision of decisions) {
+    const sell = sellByRef.get(decision.payload.sellExecutionId);
+    if (!sell) continue;
+    const list = decisionsBySell.get(sell.id) ?? [];
+    list.push(decision);
+    decisionsBySell.set(sell.id, list);
+  }
+
+  const remainingByBuy = new Map(buys.map((buy) => [buy.id, buy.payload.shares]));
+  let changed = 0;
+
+  for (const sell of sells) {
+    const existing = decisionsBySell.get(sell.id) ?? [];
+    if (sell.source !== "official-broker-excel") {
+      for (const decision of existing) {
+        for (const allocation of decision.payload.allocations) {
+          const buy = buyByRef.get(allocation.lotRef);
+          if (!buy) continue;
+          const remaining = remainingByBuy.get(buy.id) ?? 0;
+          if (allocation.shares <= remaining) {
+            remainingByBuy.set(buy.id, remaining - allocation.shares);
+          }
+        }
+      }
+      continue;
+    }
+
+    let remainingToAllocate = sell.payload.shares;
+    const desired: SellAllocationDecisionPayload["allocations"] = [];
+    const reserved: { buyId: string; shares: number }[] = [];
+    for (const buy of buys) {
+      if (remainingToAllocate <= 0) break;
+      if (!lotWasOpenBeforeSell(buy.payload, sell.payload)) continue;
+      const available = remainingByBuy.get(buy.id) ?? 0;
+      if (available <= 0) continue;
+      const shares = Math.min(available, remainingToAllocate);
+      desired.push({ lotRef: buy.id, shares });
+      reserved.push({ buyId: buy.id, shares });
+      remainingByBuy.set(buy.id, available - shares);
+      remainingToAllocate -= shares;
+    }
+    // Never invent a partial repair for an over-sell or a history whose
+    // opening inventory is genuinely missing. Leave its existing decision
+    // untouched and surface the unresolved position honestly.
+    if (remainingToAllocate > 0) {
+      for (const reservation of reserved) {
+        remainingByBuy.set(
+          reservation.buyId,
+          (remainingByBuy.get(reservation.buyId) ?? 0) + reservation.shares,
+        );
+      }
+      continue;
+    }
+
+    const existingNormalized = existing.flatMap((decision) =>
+      decision.payload.allocations.flatMap((allocation) => {
+        const buy = buyByRef.get(allocation.lotRef);
+        return buy ? [{ lotRef: buy.id, shares: allocation.shares }] : [];
+      }),
+    );
+    const alreadyCorrect =
+      existing.length === 1 &&
+      existingNormalized.length === desired.length &&
+      existingNormalized.every(
+        (allocation, index) =>
+          allocation.lotRef === desired[index].lotRef && allocation.shares === desired[index].shares,
+      );
+    if (alreadyCorrect) continue;
+
+    for (const decision of existing) {
+      await repos.rawTransactions.append(
+        createRawTransaction({
+          kind: "Retraction",
+          source: "manual",
+          payload: {
+            targetId: decision.id,
+            reason: "Repair: rebuilt official broker sell allocation from authoritative execution history.",
+          },
+        }),
+      );
+    }
+    if (desired.length > 0) {
+      await repos.rawTransactions.append(
+        createRawTransaction({
+          id: `${generateId()}|broker-allocation-repair`,
+          kind: "SellAllocationDecision",
+          source: "manual",
+          portfolioId,
+          ticker: normalized,
+          payload: { sellExecutionId: sell.id, allocations: desired },
+        }),
+      );
+    }
+    changed += 1;
+  }
+
+  return changed;
+}
+
 export async function reconcileDuplicateAuthority(
   repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
   ticker: string

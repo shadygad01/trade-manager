@@ -159,7 +159,7 @@ describe("Bulk Confirm & Distribute: one unresolvable ticker must not block its 
     await waitFor(
       async () => {
         const trades = await dataModule.repos.trades.getByPortfolio("p1");
-        expect(trades.some((t) => t.ticker === "GOOD1")).toBe(true);
+        expect(trades.find((t) => t.ticker === "GOOD1")?.remainingShares).toBe(0);
       },
       { timeout: 8000 },
     );

@@ -1551,6 +1551,7 @@ export function ImportPage() {
             executionTime: entry.candidate.time ?? "00:00",
             transactionNumber: entry.candidate.transactionNumber,
             source: entry.candidate.source,
+            deferCommit: true,
           },
           diagnostics,
         );
@@ -1581,7 +1582,7 @@ export function ImportPage() {
 
     // All Buy/assignment facts above are durable now and were appended without
     // triggering the expensive full ticker projection. Rebuild exactly once.
-    await commitTicker(repos, portfolioId, ticker, diagnostics);
+    await commitTicker(repos, portfolioId, ticker, diagnostics, { repairOfficialBrokerAllocations: true });
     importSession.update((prev) => ({
       ...prev,
       addedKeys: [...new Set([...prev.addedKeys, ...batchState.addedKeys])],
