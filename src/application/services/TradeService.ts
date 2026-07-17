@@ -728,6 +728,10 @@ export interface RecordSellInput {
    * manual entry), where "manual" is the correct, real answer.
    */
   source?: RawTransactionSource;
+  /** Batch imports rebuild once after every sell is recorded. Deferring the
+   * reactive per-fact commit prevents an intermediate replay from treating
+   * later, still-unallocated broker sells as missing decisions. */
+  deferCommit?: boolean;
 }
 
 export interface RecordSellResult {
@@ -1016,7 +1020,8 @@ async function ensureSellFacts(
       repos,
       createRawTransaction({ id: sellGroupId, kind: "SellExecution", source: input.source ?? "manual", portfolioId: input.portfolioId, ticker, payload }),
       diagnostics,
-      { writer: "TradeService.ts", function: "ensureSellFacts", file: "src/application/services/TradeService.ts", reason: "Wrote the SellExecution fact backing a manually-recorded Sell" }
+      { writer: "TradeService.ts", function: "ensureSellFacts", file: "src/application/services/TradeService.ts", reason: "Wrote the SellExecution fact backing a manually-recorded Sell" },
+      { deferCommit: input.deferCommit },
     );
   }
 
@@ -1038,10 +1043,11 @@ async function ensureSellFacts(
       payload: decisionPayload,
     }),
     diagnostics,
-    { writer: "TradeService.ts", function: "ensureSellFacts", file: "src/application/services/TradeService.ts", reason: "Wrote the SellAllocationDecision fact recording which lots were closed" }
+    { writer: "TradeService.ts", function: "ensureSellFacts", file: "src/application/services/TradeService.ts", reason: "Wrote the SellAllocationDecision fact recording which lots were closed" },
+    { deferCommit: input.deferCommit },
   );
 
-  await assignPortfolioToFact(repos, sellExecutionId, input.portfolioId, diagnostics);
+  await assignPortfolioToFact(repos, sellExecutionId, input.portfolioId, diagnostics, { deferCommit: input.deferCommit });
   return decisionFact.seq;
 }
 

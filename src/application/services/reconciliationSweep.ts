@@ -152,7 +152,7 @@ async function commitTickerWithRetry(
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      await commitTicker(repos, portfolioId, ticker, diagnostics);
+      await commitTicker(repos, portfolioId, ticker, diagnostics, { repairOfficialBrokerAllocations: true });
       return;
     } catch (err) {
       if (attempt === maxAttempts || !isTransientDexieCommitRace(err)) throw err;
