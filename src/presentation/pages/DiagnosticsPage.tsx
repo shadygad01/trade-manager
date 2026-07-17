@@ -3,6 +3,7 @@ import { PageHeader } from "@presentation/components/PageHeader";
 import { diagnosticCaseRepository, diagnosticEventRepository } from "@presentation/lib/data";
 import type { DiagnosticEvent } from "@domain/entities/diagnostics/DiagnosticEvent";
 import { ReconciliationSweepPanel } from "./diagnostics/ReconciliationSweepPanel";
+import { DuplicateTradeCleanupPanel } from "./diagnostics/DuplicateTradeCleanupPanel";
 // TEMPORARY — see each panel's own doc comment. Delete these imports and
 // their usages below once removed.
 
@@ -43,6 +44,7 @@ export function DiagnosticsPage() {
   return (
     <div className="space-y-8">
       <ReconciliationSweepPanel />
+      <DuplicateTradeCleanupPanel />
 
       <div>
         <PageHeader title="Diagnostics" description="Developer Mode is on. This is the Diagnostics Center." />

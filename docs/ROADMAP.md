@@ -2772,3 +2772,72 @@ the ability to test it against live production data.
   way to validate it against real data (or a much larger synthetic test matrix covering partial-lot moves,
   sell-group closure moves, and re-triggering `commitTicker` on both the source and target portfolio after
   reassignment).
+
+### Duplicate Trade Cleanup — the actual final root cause of the remaining closed-positions group
+
+After the two fixes above shipped, the user confirmed (with a real Trades-page screenshot) that ELKA,
+ESRS, and HDBK were STILL showing open — and, decisively, ruled out every prior theory: Import's own
+per-ticker Session Recorder log showed these three tickers being evaluated with `buy 0 - sell 0` (zero
+pending candidates at all — not stuck in a queue, not orphaned canonical facts, not a duplicate-authority
+gap the Reconciliation Sweep could find, which itself reported 0 facts retracted for them). The user then
+ran the Reconciliation Sweep from Diagnostics at this session's request and pasted its full output plus the
+Session Recorder log — the concrete evidence that finally identified the real cause.
+
+**Root cause, found by reading the user's own pasted Trades-page listing directly, not by further
+guessing**: every real Buy execution for these tickers (and apparently many others in the same "Old
+School" portfolio — VLMRA, EGCH, AMOC, JUFO, FWRY, ADIB, etc.) was committed as TWO separate `Trade` rows
+sharing the exact same ticker/date/time/shares/price — e.g. two identical "ELKA 26 Oct 2022, 1,500 shares,
+Open" rows for what the broker's own order history proves is a single real execution (confirmed earlier
+this session by tracing ELKA's real net-zero history directly from the "Your Orders" export). Some
+duplicate pairs had their real Sell correctly applied to only ONE of the two copies (visible in the
+listing as one "Closed" + one still-"Open" row of the identical lot) — the other copy's full share count
+stayed permanently stuck open, which is exactly why Holdings kept showing an inflated, never-closing
+balance. `duplicateMatch`/`findDuplicateBuyMatch` (duplicateDetection.ts) is confirmed working correctly
+for every import performed THIS session (every re-upload in this session correctly reported "N duplicate
+transaction(s) skipped and hidden") — these specific duplicates predate that detection actually running
+against them (residue from re-uploading the same broker export across separate sessions before today), so
+this is a one-time cleanup for existing data, not a fix to the detection logic itself.
+
+**The fix**: `duplicateTradeCleanup.ts` (new) — `findDuplicateTradeGroups` (pure, read-only) groups Trades
+by (portfolioId, ticker, executionDate, executionTime-to-the-minute, shares, entryPrice); a group is only
+ever "duplicate" when ALL FIVE fields agree exactly, deliberately excluding the timesConflict tolerance
+this app's own duplicate detection uses elsewhere — a genuine twin lot (two real fills at a different
+minute, the legitimate case `ledgerRebuild.ts`'s own `disambiguateCollidingKeys` already accounts for) is
+never merged. Within a duplicate group: if every member is untouched (`remainingShares === shares`), keeps
+one and marks the rest removable; if exactly one member has real sell history, keeps that one and marks
+every untouched copy removable; if MORE than one member has independently DIFFERENT sell history (two
+copies each partially sold to a different remaining count), the whole group is left alone as `ambiguous`
+— genuinely can't be auto-resolved, surfaced for manual review instead of guessed at.
+`cleanupDuplicateTrades` applies the plan by calling the real, unmodified `deleteTrade` (TradeService.ts)
+for each removable trade — reusing its own cash-refund/timeline-event-removal/raw-transaction-retraction
+logic exactly as-is, with `deleteTrade`'s own guard (refuses anything with real sell history) standing as
+an independent second safety check on top of this module's own classification.
+
+Surfaced as a new TEMPORARY Diagnostics Center panel (`DuplicateTradeCleanupPanel.tsx`, wired into
+`DiagnosticsPage.tsx` alongside `ReconciliationSweepPanel`) with a deliberate two-step, preview-first flow
+— "Scan" is fully read-only and lists exactly which trades would be removed and why (plus any ambiguous
+groups left for manual review) before anything happens; "Delete N duplicate row(s)" only appears after a
+scan found something, and still requires a `confirm()` naming exactly what it's about to do.
+
+**Verified**: `duplicateTradeCleanup.test.ts` (9 tests) covering: two untouched duplicates (keep one, remove
+the other); one sold + one untouched duplicate (keep the sold one, remove the untouched phantom); three
+duplicates with only one ever sold (remove both untouched phantoms); two duplicates independently
+partial-sold to different remaining counts (flagged ambiguous, nothing touched); two real twin lots at
+different execution times (never grouped at all); a lone trade with no duplicate (ignored); two portfolios
+holding an identical-looking lot (never cross-matched); and `cleanupDuplicateTrades` actually calling the
+real `deleteTrade` end-to-end (cash refund verified to the cent) while never touching an ambiguous group's
+trades. 1102 tests total (9 new); `tsc --noEmit`/`arch:check` clean.
+- **Files added**: `src/application/services/duplicateTradeCleanup.ts`,
+  `src/application/services/duplicateTradeCleanup.test.ts`,
+  `src/presentation/pages/diagnostics/DuplicateTradeCleanupPanel.tsx`; wired into `DiagnosticsPage.tsx`.
+- **Deliberately NOT done, and why**: not run against the user's real production data in this sandboxed
+  session (no live browser/IndexedDB access) — ships as a reviewable, read-first tool for the user to Scan
+  (zero risk) and inspect before ever clicking Delete, rather than an automatic sweep. The Session Recorder
+  log the user pasted also surfaced one unrelated, genuinely separate issue worth a dedicated look later: a
+  `FIRE` row failed the Reconciliation Sweep with a raw Dexie "Transaction committed too early" error —
+  a real bug in how `reconciliationSweep.ts`/`commitTicker` sequences awaits inside a Dexie transaction,
+  not touched here since it's unrelated to trade duplication.
+- **Next recommended sprint**: once the user has run Scan against production data and confirmed the
+  proposed deletions look right, decide whether this graduates into a permanent maintenance tool (like
+  `ReconciliationSweepPanel`) or is a true one-time cleanup to delete afterward. Investigate the FIRE
+  Reconciliation Sweep Dexie-timing error noted above as a small, separate follow-up.
