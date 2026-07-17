@@ -43,6 +43,27 @@ export interface CanonicalHoldingsRepos extends AppRepositories {
 }
 
 /**
+ * A ticker whose canonical ledger has real committed events (it went
+ * through `commitTicker` for real) but whose lots net to zero open shares —
+ * every lot fully allocated away by a real, committed `SellAllocationDecision`
+ * fact. Recorded as this distinct sentinel rather than simply omitted:
+ * `computeHoldings` returning nothing is otherwise indistinguishable from
+ * "this ticker never reached the canonical ledger at all" (see
+ * `PositionAggregate | "closed"` below), and collapsing the two meant a
+ * ticker the canonical ledger had CONFIDENTLY verified closed still fell
+ * back to a legacy `Trade` row whenever that row's own `remainingShares`
+ * hadn't been reduced to match — a real, reproduced bug (the exact
+ * "closed-positions-showing-open" report this fix answers): a Sell can only
+ * ever reduce canonical shares, never invent them, so a canonical "closed"
+ * verdict is asymmetrically more trustworthy than an open-vs-open share-count
+ * disagreement (which stays legacy-first, unchanged — see the "disagrees"
+ * branch below) or a ticker with no canonical events at all (still
+ * legacy-fallback, unchanged — see `canonicalHoldings.test.ts`'s own
+ * "no committed ledgerCache entry" case, which this must not regress).
+ */
+const CLOSED = "closed" as const;
+
+/**
  * Best-effort: any failure reading the canonical side (rawTransactions/
  * committedLedger unavailable — e.g. a test fixture supplying only the
  * legacy repos surface, or a genuine Dexie read error) falls back to an
@@ -57,8 +78,8 @@ async function tryComputeCanonicalByTicker(
   repos: CanonicalHoldingsRepos,
   portfolioId: string,
   priceMap: Record<string, number>,
-): Promise<Map<string, PositionAggregate>> {
-  const canonicalByTicker = new Map<string, PositionAggregate>();
+): Promise<Map<string, PositionAggregate | typeof CLOSED>> {
+  const canonicalByTicker = new Map<string, PositionAggregate | typeof CLOSED>();
   try {
     const rawForPortfolio = await repos.rawTransactions.getByPortfolio(portfolioId);
     const tickers = new Set(rawForPortfolio.filter((t) => t.ticker !== undefined).map((t) => normalizeTicker(t.ticker!)));
@@ -67,6 +88,10 @@ async function tryComputeCanonicalByTicker(
         repos.committedLedger.getLedgerEvents(portfolioId, ticker),
         repos.committedLedger.getAllocations(portfolioId, ticker),
       ]);
+      // Never committed to the canonical ledger at all — leave it out of the
+      // map entirely, exactly as before, so computeCanonicalPositions's own
+      // "not yet verified" legacy-fallback branch still applies.
+      if (events.length === 0) continue;
       const [holding] = computeHoldings(events, allocations, priceMap);
       if (holding) {
         canonicalByTicker.set(ticker, {
@@ -80,6 +105,8 @@ async function tryComputeCanonicalByTicker(
           unrealizedPnlPct: holding.unrealizedPnlPct,
           openTrades: [],
         });
+      } else {
+        canonicalByTicker.set(ticker, CLOSED);
       }
     }
   } catch (err) {
@@ -102,6 +129,17 @@ export async function computeCanonicalPositions(
   for (const ticker of allTickers) {
     const legacyPos = legacyByTicker.get(ticker);
     const canonical = canonicalByTicker.get(ticker);
+
+    if (canonical === CLOSED) {
+      // The canonical ledger has real committed Buy/Sell facts for this
+      // ticker and they net to zero open shares — trusted over whatever a
+      // legacy Trade row still says (see tryComputeCanonicalByTicker's own
+      // doc comment on why this specific verdict is trustworthy enough to
+      // override a stale legacy row). Nothing to show in Holdings for a
+      // closed position, same as computeHoldings/computePositions both
+      // already omit one.
+      continue;
+    }
 
     if (!legacyPos && canonical) {
       // No legacy row at all for a ticker the canonical side has — cannot

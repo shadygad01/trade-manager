@@ -2590,3 +2590,135 @@ manual run.
   from Sprint 16: Phase 2b, the Sprint 14/15 diagnostics-coverage gaps, the `ensureLegacyFactsExist`
   nondeterministic redundant-fact defect, and whether `reconcileDuplicateAuthority`'s exact-canonicalKey
   matching should ever tolerate near-duplicate values.
+
+### Bulk Import Confirm — one unresolvable ticker silently blocked every sibling ticker's commit
+
+Real user-reported bug (in Arabic, with a real ~4,000-row native Thndr "Your Orders" Excel export
+attached as evidence): a large batch of tickers the broker's own export proves fully closed (buys and
+sells net to exactly zero) kept showing up in Holdings as open positions — full gross Buy cost basis,
+zero Sells applied — despite the user having gone through Import's Lot Manager/Smart Allocate flow.
+
+**Root cause, found by tracing `ImportPage.tsx`'s actual bulk-commit control flow, not by inspecting the
+live database (no access to the user's real browser/IndexedDB in this sandboxed session — this fix is
+verified against a faithful reproduction of the reported shape instead)**: `confirmAndDistributeAll`
+commits every matched ticker in one plain sequential `for` loop per portfolio (tickers in the same
+portfolio share its cash row and must stay serial), with a single `try/catch` wrapping the ENTIRE loop.
+`commitTickerGroupLocked`'s own official-broker-excel auto-FIFO-sell step (added to make a native Excel
+import apply its Sells, not just its Buys — see "Native Thndr 'Your Orders' Excel import" above) had the
+identical gap one level down: its own per-sell `for` loop had no `catch` either. A single ticker whose
+Sell candidate can't find enough eligible open lots — a real, unremarkable occurrence in a multi-year
+broker history: the corresponding Buy may have fallen outside the app's tracking-start-date window, or
+was itself an unreconstructable "invest by EGP amount" order this export prints no share count for at all
+(see `ThndrOrdersWorkbookParser.ts`'s own `skippedValueOrders` warning) — threw an uncaught `Error`. That
+unwound BOTH loops at once: every Sell queued after the failing one for that SAME ticker was silently
+skipped (and the ticker's own `commitTicker()` projection rebuild never ran), AND — far more damaging —
+every OTHER, perfectly healthy ticker queued after the failing one in the SAME portfolio's sequential
+commit loop never got its own `commitTickerGroup` call at all. One bad row anywhere in a large batch could
+silently leave dozens of genuinely closed tickers sitting as open positions, with only a single generic
+"Confirm failed" banner and no indication of which ticker actually caused it or that anything downstream
+was even skipped.
+
+This is the exact same class of failure this function's own pre-existing doc comment already names and
+solves for Step 1/2 gating ("a single still-stuck ticker... used to block every other already-verified
+ticker from distributing at all") — it just was never closed for a commit-TIME failure, only for the
+match-status gate before commit ever starts.
+
+1. **`commitTickerGroupLocked`'s official-broker-excel Sell loop** (`ImportPage.tsx`): the per-sell
+   `throw` is now caught and recorded as a normal row error (`setRowError`, the same mechanism every other
+   Import row failure already uses) instead of propagating — the loop continues to the next Sell, and the
+   ticker's own already-durable Buys/other Sells still reach the trailing `commitTicker()` rebuild.
+2. **`confirmAndDistributeAll`'s per-portfolio ticker loop**: each `commitTickerGroup(ticker)` call is now
+   wrapped in its own `try/catch`. A failure sets a row error keyed by the ticker itself (rendered as a new
+   banner on that ticker's own `TickerGroupCard`, right below the existing hint banners) and the loop moves
+   on to the next ticker rather than aborting the whole portfolio's queue. If any tickers failed, the
+   overall job still reports `"error"` with a combined `importPage.confirmPartialFailed` message naming
+   every affected ticker — but every ticker that DID succeed stays committed, never rolled back or hidden
+   behind the one that didn't.
+- New `importPage.confirmPartialFailed` translation (EN+AR).
+- **Verified**: a new regression test, `ImportPage.batchCommitIsolation.test.tsx`, reproduces the exact
+  shape against a real Dexie-backed `ImportPage` render (same harness as
+  `ImportPage.multiBuySameTickerRace.test.tsx`) — two tickers sharing one portfolio, BADX (Buy 100, Sell
+  150 — a Sell that can never fully allocate no matter what) queued before GOOD1 (Buy 200, Sell 200 — an
+  entirely ordinary full round trip) — and asserts GOOD1 still fully closes (`remainingShares === 0`) after
+  clicking "Confirm — Distribute to Portfolios", with BADX's own unresolved Sell surfaced as a visible row
+  error rather than silently swallowing GOOD1's commit. Confirmed to fail (timeout — GOOD1's trade never
+  appears at all) against the pre-fix code before the fix existed, and pass after. Full suite: 1091 tests
+  (1 new; 2 pre-existing tests unrelated to this change — `ImportPage.brokerExcelLoadRace.test.tsx` and
+  `ImportPage.aggregateStatement.test.tsx` — independently confirmed to fail identically with this
+  session's changes fully reverted, in complete isolation from any other test file, so not a regression
+  introduced here); `tsc --noEmit`/`arch:check` clean.
+- **Deliberately NOT done, and why**: the two pre-existing failing tests above were left uninvestigated —
+  reproducing and fixing them is a separate, unrelated pre-existing issue (not reported by the user, not
+  touched by this diff) and out of scope for this bug report. Whether the user's specific attached export
+  contains a value-order/tracking-window gap for one of the tickers this fix now surfaces a row error for
+  (rather than every affected ticker committing cleanly) is something only a run against their real
+  browser data can answer — the fix's job is to make that failure visible and non-contagious, not to
+  invent share history the broker's own export never printed.
+- **Next recommended sprint**: run this fix against the user's real Import session and confirm every
+  previously-stuck ticker now closes correctly; for any ticker still showing a row error afterward, the
+  message now names it exactly (`ticker: message`) so the next step is reading that specific error rather
+  than re-diagnosing from scratch. Investigate the two pre-existing failing tests noted above as a small,
+  separate follow-up.
+
+**Direct follow-up, same session**: user separately reported the Dashboard's "Total Dividends" tile
+showing E£0 despite dividends recorded in a sub-portfolio. Confirmed via `AskUserQuestion` that these
+dividends were recorded through Import (not the per-portfolio "Add Dividend" button), which pointed
+straight at the same bug: `commitTickerGroupLocked` batches a ticker's Dividends into the identical
+per-ticker call as its Buys/Sells, so a Dividend-only ticker queued behind an unrelated Sell-allocation
+failure in the same portfolio never reached `recordDividend` at all — even though Import's own review
+screen already showed it as "confirmed" (extraction/verification is a separate step from actually
+committing). New regression test, `ImportPage.batchCommitIsolationDividend.test.tsx`, reproduces this
+exact shape (a Dividend-only ticker DIVX queued behind a Sell-broken ticker BADY in one portfolio) and
+confirms it fails (times out — DIVX's dividend never appears) against the pre-fix commit (`1102c05`)
+and passes with this session's fix. No additional code changes were needed — the same isolation already
+closes this case. 1092 tests total (2 new across both regression files); `tsc --noEmit`/`arch:check` clean.
+
+**Correction, same session — the import-isolation fix above was NOT the actual cause of the original
+closed-positions report.** User pushed back: the Import page was already empty (every ticker fully
+distributed, nothing pending) for the tickers still wrongly showing open — ruling out the batch-abort
+theory entirely for those specific tickers, since there was no stuck queue to unblock. Told not to reply
+again without concrete verification. Re-investigated `canonicalHoldings.ts` directly instead of guessing
+further, and reproduced a second, independent, and more fundamental bug with a synthetic fixture (real
+committed Buy + a real, fully-covering `SellAllocationDecision` in the canonical ledger, but a
+deliberately stale legacy `Trade.remainingShares` left at its original value, simulating exactly what a
+legacy-projection staleness bug — e.g. the reconcileDuplicateAuthority/reconciliationSweep class from
+Sprint 16/17 — leaves behind): `computeCanonicalPositions` still returned the ticker as an OPEN
+`legacy-fallback` position with the full stale share count.
+
+**Root cause**: `tryComputeCanonicalByTicker` called `computeHoldings(events, allocations, priceMap)` for
+every ticker with any RawTransaction fact, and only ever recorded a map entry when `computeHoldings`
+returned a holding. A ticker whose canonical ledger correctly computed ZERO open shares (every lot fully
+allocated) produced no holding — structurally indistinguishable, in the resulting map, from a ticker that
+had never reached the canonical ledger at all. Both cases hit `computeCanonicalPositions`'s `!canonical`
+branch and fell back to whatever the legacy `Trade` row said, no matter how stale.
+
+**The fix**: `tryComputeCanonicalByTicker` now checks `events.length === 0` first (unchanged
+"never committed" case, still legacy-fallback, still covered by this file's own first test) — but when
+real committed ledger events exist and `computeHoldings` nets them to nothing, it now records an explicit
+`CLOSED` sentinel instead of silently omitting the ticker. `computeCanonicalPositions` checks for `CLOSED`
+before every other branch and skips the ticker entirely (nothing to show for a closed position), trusting
+the canonical verdict over a possibly-stale legacy row. Deliberately narrow: a canonical verdict of
+"closed" requires a real, committed `SellAllocationDecision` fact — a Sell can only ever reduce canonical
+shares, never invent them, so this is asymmetrically more trustworthy than an open-vs-open share-count
+disagreement (left untouched — still legacy-first, per the existing third test) or the "never computed"
+case (also left untouched, per the existing first test).
+
+**Verified**: new test in `canonicalHoldings.test.ts` — a ticker with a real committed Buy (legacy Trade
+still showing 50 shares open) and a real committed canonical allocation fully closing those same 50 shares
+— confirmed to return no Holdings row for the ticker. Confirmed to fail against the pre-fix code (returned
+`legacy-fallback` / 50 shares) before the fix existed, and pass after. All 3 pre-existing tests in the same
+file still pass unchanged, including the one this fix was most at risk of regressing (a ticker with a real
+Trade but zero canonical ledger events still correctly stays `legacy-fallback`, never silently dropped).
+Full suite: 1093 tests (1 new; same 2 pre-existing unrelated failures noted above); `tsc --noEmit`/
+`arch:check` clean.
+- **Files modified**: `src/application/services/canonicalHoldings.ts`,
+  `src/application/services/canonicalHoldings.test.ts` (1 new test).
+- **Deliberately NOT done, and why**: not verified against the user's real production data (no access to
+  their browser/IndexedDB in this sandboxed session) — this ships the fix, verified against a faithful
+  synthetic reproduction of the reported bug shape (a stale legacy Trade next to a confidently-closed
+  canonical ledger), for the user to confirm resolves their specific tickers once deployed. If any of the
+  user's affected tickers are STILL showing open after this ships, that would mean the canonical ledger
+  itself hasn't reached a "confidently closed" state for them yet (e.g. a missing/uncommitted
+  SellAllocationDecision, or a duplicate-authority pair the reconciliation sweep hasn't converged) rather
+  than this specific display-layer bug — worth checking the Diagnostics Center's `TickerAuthorityPanel`/
+  `ReconciliationSweepPanel` for those tickers next.

@@ -1556,6 +1556,24 @@ export function ImportPage() {
         );
         batchState.addedKeys.push(entry.key);
         batchState.addedAllocationIds[entry.key] = result.allocations.map((allocation) => allocation.id);
+      } catch (e) {
+        // One sell candidate lacking enough eligible open lots (e.g. its
+        // buy side fell outside the tracking window, or was itself an
+        // unreconstructable "invest by EGP amount" order — see
+        // ThndrOrdersWorkbookParser's own skippedValueOrders warning) must
+        // never abort every OTHER sell in this same official-broker-excel
+        // batch: this used to be an uncaught throw here, which stopped this
+        // `for` loop dead — silently skipping every sell queued after the
+        // failing one and skipping the commitTicker() rebuild below
+        // entirely, so this ticker's already-recorded buys sat with zero
+        // sells applied, showing as a fully open position in Holdings
+        // despite the broker's own export proving it closed. Surfaced as a
+        // normal row error instead (same as every other Import row failure)
+        // so the specific unresolvable sell stays visible for the user to
+        // investigate, while every other sell — for this ticker and, via
+        // confirmAndDistributeAll's own matching per-ticker isolation,
+        // every other ticker — still gets allocated.
+        setRowError(entry.key, e);
       } finally {
         inFlightKeys.delete(entry.key);
       }
@@ -1620,17 +1638,44 @@ export function ImportPage() {
         group.push(ticker);
         byPortfolio.set(portfolioId, group);
       }
+      // One ticker's commitTickerGroup failure (e.g. an official-broker-excel
+      // sell that can't find enough eligible open shares) used to be an
+      // uncaught throw here, which stopped this portfolio's `for` loop dead —
+      // every OTHER already-verified ticker queued behind the failing one
+      // silently never got its own commitTickerGroup call at all, leaving a
+      // whole batch of genuinely closed positions sitting with unallocated
+      // sells and showing as open in Holdings. This is the exact same
+      // "single stuck ticker blocks every sibling" failure mode this
+      // function's own doc comment already describes for Step 1/2 gating —
+      // it just wasn't closed for a commit-time failure. Each ticker is now
+      // isolated: a failure is recorded as a normal row error on that
+      // ticker's own card (see TickerGroupCard's rowErrors[ticker] banner)
+      // and the loop continues to the next ticker.
+      const failedTickers: string[] = [];
       await Promise.all(
         [...byPortfolio.values()].map(async (tickers) => {
           for (const ticker of tickers) {
             importJob.markTickerStarted(ticker);
-            await commitTickerGroup(ticker);
-            importJob.markTickerComplete(ticker);
+            try {
+              await commitTickerGroup(ticker);
+              clearRowError(ticker);
+              importJob.markTickerComplete(ticker);
+            } catch (e) {
+              setRowError(ticker, e);
+              failedTickers.push(ticker);
+            }
           }
         }),
       );
-      importJob.complete();
-      setStage("idle");
+      if (failedTickers.length > 0) {
+        setStage("error");
+        const message = t("importPage.confirmPartialFailed", { tickers: failedTickers.join(", ") });
+        importJob.fail(message);
+        setErrorMessage(message);
+      } else {
+        importJob.complete();
+        setStage("idle");
+      }
     } catch (e) {
       setStage("error");
       const message = e instanceof Error ? e.message : t("importPage.confirmFailed");
@@ -3220,6 +3265,9 @@ export function TickerGroupCard({
             ? t("importPage.existingPortfolioHintMultiple", { ticker, names: existingPortfolioHint.names.join(", ") })
             : t("importPage.existingPortfolioHintSingle", { ticker, name: existingPortfolioHint.names[0] })}
         </div>
+      ) : null}
+      {rowErrors[ticker] ? (
+        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-400">{rowErrors[ticker]}</div>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
         {renaming ? (
