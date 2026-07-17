@@ -45,6 +45,8 @@ export interface ReconciliationSweepTickerResult {
   factsRetracted: number;
   factsSkipped: number;
   error?: string;
+  /** `err.name`/`err.stack`/`err.cause`, captured only on failure — surfaced directly in the panel so pinning down a real browser-only failure (e.g. Dexie's own "Transaction committed too early") doesn't require the user to dig through DevTools themselves. */
+  errorDetail?: string;
 }
 
 export interface ReconciliationSweepReport {
@@ -54,6 +56,16 @@ export interface ReconciliationSweepReport {
   factsSkipped: number;
   errors: { portfolioId: string; ticker: string; message: string }[];
   perTicker: ReconciliationSweepTickerResult[];
+}
+
+/** `err.stack` (call chain) plus `err.cause`'s own message, when present — the two things most likely to reveal exactly which Dexie call a generic-message browser error (e.g. PrematureCommitError) actually originated from. */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const parts = [err.stack ?? `${err.name}: ${err.message}`];
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error) parts.push(`Caused by: ${cause.stack ?? `${cause.name}: ${cause.message}`}`);
+  else if (cause !== undefined) parts.push(`Caused by: ${String(cause)}`);
+  return parts.join("\n");
 }
 
 function liveBuySellFacts(all: RawTransaction[], ticker: string): RawTransaction[] {
@@ -187,7 +199,15 @@ export async function runReconciliationSweep(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       errors.push({ portfolioId, ticker, message });
-      perTicker.push({ portfolioId, ticker, duplicateGroupsFound: 0, factsRetracted: 0, factsSkipped: 0, error: message });
+      perTicker.push({
+        portfolioId,
+        ticker,
+        duplicateGroupsFound: 0,
+        factsRetracted: 0,
+        factsSkipped: 0,
+        error: message,
+        errorDetail: describeError(err),
+      });
     }
   }
 

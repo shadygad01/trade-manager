@@ -253,6 +253,12 @@ describe("runReconciliationSweep â€” manual, user-initiated retroactive pas
 
     expect(report.errors).toHaveLength(1);
     expect(report.errors[0]).toEqual({ portfolioId: PORTFOLIO, ticker: "SWEEPNORETRY", message: "simulated genuine read failure" });
+
+    // errorDetail (stack + any cause) is captured on the perTicker row so a
+    // real browser-only failure can be diagnosed straight from the panel,
+    // without asking the user to dig through DevTools themselves.
+    const failedRow = report.perTicker.find((r) => r.ticker === "SWEEPNORETRY");
+    expect(failedRow?.errorDetail).toContain("simulated genuine read failure");
   });
 });
 
