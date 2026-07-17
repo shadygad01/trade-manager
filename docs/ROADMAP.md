@@ -2946,3 +2946,151 @@ ever occurs — but is no longer expected to resolve FIRE/ESRS on its own.
   theory above). Independent of this: the sweep failing for these two tickers does NOT block the user's
   actual progress, which runs through Import's Confirm/Smart-Allocate path — a separate, unaffected code
   path — so continuing the Import re-upload/Confirm cycle on ESRS in parallel remains the priority.
+
+### Session handoff: the sweep's stack trace came back empty; ELKA regressed and was forensically root-caused; a NEW, cleaner reproduction of the original bug surfaced on a freshly-Reset ticker
+
+**This entry exists so a different agent/session (the user is handing off to Codex) can continue without
+re-deriving the last several hours of investigation.** No code changed in this entry — it's pure
+documentation of findings and the exact diagnostic technique used, so whoever picks this up can go straight
+to reproducing rather than re-discovering.
+
+**1. The `errorDetail` stack trace shipped in the previous entry came back useless.** The user re-ran the
+sweep; both FIRE and ESRS's expanded `<details>` block showed only the bare one-line message
+(`PrematureCommitError: Transaction committed too early. See http://bit.ly/2kdckMn`) with no real stack
+frames — either Dexie doesn't populate `.stack` beyond the message for this error class in this build, or
+it's lost by the time it's caught. This dead-ends the "get a browser stack trace" approach; **the FIRE/ESRS
+Reconciliation Sweep failure is still unfixed and still unexplained**, though it remains non-blocking (the
+sweep is optional maintenance; Import's Confirm path is the real progress driver and is unaffected by it).
+
+**2. ELKA — previously confirmed fully resolved (0 shares, disappeared from Holdings) — regressed to 2,964
+shares open.** `duplicateTradeCleanup.ts`'s "Scan for duplicate trades" reported **zero** findings against
+this, ruling out the duplicate-Trade-row bug class Sprint "Duplicate Trade Cleanup" (above) fixed. Direct
+forensic inspection of the raw `rawTransactions` IndexedDB store (technique below) found the actual cause:
+
+- ELKA's `official-broker-excel` facts net to **exactly zero** (11 buys totaling 6,364 shares = 4 sells
+  totaling 6,364 shares) — the broker's own data proves this is a genuinely, fully closed round-trip
+  position, confirming the user's original claim.
+- At raw-fact `seq` 6535–6538, four `Retraction` facts (`source: "manual"`) retracted four of those eleven
+  official Buy facts (the 1,500@26-Oct, 900@25-Oct, and both 500@20-Oct lots) — almost certainly a
+  side-effect of the "حذف التكرار" (delete duplicate) UI action the user used earlier this session while
+  working through ESRS's own corruption, which evidently also caught unrelated ELKA rows in the same
+  Import batch.
+- The gap-fill/backfill mechanism (`ensureLegacyFactsExist`) partially self-healed this: it re-created 3 of
+  the 4 retracted facts as fresh `source: "backfill"` facts (new ids: `7f7cedfe`, `9c661358`, `9f336459`),
+  but only ONE of those three got its `SellAllocationDecision` correctly re-pointed to the new fact
+  (`9f336459`, 436/500 shares closed). The other two backfilled facts, and the fourth retracted fact (which
+  never got backfilled at all — its legacy Trade row, still carrying the OLD legacy-format id
+  `ELKA|BUY|2022-10-26|1500|1.11`, was simply never cleaned up), were left with zero allocations — netting
+  to exactly 500 + 900 + 1,500 + 64(remaining of the partially-repaired lot) = 2,964 shares "open". This is
+  real, one-off fact-log corruption from an earlier UI action, not a recurrence of any previously-fixed bug
+  class.
+
+**3. Fix attempted: "Reset Ticker" (`purgeTickerData`, `ImportPage.tsx`'s `resetTickerData`) for ELKA, then
+a fresh re-upload of the same broker Excel export.** `purgeTickerData` (`src/infrastructure/db/purge.ts`) is
+confirmed to be a genuine hard purge — every trade/allocation/timeline/journal/verification/raw-transaction
+(following retraction chains to a fixpoint)/pending-execution/cash-adjustment tied to the ticker, across
+`allTables`. This should have produced a completely clean slate.
+
+**4. Result: a NEW, much cleaner reproduction of the ORIGINAL bug this entire session started from.** After
+Reset + re-upload + Import reporting "ELKA fully matched — 15 transactions" (all 11 buys + 4 sells
+verified), Holdings still shows **6,364 shares open — the full gross buy total, zero sells applied**. This
+is not the identity-collision/retraction corruption from finding #2 above (that data no longer exists post-
+purge) — this is a fresh commit that verified successfully but did not actually persist the sell
+allocations. **This is now the cleanest available reproduction of the "closed position shows as open" bug
+family**: one ticker, freshly purged, 15 transactions, broker data that nets to exactly zero, verification
+reports "fully matched", yet Holdings shows the full unallocated gross amount. Not yet investigated further
+— session ended here on a handoff request.
+
+**The open question for the next session**: does "fully matched"/"Verified" in Import's UI actually
+guarantee the corresponding `SellAllocationDecision` facts were appended and committed, or is there a gap
+where a transaction can reach a "Verified" *verification* verdict (`checkTickerMatch`,
+`importVerification.ts`) without its Smart-Allocate/allocation step actually running or persisting? This
+smells adjacent to, but distinct from, the Bulk-Import-Confirm-per-ticker-isolation fix earlier in this
+log — that fix was about one ticker's failure blocking siblings; this is about one ticker's own sells not
+landing despite reporting success. Start by re-running the diagnostic script below against ELKA's
+POST-RESET state (should now be small and clean — 15 facts) to see directly whether the 4
+`SellAllocationDecision` facts exist at all, and if they do, why `commitTicker`/`projectLegacyTicker` isn't
+reflecting them into the Trade rows' `remainingShares`.
+
+**Failed / dead-end attempts this session — do not repeat these without new information:**
+
+1. **Retry `commitTicker` up to 3x on Dexie's "Transaction committed too early"** (Reconciliation Sweep) —
+   built on the assumption the failure was a one-off timing race. Disproved: FIRE and ESRS failed
+   identically across all 3 attempts on a real production run. The failure is deterministic for these two
+   tickers' own data/fact-history shape, not transient. The retry code is harmless and stayed in, but it
+   does not fix anything for these two tickers.
+2. **Surfacing `err.stack`/`err.cause` in the Reconciliation Sweep panel** to get a real call-site — the
+   captured detail came back as only the bare one-line message, no stack frames. Dead end; this specific
+   Dexie error apparently doesn't carry a useful stack in this build/environment. Root cause of the sweep's
+   FIRE/ESRS failure is still unknown.
+3. **Running "Scan for duplicate trades" against ELKA's regression** — reported "No duplicate trades
+   found," which is CORRECT (the corruption genuinely wasn't duplicate Trade rows) but was a dead end for
+   fixing it: `duplicateTradeCleanup.ts` only ever addresses one specific bug class (exact-duplicate Trade
+   rows from repeated historical Excel uploads) and has no way to detect or repair a mistakenly-retracted
+   official fact with a partially-repaired allocation. Needed the raw-fact forensic script instead.
+4. **Repeating the "re-upload the same broker Excel + Confirm" cycle** (advice given earlier in this session
+   to drive ESRS down, and repeated by the user across multiple tickers) — for ELKA specifically, the
+   evidence points to this cycle (via an in-Import "delete duplicate" prompt click) being what CAUSED the
+   regression from 0 shares back to 2,964, not what fixed anything. This blind "keep repeating the cycle
+   and see what happens" approach should not be repeated on ESRS/HDBK without first understanding why
+   Confirm isn't landing allocations (see open question above) — it may make things worse, as it did here.
+5. **"Reset Ticker" (full purge) + fresh re-upload for ELKA** — expected this to produce a clean, correct
+   0-shares-open result given the broker data nets to exactly zero. Instead produced a *different* failure:
+   Import reports "fully matched" / all 15 transactions verified, but Holdings shows the full 6,364-share
+   gross buy total with zero sells applied. This means even a maximally clean, corruption-free import still
+   fails to correctly commit sell allocations — this is now believed to be the actual, still-unfixed root
+   cause of the whole "closed positions show as open" report family, and none of the four previously-shipped
+   fixes in this log (batch-commit isolation, canonical-CLOSED-override, moveTrade-orphan display fix,
+   duplicate-trade cleanup) address it, since this reproduction has none of those four preconditions present.
+
+**Diagnostic technique established this session** (no live browser/IndexedDB access from this sandbox — all
+ground-truth verification has to go through the user pasting console output): open DevTools Console on the
+live app and run this (swap `"ELKA"` for any ticker; dumps every raw fact, following Retraction/Correction
+`targetId` chains back to the ticker so control facts aren't missed):
+
+\`\`\`js
+(function () {
+  const req = indexedDB.open("PortfolioOsDatabase");
+  req.onerror = () => console.error("Failed to open DB", req.error);
+  req.onsuccess = function (e) {
+    const db = e.target.result;
+    const tx = db.transaction(["rawTransactions"], "readonly");
+    const allReq = tx.objectStore("rawTransactions").getAll();
+    allReq.onsuccess = function () {
+      const all = allReq.result;
+      const retractedTargets = new Set(all.filter((f) => f.kind === "Retraction").map((f) => f.payload && f.payload.targetId));
+      const tickerIds = new Set(all.filter((f) => f.ticker === "ELKA").map((f) => f.id));
+      const facts = all
+        .filter((f) => f.ticker === "ELKA" || (f.payload && tickerIds.has(f.payload.targetId)))
+        .sort((a, b) => a.seq - b.seq);
+      console.log(\`facts: \${facts.length} (of \${all.length} total)\`);
+      console.table(facts.map((f) => ({
+        seq: f.seq, id: f.id.slice(0, 8), kind: f.kind, source: f.source,
+        date: f.payload && f.payload.executionDate, time: f.payload && f.payload.executionTime,
+        shares: f.payload && f.payload.shares, price: f.payload && f.payload.price,
+        targetId: f.payload && f.payload.targetId ? f.payload.targetId.slice(0, 8) : "",
+        retracted: retractedTargets.has(f.id) ? "YES" : "",
+      })));
+    };
+  };
+})();
+\`\`\`
+
+For Trade/TradeAllocation rows specifically, open a second transaction on `["trades", "tradeAllocations"]`
+and filter each store's `getAll()` result by `.ticker === "ELKA"` the same way.
+
+- **Files changed this entry**: none — documentation only.
+- **Deliberately NOT done, and why**: did not attempt another blind fix for either open issue (the sweep's
+  Dexie error, or the "fully matched but not committed" gap) without being able to verify a fix actually
+  works — both need the diagnostic script's output against real production data before the next code
+  change, and this session was asked to hand off rather than continue guessing.
+- **Next recommended sprint**: (1) run the diagnostic script above against ELKA's current post-reset state,
+  find the actual persisted-vs-verified gap, fix it — this is now believed to be the true, still-unfixed
+  root cause of the entire "closed positions show as open" report family, more fundamental than any of the
+  four fixes already shipped. (2) Independently, ESRS (still at 370 shares, not yet Reset) and HDBK
+  (1,083 shares, not yet investigated at all this session) likely need the same forensic treatment once (1)
+  is understood — do not repeat the "keep re-uploading and hope" cycle on them without understanding why
+  Confirm isn't landing allocations first. (3) The Reconciliation Sweep's Dexie error for FIRE/ESRS remains
+  unexplained; deprioritized behind (1) since it's optional maintenance, not on the critical path. (4) ADIB
+  (~4-share discrepancy, likely a pre-tracking-window opening balance) remains untouched, per the user's own
+  explicit "do this last" ordering.
