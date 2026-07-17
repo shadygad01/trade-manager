@@ -2898,3 +2898,51 @@ already documented in this log (`ImportPage.brokerExcelLoadRace.test.tsx`,
   production callers (Import's Confirm/Smart-Allocate path) are ever reported to hit the same Dexie error,
   revisit whether the retry belongs one layer down (inside `commitTicker` itself) instead of only in the
   sweep. Then proceed to ADIB per the user's own explicit request.
+
+### Correction: the retry above did NOT fix it — FIRE and ESRS fail deterministically, not transiently
+
+The user re-ran the sweep against real production data after the retry mitigation shipped. Both FIRE and
+ESRS failed with the exact same Dexie error again — meaning all 3 retry attempts (each a genuinely fresh
+`commitTicker` call: a new worker round trip, a new transaction) failed identically. This disproves the
+"one-off timing race" theory the retry was built on: whatever is happening is deterministic for these two
+tickers' own data shape, not a coin-flip that a second attempt would plausibly dodge. Every other ticker in
+the same sweep run (including AMOC with 6 duplicate groups, the most of any ticker that run) converged
+cleanly, so it isn't simply "the sweep breaks under enough concurrent load" either — something specific to
+FIRE and ESRS's own accumulated fact/trade history is involved. Both are notable for the most tangled
+history of any ticker touched this session: FIRE was one of the four tickers with orphaned canonical facts
+from `moveTrade` (see the phantom-Holdings-positions entry above), and ESRS accumulated by far the largest
+duplicate/corruption footprint found this session (identity-collision-corrupted allocations, 1,629 shares
+of residue worked down to 370 across multiple cleanup passes) — plausibly the two tickers with the largest
+`existingTrades`/`existingAllocations`/stale-row counts for `projectLegacyTicker` (`ledgerProjection.ts`)
+to process, though this remains unconfirmed.
+
+Static reading of the full call chain (`commitTicker` → `ensureLegacyFactsExist` →
+`reconcileDuplicateAuthority` → `relevantTradeTransactions` → `projectInWorker` →
+`transactionRunner(writeProjection)` → `DexieCommittedLedgerRepository.commitTicker`'s own nested
+`db.transaction()` → `projectLegacyTicker`) found no `Promise.all`, `setTimeout`, or second Worker call
+inside the transaction scope — the one non-Dexie async gap (`projectInWorker`'s real cross-thread
+`postMessage` round trip) happens strictly BEFORE the transaction opens, so it can't explain a failure
+that originates from data volume rather than pure timing. Root cause not found by static analysis alone;
+this genuinely needs the real Dexie error's stack trace from a live browser, which isn't reproducible in
+this sandbox (no `Worker`, no real IndexedDB timing).
+
+**What shipped instead of a guess**: rather than attempt another blind structural change to the shared,
+heavily-tested `commitTicker` pipeline without being able to verify it fixes the real failure,
+`reconciliationSweep.ts`'s error capture now includes `errorDetail` — the failing error's own `.stack` plus
+any `.cause` — threaded through to `ReconciliationSweepPanel.tsx` as a `<details>`/`<pre>` block under each
+errored row ("`{ticker} — full error detail (copy this)`"), so the real stack trace is visible directly in
+the app the next time the sweep is run against production, with no DevTools needed. The retry from the
+prior entry is left in place — harmless, and still a real improvement for a genuinely transient case if one
+ever occurs — but is no longer expected to resolve FIRE/ESRS on its own.
+- **Files changed**: `src/application/services/reconciliationSweep.ts` (added `errorDetail`/`describeError`),
+  `src/presentation/pages/diagnostics/ReconciliationSweepPanel.tsx` (renders it),
+  `src/application/services/reconciliationSweep.test.ts` (asserts `errorDetail` is populated).
+- **Verified**: 1104 tests total (0 net new — one existing test extended); `tsc --noEmit`/`arch:check`
+  clean; full suite otherwise green except the two pre-existing flaky files already documented in this log.
+- **Deliberately NOT done, and why**: no further guessing at the root cause without real evidence — the
+  next actionable step needs the actual stack trace this change now surfaces, not another hypothesis.
+- **Next recommended sprint**: once the user re-runs the sweep and pastes back the expanded error detail
+  for FIRE/ESRS, root-cause the real call site and fix it properly (or confirm/refute the data-volume
+  theory above). Independent of this: the sweep failing for these two tickers does NOT block the user's
+  actual progress, which runs through Import's Confirm/Smart-Allocate path — a separate, unaffected code
+  path — so continuing the Import re-upload/Confirm cycle on ESRS in parallel remains the priority.

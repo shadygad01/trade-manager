@@ -105,6 +105,19 @@ export function ReconciliationSweepPanel() {
           ) : (
             <p className="text-xs text-slate-500">No ticker had a duplicate-authority group this run.</p>
           )}
+
+          {rowsToShow.some((r) => r.errorDetail) ? (
+            <div className="space-y-2">
+              {rowsToShow
+                .filter((r) => r.errorDetail)
+                .map((r) => (
+                  <details key={`${r.portfolioId}|${r.ticker}|detail`} className="rounded border border-rose-900/50 bg-rose-950/10 p-2">
+                    <summary className="cursor-pointer text-xs font-medium text-rose-300">{r.ticker} — full error detail (copy this)</summary>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all text-[10px] text-rose-200/80">{r.errorDetail}</pre>
+                  </details>
+                ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
