@@ -190,5 +190,69 @@ describe("runReconciliationSweep â€” manual, user-initiated retroactive pas
     const okResult = report.perTicker.find((r) => r.ticker === "SWEEPOK");
     expect(okResult).toEqual({ portfolioId: PORTFOLIO, ticker: "SWEEPOK", duplicateGroupsFound: 1, factsRetracted: 1, factsSkipped: 0 });
   });
+
+  /**
+   * Real, user-reported failure: `commitTicker` threw Dexie's own
+   * "PrematureCommitError: Transaction committed too early" for a ticker
+   * mid-sweep (first FIRE, later also ESRS) — a transient timing race, not a
+   * data problem, since the same ticker converged cleanly on a later run.
+   * The sweep now retries a `commitTicker` call that fails with exactly this
+   * Dexie error, up to twice more, before giving up.
+   */
+  it("retries a ticker that fails with Dexie's transient 'transaction committed too early' error, and still converges it", async () => {
+    const payload: BuyExecutionPayload = { ticker: "SWEEPRACE", shares: 22, price: 9.9, executionDate: "2026-05-05" };
+    await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: PORTFOLIO, ticker: "SWEEPRACE", payload }));
+    await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", portfolioId: PORTFOLIO, ticker: "SWEEPRACE", payload }));
+
+    let getAllCalls = 0;
+    const raceyRawTransactions: RawTransactionRepository = {
+      ...rawTransactions,
+      async getAll() {
+        getAllCalls += 1;
+        // Call #8 is `relevantTradeTransactions`'s own read inside
+        // commitTicker's FIRST attempt for this ticker — the one call in the
+        // whole chain that isn't already swallowed by an internal try/catch
+        // (ensureLegacyFactsExist/reconcileDuplicateAuthority both are), so
+        // it's the one whose failure actually propagates out of commitTicker
+        // exactly the way a real PrematureCommitError would. Every other
+        // call (including the retry's own full second attempt) succeeds.
+        if (getAllCalls === 8) throw new Error("PrematureCommitError: Transaction committed too early. See http://bit.ly/2VLxK5A");
+        return rawTransactions.getAll();
+      },
+    };
+
+    const report = await runReconciliationSweep({ ...repos, rawTransactions: raceyRawTransactions });
+
+    expect(report.errors).toEqual([]);
+    expect(report.factsRetracted).toBe(1);
+    const all = await rawTransactions.getAll();
+    const backfillLive = all.filter((t) => t.kind === "BuyExecution" && t.source === "backfill" && !isRetracted(all, t.id));
+    expect(backfillLive).toHaveLength(0);
+  });
+
+  it("does not retry a non-Dexie-timing error — it still surfaces immediately as a per-ticker error", async () => {
+    const payload: BuyExecutionPayload = { ticker: "SWEEPNORETRY", shares: 11, price: 3.1, executionDate: "2026-05-06" };
+    await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "backfill", portfolioId: PORTFOLIO, ticker: "SWEEPNORETRY", payload }));
+    await rawTransactions.append(createRawTransaction({ kind: "BuyExecution", source: "official-broker-excel", portfolioId: PORTFOLIO, ticker: "SWEEPNORETRY", payload }));
+
+    let getAllCalls = 0;
+    const brokenRawTransactions: RawTransactionRepository = {
+      ...rawTransactions,
+      async getAll() {
+        getAllCalls += 1;
+        // Same call site as the retry test above (relevantTradeTransactions,
+        // the one unguarded read inside commitTicker) — but this message
+        // doesn't match the transient-Dexie-race pattern, so it must surface
+        // immediately with no retry.
+        if (getAllCalls === 8) throw new Error("simulated genuine read failure");
+        return rawTransactions.getAll();
+      },
+    };
+
+    const report = await runReconciliationSweep({ ...repos, rawTransactions: brokenRawTransactions });
+
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toEqual({ portfolioId: PORTFOLIO, ticker: "SWEEPNORETRY", message: "simulated genuine read failure" });
+  });
 });
 
