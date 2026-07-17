@@ -2590,3 +2590,72 @@ manual run.
   from Sprint 16: Phase 2b, the Sprint 14/15 diagnostics-coverage gaps, the `ensureLegacyFactsExist`
   nondeterministic redundant-fact defect, and whether `reconcileDuplicateAuthority`'s exact-canonicalKey
   matching should ever tolerate near-duplicate values.
+
+### Bulk Import Confirm — one unresolvable ticker silently blocked every sibling ticker's commit
+
+Real user-reported bug (in Arabic, with a real ~4,000-row native Thndr "Your Orders" Excel export
+attached as evidence): a large batch of tickers the broker's own export proves fully closed (buys and
+sells net to exactly zero) kept showing up in Holdings as open positions — full gross Buy cost basis,
+zero Sells applied — despite the user having gone through Import's Lot Manager/Smart Allocate flow.
+
+**Root cause, found by tracing `ImportPage.tsx`'s actual bulk-commit control flow, not by inspecting the
+live database (no access to the user's real browser/IndexedDB in this sandboxed session — this fix is
+verified against a faithful reproduction of the reported shape instead)**: `confirmAndDistributeAll`
+commits every matched ticker in one plain sequential `for` loop per portfolio (tickers in the same
+portfolio share its cash row and must stay serial), with a single `try/catch` wrapping the ENTIRE loop.
+`commitTickerGroupLocked`'s own official-broker-excel auto-FIFO-sell step (added to make a native Excel
+import apply its Sells, not just its Buys — see "Native Thndr 'Your Orders' Excel import" above) had the
+identical gap one level down: its own per-sell `for` loop had no `catch` either. A single ticker whose
+Sell candidate can't find enough eligible open lots — a real, unremarkable occurrence in a multi-year
+broker history: the corresponding Buy may have fallen outside the app's tracking-start-date window, or
+was itself an unreconstructable "invest by EGP amount" order this export prints no share count for at all
+(see `ThndrOrdersWorkbookParser.ts`'s own `skippedValueOrders` warning) — threw an uncaught `Error`. That
+unwound BOTH loops at once: every Sell queued after the failing one for that SAME ticker was silently
+skipped (and the ticker's own `commitTicker()` projection rebuild never ran), AND — far more damaging —
+every OTHER, perfectly healthy ticker queued after the failing one in the SAME portfolio's sequential
+commit loop never got its own `commitTickerGroup` call at all. One bad row anywhere in a large batch could
+silently leave dozens of genuinely closed tickers sitting as open positions, with only a single generic
+"Confirm failed" banner and no indication of which ticker actually caused it or that anything downstream
+was even skipped.
+
+This is the exact same class of failure this function's own pre-existing doc comment already names and
+solves for Step 1/2 gating ("a single still-stuck ticker... used to block every other already-verified
+ticker from distributing at all") — it just was never closed for a commit-TIME failure, only for the
+match-status gate before commit ever starts.
+
+1. **`commitTickerGroupLocked`'s official-broker-excel Sell loop** (`ImportPage.tsx`): the per-sell
+   `throw` is now caught and recorded as a normal row error (`setRowError`, the same mechanism every other
+   Import row failure already uses) instead of propagating — the loop continues to the next Sell, and the
+   ticker's own already-durable Buys/other Sells still reach the trailing `commitTicker()` rebuild.
+2. **`confirmAndDistributeAll`'s per-portfolio ticker loop**: each `commitTickerGroup(ticker)` call is now
+   wrapped in its own `try/catch`. A failure sets a row error keyed by the ticker itself (rendered as a new
+   banner on that ticker's own `TickerGroupCard`, right below the existing hint banners) and the loop moves
+   on to the next ticker rather than aborting the whole portfolio's queue. If any tickers failed, the
+   overall job still reports `"error"` with a combined `importPage.confirmPartialFailed` message naming
+   every affected ticker — but every ticker that DID succeed stays committed, never rolled back or hidden
+   behind the one that didn't.
+- New `importPage.confirmPartialFailed` translation (EN+AR).
+- **Verified**: a new regression test, `ImportPage.batchCommitIsolation.test.tsx`, reproduces the exact
+  shape against a real Dexie-backed `ImportPage` render (same harness as
+  `ImportPage.multiBuySameTickerRace.test.tsx`) — two tickers sharing one portfolio, BADX (Buy 100, Sell
+  150 — a Sell that can never fully allocate no matter what) queued before GOOD1 (Buy 200, Sell 200 — an
+  entirely ordinary full round trip) — and asserts GOOD1 still fully closes (`remainingShares === 0`) after
+  clicking "Confirm — Distribute to Portfolios", with BADX's own unresolved Sell surfaced as a visible row
+  error rather than silently swallowing GOOD1's commit. Confirmed to fail (timeout — GOOD1's trade never
+  appears at all) against the pre-fix code before the fix existed, and pass after. Full suite: 1091 tests
+  (1 new; 2 pre-existing tests unrelated to this change — `ImportPage.brokerExcelLoadRace.test.tsx` and
+  `ImportPage.aggregateStatement.test.tsx` — independently confirmed to fail identically with this
+  session's changes fully reverted, in complete isolation from any other test file, so not a regression
+  introduced here); `tsc --noEmit`/`arch:check` clean.
+- **Deliberately NOT done, and why**: the two pre-existing failing tests above were left uninvestigated —
+  reproducing and fixing them is a separate, unrelated pre-existing issue (not reported by the user, not
+  touched by this diff) and out of scope for this bug report. Whether the user's specific attached export
+  contains a value-order/tracking-window gap for one of the tickers this fix now surfaces a row error for
+  (rather than every affected ticker committing cleanly) is something only a run against their real
+  browser data can answer — the fix's job is to make that failure visible and non-contagious, not to
+  invent share history the broker's own export never printed.
+- **Next recommended sprint**: run this fix against the user's real Import session and confirm every
+  previously-stuck ticker now closes correctly; for any ticker still showing a row error afterward, the
+  message now names it exactly (`ticker: message`) so the next step is reading that specific error rather
+  than re-diagnosing from scratch. Investigate the two pre-existing failing tests noted above as a small,
+  separate follow-up.
