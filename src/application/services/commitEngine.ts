@@ -152,6 +152,49 @@ function summarizeVerdicts(verdicts: Map<string, { verdict: string }>): string {
   return [...counts.entries()].map(([verdict, n]) => `${n} ${verdict}`).join(", ");
 }
 
+/**
+ * Repairs the old Import auto-skip gap where authoritative broker facts were
+ * recorded but never assigned, while their legacy/backfill copies were
+ * already attached to exactly one portfolio. Adoption is intentionally
+ * refused when the ticker is split across portfolios.
+ */
+async function adoptUnassignedOfficialBrokerFacts(
+  repos: CommitEngineRepos,
+  portfolioId: string,
+  ticker: string,
+): Promise<number> {
+  const normalized = normalizeTicker(ticker);
+  const all = await repos.rawTransactions.getAll();
+  const liveTickerFacts = all.filter((transaction) => {
+    if (transaction.kind !== "BuyExecution" && transaction.kind !== "SellExecution") return false;
+    if (isRetracted(all, transaction.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(all, transaction);
+    return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalized;
+  });
+  const assignedPortfolioIds = new Set(
+    liveTickerFacts
+      .map((transaction) => resolveCurrentPortfolioId(all, transaction))
+      .filter((id): id is string => id !== undefined),
+  );
+  if (assignedPortfolioIds.size !== 1 || !assignedPortfolioIds.has(portfolioId)) return 0;
+
+  const unassignedOfficial = liveTickerFacts.filter(
+    (transaction) =>
+      transaction.source === "official-broker-excel" &&
+      resolveCurrentPortfolioId(all, transaction) === undefined,
+  );
+  for (const transaction of unassignedOfficial) {
+    await repos.rawTransactions.append(
+      createRawTransaction({
+        kind: "PortfolioAssignment",
+        source: "manual",
+        payload: { targetId: transaction.id, portfolioId },
+      }),
+    );
+  }
+  return unassignedOfficial.length;
+}
+
 export async function commitTicker(
   repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
   portfolioId: string,
@@ -185,6 +228,7 @@ export async function commitTicker(
   }
 
   if (options?.repairOfficialBrokerAllocations) {
+    await adoptUnassignedOfficialBrokerFacts(repos, portfolioId, normalizedTicker);
     const duplicateIds = await findOfficialBrokerDuplicateIds(repos, portfolioId, normalizedTicker);
     const repaired = await repairOfficialBrokerSellAllocations(
       repos,
