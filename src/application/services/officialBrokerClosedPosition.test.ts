@@ -209,7 +209,7 @@ describe("official broker closed-position import", () => {
           ticker,
           payload: {
             ticker,
-            shares: item.shares,
+            shares: index === 0 ? item.shares - 1 : item.shares,
             price: item.price,
             executionDate: item.date,
             executionTime: item.time,
@@ -237,5 +237,53 @@ describe("official broker closed-position import", () => {
       officialBrokerDuplicatesRetracted: 0,
       officialBrokerAllocationsRepaired: 0,
     });
+  });
+
+  it("does not partially rewrite a ticker when its complete sell history cannot be allocated", async () => {
+    const base = createFakeRepositories({
+      portfolios: [createPortfolio({ id: portfolioId, name: "Old School", kind: "Investment", initialCash: 100_000 })],
+    });
+    const repos = {
+      ...base,
+      rawTransactions: createFakeRawTransactionRepository(),
+      committedLedger: createFakeCommittedLedgerRepository(),
+    } as AppRepositories & CommitEngineRepos;
+    for (const fact of [
+      createRawTransaction({
+        id: "atomic-buy",
+        kind: "BuyExecution",
+        source: "official-broker-excel",
+        portfolioId,
+        ticker,
+        payload: { ticker, shares: 100, price: 10, executionDate: "2023-01-01", executionTime: "10:00AM" },
+      }),
+      createRawTransaction({
+        id: "atomic-sell-one",
+        kind: "SellExecution",
+        source: "official-broker-excel",
+        portfolioId,
+        ticker,
+        payload: { ticker, shares: 50, price: 11, executionDate: "2023-01-02", executionTime: "10:00AM" },
+      }),
+      createRawTransaction({
+        id: "atomic-sell-two",
+        kind: "SellExecution",
+        source: "official-broker-excel",
+        portfolioId,
+        ticker,
+        payload: { ticker, shares: 100, price: 12, executionDate: "2023-01-03", executionTime: "10:00AM" },
+      }),
+    ]) {
+      await repos.rawTransactions.append(fact);
+    }
+    const countBefore = (await repos.rawTransactions.getAll()).length;
+    const result = await commitTicker(repos, portfolioId, ticker, undefined, {
+      repairOfficialBrokerAllocations: true,
+    });
+    expect(result).toEqual({
+      officialBrokerDuplicatesRetracted: 0,
+      officialBrokerAllocationsRepaired: 0,
+    });
+    expect((await repos.rawTransactions.getAll()).length).toBe(countBefore);
   });
 });
