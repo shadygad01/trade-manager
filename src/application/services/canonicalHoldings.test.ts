@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { computeCanonicalPositions } from "./canonicalHoldings";
-import { recordBuy } from "./TradeService";
+import { recordBuy, moveTrade } from "./TradeService";
 import { createPortfolio } from "@domain/entities/Portfolio";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
 import {
@@ -126,5 +126,36 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
     const positions = await computeCanonicalPositions(repos, "p1", {});
 
     expect(positions.find((p) => p.ticker === "SKPC")).toBeUndefined();
+  });
+
+  it("moving a Trade to a different portfolio must not leave a phantom canonical position behind in the source portfolio", async () => {
+    // Real user-reported bug (the ADPC shape): moveTrade/consolidateTicker
+    // reassign a Trade's portfolioId but never touch the matching
+    // RawTransaction fact or committedLedger cache entry left behind in the
+    // SOURCE portfolio. Before this fix, computeCanonicalPositions's
+    // "!legacyPos && canonical" branch trusted that orphaned canonical entry
+    // unconditionally, showing the ticker's full original cost basis as an
+    // open position in a portfolio it no longer belongs to — with zero open
+    // lots to back it up (Lots: 0 in the Holdings table).
+    const p1 = createPortfolio({ id: "p1", name: "Source", kind: "Investment", initialCash: 100_000 });
+    const p2 = createPortfolio({ id: "p2", name: "Target", kind: "Investment", initialCash: 100_000 });
+    const base = createFakeRepositories({ portfolios: [p1, p2] });
+    const rawTransactions = createFakeRawTransactionRepository();
+    const committedLedger = createFakeCommittedLedgerRepository();
+    const repos = { ...base, rawTransactions, committedLedger };
+
+    const { trade } = await recordBuy(repos, { portfolioId: "p1", ticker: "ADPC", shares: 500, entryPrice: 1.8, executionDate: "2026-01-20", executionTime: "12:00" });
+    const eventId = "ADPC|BUY|2026-01-20|500|1.8";
+    await committedLedger.commitTicker({
+      portfolioId: "p1",
+      ticker: "ADPC",
+      events: [{ type: "LotOpened", eventId, executionDate: "2026-01-20", ticker: "ADPC", shares: 500, price: 1.8, sourceTransactionIds: [trade.id] }],
+      allocations: [],
+    });
+
+    await moveTrade(repos, trade.id, "p2");
+
+    const sourcePositions = await computeCanonicalPositions(repos, "p1", {});
+    expect(sourcePositions.find((p) => p.ticker === "ADPC")).toBeUndefined();
   });
 });
