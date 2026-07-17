@@ -2659,3 +2659,16 @@ match-status gate before commit ever starts.
   message now names it exactly (`ticker: message`) so the next step is reading that specific error rather
   than re-diagnosing from scratch. Investigate the two pre-existing failing tests noted above as a small,
   separate follow-up.
+
+**Direct follow-up, same session**: user separately reported the Dashboard's "Total Dividends" tile
+showing E£0 despite dividends recorded in a sub-portfolio. Confirmed via `AskUserQuestion` that these
+dividends were recorded through Import (not the per-portfolio "Add Dividend" button), which pointed
+straight at the same bug: `commitTickerGroupLocked` batches a ticker's Dividends into the identical
+per-ticker call as its Buys/Sells, so a Dividend-only ticker queued behind an unrelated Sell-allocation
+failure in the same portfolio never reached `recordDividend` at all — even though Import's own review
+screen already showed it as "confirmed" (extraction/verification is a separate step from actually
+committing). New regression test, `ImportPage.batchCommitIsolationDividend.test.tsx`, reproduces this
+exact shape (a Dividend-only ticker DIVX queued behind a Sell-broken ticker BADY in one portfolio) and
+confirms it fails (times out — DIVX's dividend never appears) against the pre-fix commit (`1102c05`)
+and passes with this session's fix. No additional code changes were needed — the same isolation already
+closes this case. 1092 tests total (2 new across both regression files); `tsc --noEmit`/`arch:check` clean.
