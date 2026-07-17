@@ -316,7 +316,6 @@ describe("official broker closed-position import", () => {
       orderEvidences: [],
       cancelledOrders: [],
     });
-    await assignPortfolio(repos, egas, portfolioId, undefined, { deferCommit: true });
     for (const fact of [
       createRawTransaction({
         id: "egas-legacy-buy-remainder",
@@ -355,6 +354,17 @@ describe("official broker closed-position import", () => {
     });
     expect(result.officialBrokerDuplicatesRetracted).toBe(2);
     expect(result.officialBrokerAllocationsRepaired).toBe(3);
+    const all = await repos.rawTransactions.getAll();
+    expect(
+      all.filter(
+        (fact) =>
+          fact.kind === "PortfolioAssignment" &&
+          egasCandidates.some(
+            (_, index) =>
+              (fact.payload as { targetId: string }).targetId === `egas-${index}`,
+          ),
+      ),
+    ).toHaveLength(egasCandidates.length);
     expect(
       (await repos.trades.getByPortfolio(portfolioId))
         .filter((trade) => trade.ticker === egas)

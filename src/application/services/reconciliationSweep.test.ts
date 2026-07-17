@@ -225,14 +225,14 @@ describe("runReconciliationSweep â€” manual, user-initiated retroactive pas
       ...rawTransactions,
       async getAll() {
         getAllCalls += 1;
-        // Call #9 is `relevantTradeTransactions`'s own read inside
+        // Call #10 is `relevantTradeTransactions`'s own read inside
         // commitTicker's FIRST attempt for this ticker — the one call in the
         // whole chain that isn't already swallowed by an internal try/catch
         // (ensureLegacyFactsExist/reconcileDuplicateAuthority both are), so
         // it's the one whose failure actually propagates out of commitTicker
         // exactly the way a real PrematureCommitError would. Every other
         // call (including the retry's own full second attempt) succeeds.
-        if (getAllCalls === 9) throw new Error("PrematureCommitError: Transaction committed too early. See http://bit.ly/2VLxK5A");
+        if (getAllCalls === 10) throw new Error("PrematureCommitError: Transaction committed too early. See http://bit.ly/2VLxK5A");
         return rawTransactions.getAll();
       },
     };
@@ -260,7 +260,7 @@ describe("runReconciliationSweep â€” manual, user-initiated retroactive pas
         // the one unguarded read inside commitTicker) — but this message
         // doesn't match the transient-Dexie-race pattern, so it must surface
         // immediately with no retry.
-        if (getAllCalls === 9) throw new Error("simulated genuine read failure");
+        if (getAllCalls === 10) throw new Error("simulated genuine read failure");
         return rawTransactions.getAll();
       },
     };
