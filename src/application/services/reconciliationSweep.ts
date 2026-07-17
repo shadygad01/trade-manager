@@ -109,6 +109,46 @@ async function enumerateLiveTickerPortfolioPairs(
   return [...pairs.values()];
 }
 
+/**
+ * `commitTicker` opens its own Dexie `db.transaction()` for the cache/legacy
+ * write (commitEngine.ts's `writeProjection`) after already having awaited
+ * `projectInWorker` — a real cross-thread `postMessage` round trip in the
+ * browser. That's a genuine async gap outside Dexie's own promise zone, and
+ * under concurrent commits (many tickers converging in one sweep pass, or
+ * two commits for the same ticker landing close together) it can race
+ * IndexedDB's native auto-commit and surface as Dexie's own
+ * "PrematureCommitError: Transaction committed too early" — a transient
+ * timing failure, not a data problem (confirmed by user reports: the same
+ * ticker fails on one sweep run and succeeds cleanly on the next). A fresh
+ * `commitTicker` call starts its own worker round trip and its own
+ * transaction from scratch, so retrying is a real second chance, not a
+ * no-op — narrowly scoped to this exact Dexie error message so any other
+ * failure (a genuine data/read error, e.g. the isolation test below) still
+ * surfaces immediately with no retry delay.
+ */
+function isTransientDexieCommitRace(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /transaction/i.test(message) && /(too early|committed too early|premature)/i.test(message);
+}
+
+async function commitTickerWithRetry(
+  repos: ReconciliationSweepRepos,
+  portfolioId: string,
+  ticker: string,
+  diagnostics?: DiagnosticsRecorder,
+): Promise<void> {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await commitTicker(repos, portfolioId, ticker, diagnostics);
+      return;
+    } catch (err) {
+      if (attempt === maxAttempts || !isTransientDexieCommitRace(err)) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+}
+
 export async function runReconciliationSweep(
   repos: ReconciliationSweepRepos,
   diagnostics?: DiagnosticsRecorder,
@@ -126,8 +166,9 @@ export async function runReconciliationSweep(
       // write for this ticker would trigger via appendAndMaybeCommit, which
       // is what actually runs reconcileDuplicateAuthority (with full
       // trades/allocations access, so its twin-lot guard applies exactly as
-      // it would in normal operation).
-      await commitTicker(repos, portfolioId, ticker, diagnostics);
+      // it would in normal operation). Wrapped with a narrow, same-error-only
+      // retry — see commitTickerWithRetry's doc comment.
+      await commitTickerWithRetry(repos, portfolioId, ticker, diagnostics);
 
       const after = await repos.rawTransactions.getAll();
       let factsRetracted = 0;

@@ -2841,3 +2841,60 @@ trades. 1102 tests total (9 new); `tsc --noEmit`/`arch:check` clean.
   proposed deletions look right, decide whether this graduates into a permanent maintenance tool (like
   `ReconciliationSweepPanel`) or is a true one-time cleanup to delete afterward. Investigate the FIRE
   Reconciliation Sweep Dexie-timing error noted above as a small, separate follow-up.
+
+### Reconciliation Sweep — the "Transaction committed too early" Dexie error, mitigated with a narrow retry
+
+Follow-up to the item flagged above. The user ran the Duplicate Trade Cleanup tool against real production
+data (ELKA and HDBK fully resolved), then kept iterating the fix cycle (Reconciliation Sweep → Import
+re-upload/Confirm) to work ESRS down from 1,629 → 787 → 370 shares. On a later sweep run, the SAME Dexie
+"Transaction committed too early" error that previously only hit FIRE now also hit ESRS, blocking that
+one ticker's retroactive duplicate-authority convergence for the run.
+
+**Root cause, as far as it can be pinned down without live browser access**: `commitTicker`
+(`commitEngine.ts`) awaits `projectInWorker` — a real cross-thread `postMessage` round trip to a Web
+Worker in the browser (falls back to a synchronous local computation only when `Worker` is undefined,
+e.g. in this sandbox's Node test runner, which is exactly why 1,102 existing tests never caught this) —
+and only afterward opens a Dexie `db.transaction()` for the cache/legacy write. Under concurrent commits
+(many tickers converging in one sweep pass, or two commits for the same ticker landing close together),
+that's a real Dexie write-contention race the code's own prior doc comment already anticipated ("a
+transient Dexie write-contention error... under concurrent commits"): a timing collision can leave the
+underlying native IndexedDB transaction auto-committed before all of `writeProjection`'s writes land,
+which Dexie surfaces by rejecting the `db.transaction()` call itself with `PrematureCommitError:
+Transaction committed too early`. This can't be reproduced deterministically in this sandbox (no real
+`Worker`, no way to force the exact browser-side timing), and it isn't repo-wide or ticker-specific — the
+same ticker (FIRE, then separately ESRS) failed on one sweep run and converged cleanly on another,
+consistent with a one-off timing race rather than a structural data bug.
+
+**The fix**: rather than guess at a structural rewrite of `commitTicker`'s transaction sequencing (risky
+without being able to reproduce the exact browser timing to verify a fix), `reconciliationSweep.ts` now
+retries a `commitTicker` call up to twice more, but only when it fails with exactly this Dexie error
+(`isTransientDexieCommitRace` matches on "transaction" + "too early"/"premature" in the message) — a fresh
+`commitTicker` call starts its own worker round trip and its own transaction from scratch, so a retry is a
+real second chance, not a no-op. Any other error (a genuine data/read failure) still surfaces immediately
+with no retry delay, preserving the sweep's existing per-ticker isolation (one ticker's failure never
+stops the rest — Bulk Import Confirm entry above fixed the same class of problem on the Import side).
+
+**Verified**: two new tests in `reconciliationSweep.test.ts` (11 → the exact `getAll()` call sequence for
+a one-ticker sweep was traced empirically first — call #8 is `relevantTradeTransactions`'s own read, the
+only one of the several `rawTransactions.getAll()` calls inside `commitTicker` that isn't already
+swallowed by an internal try/catch, so it's the one whose injected failure genuinely propagates the way a
+real `PrematureCommitError` would): (1) a ticker whose first `commitTicker` attempt fails with the exact
+Dexie message now converges cleanly by the second attempt, with zero reported errors; (2) a ticker whose
+first attempt fails with an unrelated message still surfaces immediately as a per-ticker error, proving
+the retry is scoped to this one error class and doesn't mask real failures. 1104 tests total (2 new);
+`tsc --noEmit`/`arch:check` clean; full suite otherwise green except the two pre-existing flaky files
+already documented in this log (`ImportPage.brokerExcelLoadRace.test.tsx`,
+`ImportPage.aggregateStatement.test.tsx`) — unaffected by this change (verified against pre-fix `HEAD`).
+- **Files changed**: `src/application/services/reconciliationSweep.ts`,
+  `src/application/services/reconciliationSweep.test.ts`.
+- **Deliberately NOT done, and why**: no attempt to eliminate the underlying race at its root (restructure
+  `commitTicker` so the worker round trip and the Dexie transaction never straddle the same call) — that
+  would touch the shared, heavily-tested production commit pipeline every real Buy/Sell/Import write goes
+  through, and can't be verified against the real timing that triggers it from this sandbox. The retry is
+  a safe, narrowly-scoped mitigation for the one caller (the sweep) that's actually hit it in practice;
+  Import's own commit path has not been reported to hit this error.
+- **Next recommended sprint**: continue driving ESRS toward fully closed via the same cycle (sweep →
+  Import re-upload/Confirm), now unblocked for this specific failure mode. If `commitTicker`'s own
+  production callers (Import's Confirm/Smart-Allocate path) are ever reported to hit the same Dexie error,
+  revisit whether the retry belongs one layer down (inside `commitTicker` itself) instead of only in the
+  sweep. Then proceed to ADIB per the user's own explicit request.
