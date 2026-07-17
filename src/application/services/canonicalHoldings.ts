@@ -142,11 +142,28 @@ export async function computeCanonicalPositions(
     }
 
     if (!legacyPos && canonical) {
-      // No legacy row at all for a ticker the canonical side has — cannot
-      // happen via today's write path (every write still lands in Trade
-      // first), kept only so a future write-side cutover doesn't silently
-      // drop a ticker that exists solely in the new architecture.
-      result.push({ ...canonical, source: "canonical" });
+      // No legacy row at all for a ticker the canonical side has. The
+      // original assumption here ("cannot happen via today's write path,
+      // every write still lands in Trade first") is real for how a fact is
+      // FIRST written, but not for what happens to it afterward: `moveTrade`
+      // (and `consolidateTicker`, which calls it) reassigns a Trade's
+      // `portfolioId` without ever touching the matching RawTransaction fact
+      // or committedLedger cache entry it left behind in the SOURCE
+      // portfolio — a real, reproduced gap (see the Phase 10 mutator-audit
+      // list this codebase's own history already names `moveTrade` on).
+      // Reproduced directly: after moving a Trade out of a portfolio, this
+      // exact branch served a full-cost-basis phantom position for the
+      // ticker in the portfolio it no longer belongs to, with zero open
+      // lots to back it up (`openTrades: []`, hardcoded on every canonical
+      // entry) — a real, live bug, not the hypothetical future-architecture
+      // case the original comment anticipated. Until `moveTrade`/
+      // `consolidateTicker` are fixed to correct their facts too, an
+      // unbacked canonical-only position is untrustworthy by construction
+      // (nothing independently corroborates it), so it's dropped here
+      // instead of shown — logged, not silent, so it stays discoverable.
+      console.error(
+        `computeCanonicalPositions: dropping an unbacked canonical-only position for ${ticker} in portfolio ${portfolioId} (${canonical.totalShares} shares, no matching legacy Trade) — likely an orphaned fact left behind by moveTrade/consolidateTicker.`,
+      );
       continue;
     }
     if (!legacyPos) continue;

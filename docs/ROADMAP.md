@@ -2722,3 +2722,53 @@ Full suite: 1093 tests (1 new; same 2 pre-existing unrelated failures noted abov
   SellAllocationDecision, or a duplicate-authority pair the reconciliation sweep hasn't converged) rather
   than this specific display-layer bug — worth checking the Diagnostics Center's `TickerAuthorityPanel`/
   `ReconciliationSweepPanel` for those tickers next.
+
+**Deployed and re-verified against a real screenshot**: the two fixes above shipped to production
+(`main`, PR #127). User confirmed the batch-abort fix worked (fewer open positions), then reported a
+DISTINCT, smaller group of tickers (ADPC, ARAB, EHDR, ELKA, ESRS, FIRE, HDBK) still showing open with a
+tell-tale shape: `LOTS: 0` next to real, nonzero shares/cost-basis/avg-cost — the exact signature of
+`computeCanonicalPositions`'s `!legacyPos && canonical` branch (every canonical-only `PositionAggregate`
+hardcodes `openTrades: []`), meaning these tickers had NO legacy `Trade` row at all, yet the canonical side
+still reported real open shares.
+
+**Root cause, confirmed by direct reproduction, not inspection**: `moveTrade` (`TradeService.ts` — used to
+reassign a trade to a different portfolio, and by `consolidateTicker`, which calls it to reunite a ticker
+split across portfolios) moves `Trade`/`TradeAllocation`/related `TimelineEvent` rows to the target
+portfolio, but never touches the ticker's `RawTransaction` fact(s) or `committedLedger` cache entry — both
+stay tagged under the SOURCE portfolio forever. A synthetic reproduction (`recordBuy` + a real committed
+`LotOpened` event in portfolio p1, then `moveTrade` to p2) confirmed the exact bug: portfolio p1's Holdings
+kept showing the ticker at its full original shares/cost-basis (`source: "canonical"`, `openTrades: []`)
+with nothing backing it, while p2 correctly (if separately) picked it up via legacy-fallback — the ticker's
+history effectively duplicated across two portfolios' worth of RawTransaction/legacy data, with the SOURCE
+side's copy a pure phantom. This is the exact gap this codebase's own "Phase 10 mutator-audit list" already
+named (`moveTrade`/`correctTradeExecutionDate`/`consolidateTicker` "still don't correct their facts") —
+now with concrete proof it's live, not theoretical.
+
+**The fix, narrowly scoped**: `computeCanonicalPositions`'s `!legacyPos && canonical` branch no longer
+trusts an unbacked canonical-only position unconditionally — the original comment's own premise ("cannot
+happen via today's write path") is true for how a fact is FIRST written, but not for what happens to it
+after a move. Since every real write still lands in `Trade` first, a canonical-only entry with zero legacy
+backing today is always either this orphan bug or something equally untrustworthy — dropped instead of
+shown, logged via `console.error` (not silent) so it stays discoverable. Deliberately a display-layer
+stop-gap, not a `moveTrade` fix: fixing `moveTrade`/`consolidateTicker` to correctly reassign facts (via
+`assignPortfolioToFact`, mirroring `renameTickerEverywhere`'s dual-write) would also need
+`tryComputeCanonicalByTicker`'s ticker-discovery step reworked off the naive `getByPortfolio` field query
+(which reads a fact's immutable original `portfolioId`, not its resolved-via-`PortfolioAssignment` current
+one — see `resolveCurrentPortfolioId`'s own doc comment on why `relevantTradeTransactions` deliberately
+avoids that same shortcut) — a real, multi-step, real-money-affecting change not attempted here without
+the ability to test it against live production data.
+- **Files modified**: `src/application/services/canonicalHoldings.ts`,
+  `src/application/services/canonicalHoldings.test.ts` (1 new test — moves a Trade between two portfolios
+  and confirms the source portfolio shows nothing for that ticker afterward; confirmed to fail against the
+  pre-fix code with the exact reported numbers, 500 shares / E£900 cost basis / `Lots: 0`, and pass after).
+  1094 tests total; `tsc --noEmit`/`arch:check` clean.
+- **Deliberately NOT done, and why**: the actual `moveTrade`/`consolidateTicker` fact-migration fix (see
+  above) — real risk to a real user's real financial data from an under-tested multi-step migration this
+  sandboxed session has no live database to verify against, versus a same-session pure-read fix that's
+  safe to reason about in isolation. This display-layer fix does NOT retroactively repair the orphaned
+  RawTransaction facts themselves (they still exist, just no longer trusted) — a future `moveTrade` fix
+  would need to actively migrate them, not just avoid displaying their damage.
+- **Next recommended sprint**: the real `moveTrade`/`consolidateTicker` fact-correction fix, once there's a
+  way to validate it against real data (or a much larger synthetic test matrix covering partial-lot moves,
+  sell-group closure moves, and re-triggering `commitTicker` on both the source and target portfolio after
+  reassignment).
