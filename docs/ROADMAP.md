@@ -3202,3 +3202,241 @@ logic touched.
 
 - **Next recommended sprint**: unchanged — ELKA/ESRS/HDBK forensic root-cause work remains the
   highest-priority open item.
+
+### Architecture-aware root-cause investigation: "closed positions show as open" / duplicate transactions — static analysis only, NO CODE CHANGED
+
+Direct follow-up request, explicitly investigation-only ("do not fix anything yet"): use
+`docs/EXECUTION_GRAPH.json` to scope and trace the exact lifecycle gap behind the still-open bug family
+this log's last several entries (Sprint 16/17 through "Session handoff") were forensically chasing on real
+production data. That prior work had live-browser access this sandboxed session does not; what follows is
+a full static/architectural read of every function in the implicated subgraph, cross-checked against the
+prior entries' own findings — not a live reproduction. Where the prior entries' live evidence and this
+session's code reading agree, that is called out explicitly; where this session's finding is new, it is
+marked as such and still needs live-data confirmation before being trusted as *the* root cause of any one
+ticker's specific corruption.
+
+**1. Execution subgraph** (from `docs/EXECUTION_GRAPH.json`): `fact-store-writes` → `ledger-engine` →
+`allocation-engine` → `holdings-engine` → `canonical-holdings`, orchestrated by `commit-engine`
+(`shouldCommit`/`commitTicker`/`appendAndMaybeCommit`), gated by `verification-engine`
+(`checkTickerMatch`), with `trade-service` + `ledger-projection` as the parallel Legacy Projection track
+`canonical-holdings` reconciles against, and `import-page` as the write entry point. This is exactly the
+10-node strongly-connected component (`allocation-engine`, `commit-engine`, `constraint-validation`,
+`fact-store-writes`, `ledger-engine`, `ledger-projection`, `ledger-rebuild`, `reconciliation`,
+`trade-service`, `verification-engine`) the Graph Validator's `acceptedCycles` entry already disclosed —
+itself a signal, not a coincidence: a tangled mutual-dependency cluster is exactly where a "two components
+disagree about one fact's lifecycle" bug class lives.
+
+**2. Lifecycle trace, Import → Portfolio, with the exact fork where it can silently break:**
+
+- **Import → Fact Store**: `importRecording.recordImportedRawTransactions` (`src/application/services/importRecording.ts:78`)
+  writes a `SellExecution` `RawTransaction` fact for **every** parsed sell candidate unconditionally, the
+  moment the file is imported — independent of any user action on that candidate afterward. This is
+  Import's *only* sanctioned write, per the file's own doc comment (line 9-15): "No ledger, no
+  allocations, no holdings... made HERE."
+- **Fact Store → Verification**: `checkTickerMatch` (`src/application/services/importVerification.ts:192-281`)
+  computes `netShares = existingRemainingShares + pendingBuyShares - pendingSellShares` — **pure net-share
+  arithmetic over Buy/Sell *execution* facts**. Nothing in this function reads, requires, or even checks
+  for the existence of a `SellAllocationDecision` fact. A ticker can reach `matched: true` /
+  `"broker-excel-verified"` purely because enough `SellExecution` facts exist to make the arithmetic add up
+  to the broker's stated position — this is **structurally decoupled** from whether any of those sells
+  have been allocated against a specific open lot.
+- **Verification → Allocation** (the actual fork): a `SellAllocationDecision` fact — the *only* thing that
+  ever reduces a lot's open balance (`allocationEngine.generateAllocations`,
+  `src/application/services/allocationEngine.ts:44-107`, replays *only* `SellAllocationDecision` facts
+  against `LotOpened`/`SellRecorded` events) — is created in exactly two places, confirmed by reading both
+  in full:
+  1. `TradeService.ensureSellFacts` (`src/application/services/TradeService.ts:984-1052`), called from
+     `TradeService.recordSell` (`:742-932`) — i.e. only when a user (or Smart Allocate) explicitly names
+     which lot(s) a sell closes (ADR-002). This is the *only* forward-direction creator.
+  2. `ledgerProjection.ensureLegacyFactsExist`'s sell-decision backfill
+     (`src/application/services/ledgerProjection.ts:235-298`) — but this reads *from* already-existing
+     legacy `TradeAllocation` rows (`legacyAllocations`, line 193-197) and writes a fact to match them. It
+     is a reverse-direction gap-filler (legacy → fact), not a Verification-triggered forward one. On a
+     **freshly purged ticker with zero legacy rows** (the exact "Reset Ticker + re-upload" reproduction
+     logged in the "Session handoff" entry above), this has nothing to backfill from and does nothing.
+  
+  **There is no code path anywhere in this subgraph that creates a `SellAllocationDecision` fact purely
+  because Verification reported `matched: true`.** Nothing bridges, cross-checks, or surfaces this gap.
+
+- **Allocation → Holdings**: `holdingsEngine.computeHoldings` (`src/application/services/holdingsEngine.ts:36-82`)
+  reduces each `LotOpened` event's shares by whatever `Allocation[]` array it's given (line 37-45). If
+  `SellAllocationDecision` facts don't exist for a ticker, `generateAllocations` legitimately returns `[]`
+  for it, and `computeHoldings` legitimately reports the **full, unreduced gross Buy total** as open — this
+  is correct behavior given its input, not a bug in this function. It exactly reproduces the "Session
+  handoff" entry's own observation: "Holdings still shows 6,364 shares open — the full gross buy total,
+  zero sells applied."
+- **Holdings → Portfolio (the read side)**: `canonicalHoldings.computeCanonicalPositions`
+  (`src/application/services/canonicalHoldings.ts:118-190`) reconciles the canonical (fact-replay) result
+  against the legacy (`Trade.remainingShares`-based `computePositions`) result. Its own doc comment
+  (line 45-63) already discloses the one case it trusts canonical over legacy — a canonical ledger with
+  real committed events whose lots net to **exactly** zero (the `CLOSED` sentinel). **Every other
+  disagreement between the two sides falls back to legacy** (line 180-185: "showing the recorded trades
+  until the discrepancy is resolved") — legacy wins, not canonical, whenever they differ and neither side
+  reads as cleanly zero.
+
+**3. Where a should-be-closed position can remain visible in Holdings — two distinct, both
+code-confirmed mechanisms:**
+
+- **Mechanism A (no allocation ever existed)**: per the trace above, if a Sell candidate's `SellExecution`
+  fact was written by Import but no `SellAllocationDecision` was ever created for it (no Smart
+  Allocate/Allocate Sell action succeeded), **both** the canonical ledger *and* the legacy `Trade` row
+  agree the position is open — because neither side has any allocation to apply. This matches the cleanest
+  logged reproduction (ELKA post-Reset) exactly: Verification reports "fully matched" (correct, given its
+  own narrower definition), Holdings shows the full gross amount (also correct, given the fact log it was
+  given) — the bug is that nothing tells the user these two "correct" answers describe different questions.
+- **Mechanism B (a real allocation silently regresses)**: `TradeService.recordSell` writes the legacy
+  `Trade.remainingShares`/`TradeAllocation` **unconditionally and synchronously** (lines 844-861), but its
+  fact-side write — `ensureSellFacts`, the only creator of the `SellAllocationDecision` fact — is wrapped
+  in a **non-fatal `.catch()`** (lines 884-897): `console.error("ensureSellFacts failed (fact write,
+  non-fatal):", err); return undefined;`. If `ensureSellFacts` throws for *any* reason (a Dexie write
+  conflict — this codebase already has one open, unexplained `PrematureCommitError` class logged two
+  entries above for the same `commitTicker` pipeline; a `Worker`-round-trip failure; any other transient
+  error), `recordSell` still returns a **successful** result to its caller. The legacy row is correctly
+  updated *in that moment* — but `ledgerProjection.projectLegacyTicker`
+  (`src/application/services/ledgerProjection.ts:316-546`) is a **full delete-and-replace mirror** of
+  `allocationEngine`'s fact-replay output (line 500-541: every legacy allocation not present in
+  `engineAllocations` is deleted, every `Trade.remainingShares` is recomputed from `closedByLot`, which is
+  built purely from `engineAllocations`, line 347-350). Since no `SellAllocationDecision` fact was ever
+  written, the **next** `commitTicker` triggered for that ticker for *any* unrelated reason (a new Buy, a
+  different Sell, a Reconciliation Sweep run) will silently **delete** the legacy allocation and **reset**
+  `Trade.remainingShares` back to its pre-sell value — a real position, already correctly closed, silently
+  reopening with no new user action on it. This is a plausible, code-confirmed *contributing* mechanism to
+  the "previously confirmed fully resolved... regressed" pattern the "Session handoff" entry logged for
+  ELKA (that entry attributed the specific regression to an accidental UI-driven retraction — a different,
+  also-real trigger — but this non-fatal-catch path is a second, independent way the same class of
+  regression can occur, not yet checked against that specific incident's raw fact log).
+- **A third, narrower contributing factor**: `commitEngine.shouldCommit`
+  (`src/application/services/commitEngine.ts:133-145`) gates the *entire* reactive commit for a ticker on
+  **every** relevant fact (Buy/Sell/PositionVerificationCapture/OrderEvidenceCapture) reaching a
+  non-"Needs Review" verdict. A single unrelated stuck row on the same ticker (e.g. one ambiguous dividend,
+  one low-confidence candidate never resolved) blocks `commitTicker` from running at all for that ticker —
+  meaning a `SellAllocationDecision` fact that *was* successfully written (no Mechanism B failure) can
+  still sit uncommitted, with the canonical ledger stale, until something else unblocks the ticker.
+
+**4. Root cause category** (per the objective's own list): **not** duplicate ingestion, duplicate facts,
+allocation replay, holdings aggregation, UI cache, or a single "architecture drift" — those components are
+each individually correct given their inputs (verified by reading `allocationEngine.ts`/`holdingsEngine.ts`
+in full: both are small, pure, and do exactly what their doc comments claim). The root cause is **a
+verification/commit-pipeline structural gap**: (a) Verification's "matched" contract and Allocation's
+"lots actually closed" contract are two independent truths with no code anywhere that checks one implies
+the other, and (b) the one function that bridges Verification-triggered-allocation to the fact log
+(`TradeService.recordSell` → `ensureSellFacts`) can fail non-fatally and silently, with a downstream
+full-replace projection (`projectLegacyTicker`) that then treats the missing fact as authoritative and
+reverts already-correct legacy state. This is a **commit pipeline** classification with a **stale
+projection** consequence, not a duplicate-detection defect — see finding 6 below for why the several real
+duplicate-detection mechanisms in this codebase are a separate, correctly-functioning concern here.
+
+**5. Ownership boundary check — one confirmed, previously-disclosed violation, re-confirmed by direct
+reading**: `ImportPage.tsx` imports `checkTickerMatch` **directly** from `importVerification.ts`
+(`src/presentation/pages/ImportPage.tsx:28`) and calls it itself (line 2280) to compute
+`tickerMatchStatuses`, rather than calling `verificationEngine.verifyAllDetailed`/`verifyTicker` — the
+canonical, already-composed judgment `commitEngine.shouldCommit` itself uses internally
+(`commitEngine.ts:143`, `verifyAll({...})`). This is the exact, already-disclosed
+`ARCHITECTURAL_DEBT.md` §3.2 violation ("`ImportPage.tsx` still reads from the legacy path... re-derives
+some of the same signals instead of calling `verifyAllDetailed`"), re-confirmed here as directly relevant:
+`import-page` (a presentation-layer node) is doing `verification-engine`'s job for its own `matched`
+computation, so a future fix to `checkTickerMatch`'s behavior (e.g. adding an allocation-completeness
+check per finding 3) would **not** automatically reach the UI unless `ImportPage.tsx`'s own call site is
+also updated — the two are two separate implementations of the same judgment today, confirmed identical
+in current behavior only by inspection, not by construction. No other ownership violation was found in
+this subgraph: `TradeService`/`ledgerProjection` are each other's disclosed, `FROZEN`, CI-guarded
+dual-writer pair (`ARCHITECTURAL_DEBT.md` §1.1) — a known, tracked exception, not a new finding.
+
+**6. Every place duplicate transactions are filtered, merged, ignored, or created — six distinct
+mechanisms found, confirmed NOT a single source of truth, though each is individually well-tested**:
+1. `rawTransactionFolds.findLiveExecutionFact`/`findUnclaimedSellExecutionFact` — Fact Store write-time
+   dedup (used by `importRecording.ts`, `TradeService.ensureBuyFact`/`ensureSellFacts`,
+   `backfillRawTransactions.ts`).
+2. `duplicateDetection.ts` (947 lines, 20 exported functions — `findDuplicateBuyMatch`,
+   `findDuplicateSellMatch`, `findMatch`, `timesConflict`, `findAggregateStatementMatches`,
+   `findOfficialBrokerExcelReuploadDuplicateKeys`, and more) — the UI-session-level "N duplicate
+   transaction(s) skipped" logic `ImportPage.tsx` calls directly, and the `timesConflict` primitive shared
+   (correctly, via `sharedHelperFiles`) across `fact-store-writes`/`verification-engine`/`trade-service`/
+   `ledger-projection`/`reconciliation`.
+3. `commitEngine.reconcileDuplicateAuthority` (Sprint 16, logged above) — converges two *live* facts of
+   the *same* execution by authority rank, reactive inside `commitTicker` only.
+4. `duplicateTradeCleanup.ts` (Sprint "Duplicate Trade Cleanup", logged above) — operates on the **legacy
+   `Trade` table directly**, a structurally separate detection pass (portfolioId/ticker/date/
+   time-to-the-minute/shares/price grouping) with no relationship to the `RawTransaction` fact log at all;
+   built explicitly as a one-time cleanup for pre-fact-log-era corruption, not a live detection mechanism.
+5. `reconciliationSweep.ts` — a manual, all-tickers driver of #3, not new detection logic of its own.
+6. `ImportPage.tsx`'s own inline duplicate/merge logic (`duplicateMatch`-shaped checks referenced in
+   `OCR_SUBSYSTEM.md`, `mergeSuggestions`) — a presentation-layer re-derivation, the same ownership pattern
+   as finding 5's `checkTickerMatch` re-derivation.
+
+**No single source of truth exists for "is this a duplicate."** Six mechanisms, each scoped to a different
+layer/moment (extraction time, UI session, fact-log convergence, legacy-table cleanup, presentation-layer
+merge suggestion), each individually tested and — per this session's reading — individually correct for
+its own narrow scope. This is real architectural debt (a change to duplicate-detection policy in one place
+does not propagate to the other five), but it is **not** the mechanism behind the specific "closed
+position shows open" symptom traced above — that symptom traces to the Verification/Allocation gap in
+finding 2-3, not to a duplicate slipping through detection. The two symptom families (duplicate
+transactions existing, and closed positions showing open) share a subgraph and a root *class* (fact-log
+completeness vs. commit-pipeline reliability) but are not the same bug.
+
+**7. Impact analysis** (from `docs/EXECUTION_GRAPH.json`, machine-readable detail there):
+
+| Node | Criticality | Files implicated this investigation | Required regression tests |
+|---|---|---|---|
+| `fact-store-writes` | critical | `importRecording.ts` | `importRecording.test.ts`, `rawTransactionFolds.test.ts`, `backfillRawTransactions.test.ts` |
+| `verification-engine` | high | `importVerification.ts` (`checkTickerMatch`) | `importVerification.test.ts`, `verificationEngine.test.ts` |
+| `commit-engine` | critical | `commitEngine.ts` (`shouldCommit`, `appendAndMaybeCommit`, `commitTicker`) | `commitEngine.test.ts`, `commitEngine.diagnostics.test.ts`, `commitEngine.reconcileDuplicateAuthority.test.ts` |
+| `trade-service` | critical | `TradeService.ts` (`recordSell`, `ensureSellFacts`) | `TradeService.test.ts`, `duplicateTradeCleanup.test.ts` |
+| `ledger-engine` | critical | `ledgerEngine.ts` (read-only in this trace) | `ledgerEngine.test.ts` |
+| `allocation-engine` | critical | `allocationEngine.ts` (read-only in this trace) | `allocationEngine.test.ts` |
+| `holdings-engine` | critical | `holdingsEngine.ts` (read-only in this trace) | `holdingsEngine.test.ts` |
+| `ledger-projection` | critical | `ledgerProjection.ts` (`projectLegacyTicker`, `ensureLegacyFactsExist`) | `ledgerProjection.test.ts` |
+| `canonical-holdings` | high | `canonicalHoldings.ts` | `canonicalHoldings.test.ts` |
+| `import-page` | high | `ImportPage.tsx` (`checkTickerMatch` re-derivation, Smart Allocate/Allocate Sell call sites) | 19 co-located tests (see `docs/EXECUTION_GRAPH.json`), incl. `ImportPage.batchCommitIsolation*.test.tsx`, `ImportPage.reconciliation*.test.tsx` |
+
+Upstream of any future fix to `recordSell`/`ensureSellFacts`: `evidence-authority`, `duplicateDetection.ts`
+(shared helper), `rawTransactionFolds.ts` (shared helper). Downstream, and therefore requiring
+re-verification: `canonical-holdings` → `dashboard-pages`; `trades-page`; `lot-manager` (calls the same
+`ledgerEngine`/`allocationEngine`/`ledgerProjection` trio directly); `system-validation-snapshot` (the
+determinism/cross-check gate — any fix here should be checked against `determinism.e2e.test.ts`, which
+already exercises Reset → Import → Confirm → Smart Allocate → Commit → Rebuild end to end). Per the
+Execution Graph's "Parallel-work rules" #3 and #6: this entire investigation sits inside the `critical`/
+`high` Fact Pipeline + Legacy Projection + Policy clusters — any implementation work here is **not**
+parallelizable against other in-flight work on the same clusters, and must be sequenced through the full
+regression-test list above, not just the directly-touched file's own tests.
+
+**8. Root Cause Report — summary**: The "closed position still shows open" / "Import and Holdings disagree
+about a position's lifecycle" symptom family traces to a real, structural gap between Verification
+(`checkTickerMatch`: net-share arithmetic over execution facts) and Allocation
+(`SellAllocationDecision` facts: the only thing that ever closes a lot) — the two are computed
+independently, nothing checks one against the other, and the only forward-direction bridge between them
+(`TradeService.recordSell` → `ensureSellFacts`) can fail non-fatally and silently while its caller still
+reports success, after which the legacy projection's full-replace semantics (`projectLegacyTicker`) treats
+the missing fact as ground truth and can revert already-correct data on the next unrelated commit. A
+secondary, narrower factor (`shouldCommit`'s all-relevant-facts-verified gate) can independently delay a
+correctly-written allocation from ever being committed. The separately real "duplicate transactions"
+symptom traces to a different, already-disclosed root cause (six independent, uncoordinated
+duplicate-detection mechanisms, `ARCHITECTURAL_DEBT.md`-adjacent but not previously inventoried together)
+— related by subgraph and by symptom category, not by a shared single defect.
+
+**Confidence and what would raise it**: every finding above is cited to a specific file/line and confirmed
+by direct reading, not inferred from the bug report alone — but none of it was run against live production
+data (this sandbox has no browser/IndexedDB). The "Session handoff" entry's own diagnostic script (dump
+every raw fact for a ticker, follow Retraction/Correction chains) is still the fastest way to confirm which
+of Mechanism A vs. B actually produced ELKA/ESRS/HDBK's specific corruption — this investigation narrows
+*what* to look for in that dump (specifically: does a live `SellAllocationDecision` fact exist for each of
+the ticker's sells, and if so, does `committedLedger.getAllocations` for that ticker currently reflect it)
+rather than replacing the need to run it.
+
+**Implementation options, NOT chosen or implemented here** (per this task's explicit "root cause first"
+scope): (a) make `checkTickerMatch`/`shouldCommit` aware of allocation completeness, so a sell with no
+`SellAllocationDecision` cannot reach a terminal "matched"/committed state; (b) stop swallowing
+`ensureSellFacts` failures non-fatally, or surface them as a blocking, retryable error instead of a
+console-only log; (c) make `projectLegacyTicker` reconcile-and-warn on a legacy row it's about to revert
+rather than silently deleting/resetting it; (d) consolidate `ImportPage.tsx`'s `checkTickerMatch`
+re-derivation onto `verifyAllDetailed`/`verifyTicker` (already scoped as PR3 in
+`docs/PORTFOLIO_OS_V2_SPEC.md`); (e) consolidate the six duplicate-detection mechanisms behind one policy
+module (also PR3-adjacent). None of these were evaluated for risk/cost here, per instruction — this entry
+is the input to that decision, not the decision itself.
+
+- **Files changed this entry**: none — investigation and documentation only, per explicit instruction.
+- **Next recommended sprint**: get one of ELKA/ESRS/HDBK's raw fact dumps (the "Session handoff" entry's
+  own diagnostic script) and check specifically for a live `SellAllocationDecision` fact per sell — that
+  single data point will confirm or rule out Mechanism A vs. B above and turn this from a well-evidenced
+  hypothesis into a confirmed root cause, at which point one or more of the implementation options above
+  (evaluated together, not the whole list at once) becomes the actual next sprint.
