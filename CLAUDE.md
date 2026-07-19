@@ -28,6 +28,8 @@ Every Buy creates one immutable `Trade` (a lot). Selling never assumes FIFO or a
 
 Start each session by reading `docs/ROADMAP.md` (gap analysis + sprint log). Audit the current state against the product vision before adding features; implement the highest-priority gap(s) only, not the whole backlog. Update the sprint log and "Next recommended sprint" section when you finish.
 
+For any task touching more than one subsystem, read `docs/EXECUTION_GRAPH.md` first — it maps every subsystem's dependencies, shared state, and which parts of the codebase are safe to change in parallel versus which must be sequenced.
+
 ## Conventions
 
 - No comments except where a business rule or heuristic is genuinely non-obvious.

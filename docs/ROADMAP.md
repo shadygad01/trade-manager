@@ -3094,3 +3094,38 @@ and filter each store's `getAll()` result by `.ticker === "ELKA"` the same way.
   unexplained; deprioritized behind (1) since it's optional maintenance, not on the critical path. (4) ADIB
   (~4-share discrepancy, likely a pre-tracking-window opening balance) remains untouched, per the user's own
   explicit "do this last" ordering.
+
+### Execution Graph — formalizing the cross-subsystem dependency/parallel-work map (docs only, requested directly)
+
+User asked for an architecture-discovery task, explicitly scoped to *not* touch business logic: audit
+every subsystem, build a dependency graph (responsibilities/upstream/downstream/shared state/ownership),
+and produce it as a standing document future work should consult before deciding what's safe to change in
+parallel. Audited the existing architecture docs first (`ARCHITECTURE.md`, `DATA_MODEL.md`,
+`ARCHITECTURAL_DEBT.md`, `MIGRATION_STATUS.md`, `OCR_SUBSYSTEM.md`, `EVIDENCE_ARCHITECTURE.md`,
+`VERIFICATION_ENGINE.md`, `ANALYTICS_ENGINE.md`, `PORTFOLIO_OS_V2_SPEC.md`'s Ownership Matrix and Guardian
+design) plus the real import graph (`grep` across `src/application/services/*.ts`,
+`src/presentation/lib/data.ts`'s composition root, `serialize.ts`'s per-`(portfolioId, ticker)` concurrency
+lock) to avoid re-deriving anything that already had a canonical answer.
+
+**Delivered**: `docs/EXECUTION_GRAPH.md` — ~30 subsystem nodes (Fact Pipeline, Policy/Judgment, Legacy
+Projection track, read-only consumers, ingestion, persistence, presentation) as a table
+(responsibility/inputs/outputs/depends-on/consumers/shared-state) plus a Mermaid dependency diagram and an
+explicit "parallel-work rules" section — e.g. independent `BrokerParser`/analytics-calculator additions are
+always parallel-safe, the Legacy Projection track's two Dexie tables are not (despite being separate files),
+same-ticker Fact Pipeline work is serialized at runtime already via `serialize.ts` so different-ticker work
+is genuinely concurrent today. Cross-linked from `ARCHITECTURE.md` (points to it for the granular graph) and
+`CLAUDE.md`'s "Working on this repo" section (read it alongside `ROADMAP.md` for any multi-subsystem task).
+
+**No architectural blockers found, none fixed.** The layering (`.dependency-cruiser.cjs`) and frozen-count
+guards (`regressionGuards.test.ts`) already machine-enforce most of the edges/shared-state boundaries this
+document describes — the task was formalizing an already-real, already-enforced structure, not changing it.
+Zero `src/` files touched; zero tests affected.
+
+**Deliberately not built**: no CI guard cross-checking the new document's node list against the live import
+graph for drift (`sourceScan.ts` could plausibly grow one) — new tooling, not part of this documentation
+task; left for a future sprint if drift becomes an observed problem rather than a hypothetical one.
+
+- **Next recommended sprint**: same open items as above (ELKA/ESRS/HDBK forensic root-cause work) — this
+  entry was a direct, explicit documentation request and doesn't change that priority ordering. If picked
+  up next, `docs/EXECUTION_GRAPH.md`'s Fact Pipeline / Policy / Legacy Projection rows are the fastest way
+  to see which engines that investigation will touch and in what order.
