@@ -28,7 +28,7 @@ Every Buy creates one immutable `Trade` (a lot). Selling never assumes FIFO or a
 
 Start each session by reading `docs/ROADMAP.md` (gap analysis + sprint log). Audit the current state against the product vision before adding features; implement the highest-priority gap(s) only, not the whole backlog. Update the sprint log and "Next recommended sprint" section when you finish.
 
-For any task touching more than one subsystem, read `docs/EXECUTION_GRAPH.md` first — it maps every subsystem's dependencies, shared state, and which parts of the codebase are safe to change in parallel versus which must be sequenced.
+For any task touching more than one subsystem, read `docs/EXECUTION_GRAPH.md` first — it maps every subsystem's dependencies, shared state, and which parts of the codebase are safe to change in parallel versus which must be sequenced. Run `npm run graph:check` after touching a file inside its `ownershipScope` (or changing a node's exports) — it validates the graph against the real codebase and runs in CI; see `docs/EXECUTION_GRAPH.md`'s "Validator" section.
 
 ## Conventions
 

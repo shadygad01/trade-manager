@@ -1,9 +1,82 @@
 {
-  "$schemaNote": "Informal schema (no external JSON Schema file). Each node: id/name/layer/cluster/responsibility/filesOwned/publicInterfaces/upstreamDependencies/downstreamConsumers/sharedState/criticality/criticalityRationale/requiredRegressionTests. Edges are {id: <node id in this file>} or {external: <name>, note: <why it's not its own node>}. See docs/EXECUTION_GRAPH.md for the prose version, the Mermaid diagram, and parallel-work rules this file doesn't repeat.",
+  "$schemaNote": "Informal schema (no external JSON Schema file). Each node: id/name/layer/cluster/responsibility/filesOwned/publicInterfaces/upstreamDependencies/downstreamConsumers/sharedState/criticality/criticalityRationale/requiredRegressionTests. Edges are {id: <node id in this file>} or {external: <name>, note: <why it's not its own node>}. ownershipScope lists directories where every non-test source file must be claimed by exactly one node's filesOwned OR listed in sharedHelperFiles. acceptedCycles lists known, reviewed circular dependencies (as sorted node-id arrays with a reason) that scripts/validate-execution-graph.ts downgrades from error to warning instead of failing CI on — the same frozen-allowlist pattern src/architecture/regressionGuards.test.ts already uses. This whole file is validated by `npm run graph:check` (scripts/validate-execution-graph.ts): ownership, orphan files, ownership conflicts, dependency validation against real imports, circular dependencies, public-interface drift, layer drift, and internal graph consistency (unique ids, mirrored edges, accurate counts). See docs/EXECUTION_GRAPH.md's 'Validator' section for the full severity policy and how to update this file when the architecture changes, and the rest of that doc for the prose version, the Mermaid diagram, and parallel-work rules this file doesn't repeat.",
   "generatedFrom": {
-    "commit": "086d8b37b5907f6a490e0812f91238f0ce8d61ca",
+    "commit": "7faf48c9e80fe1651cfca2c8f9850f5f4e65466a",
     "method": "filesOwned/publicInterfaces/requiredRegressionTests.coLocatedUnitTests/crossCuttingOrIntegrationTests were extracted programmatically (export-statement regex + test-file glob + import-string grep) against the files listed in docs/EXECUTION_GRAPH.md's Subsystem table. layer/cluster/responsibility/upstream/downstream/sharedState/criticality/ciRegressionGuards were authored from docs/EXECUTION_GRAPH.md, docs/ARCHITECTURAL_DEBT.md, docs/PORTFOLIO_OS_V2_SPEC.md Part 5, and src/architecture/regressionGuards.test.ts."
   },
+  "ownershipScope": [
+    "src/application/services",
+    "src/application/analytics",
+    "src/infrastructure/ocr",
+    "src/infrastructure/stes",
+    "src/infrastructure/thndrOrders",
+    "src/infrastructure/db",
+    "src/infrastructure/market-data",
+    "src/infrastructure/diagnostics"
+  ],
+  "sharedHelperFiles": [
+    {
+      "path": "src/application/services/duplicateDetection.ts",
+      "note": "timesConflict/parseTimeToMinutes — imported by fact-store-writes, verification-engine, reconciliation, trade-service, ledger-projection, ledger-rebuild, evidence-graph, and ImportPage directly. Too widely shared to attribute to one node without misrepresenting the others' real dependency on it."
+    },
+    {
+      "path": "src/application/services/serialize.ts",
+      "note": "runSerialized — the generic per-key async queue. Used by commit-engine and lot-manager (application) and directly by several presentation files (SellAllocationForm, ImportPage, TradesPage, determinismScenario). Framework-agnostic by design (see its own doc comment); not owned by any one node."
+    },
+    {
+      "path": "src/application/services/types.ts",
+      "note": "AppRepositories — the shared repository-bundle type nearly every application service and several presentation files import. A pure type-definition leaf, not a node in its own right."
+    },
+    {
+      "path": "src/application/services/orderEvidence.ts",
+      "note": "Order-evidence corroboration helpers. Imported independently by both verification-engine and import-page (the latter is the documented ARCHITECTURAL_DEBT.md 3.2 drift — ImportPage re-derives the same signals rather than calling Verification Engine)."
+    },
+    {
+      "path": "src/application/services/netShareTimeline.ts",
+      "note": "findLastBalancedDate. Same dual-consumer shape as orderEvidence.ts — verification-engine and import-page both import it directly."
+    },
+    {
+      "path": "src/infrastructure/ocr/parsers/trackedDateRange.ts",
+      "note": "Rolling-cutoff date-range helper explicitly shared (per docs/OCR_SUBSYSTEM.md: 'extend that module, don't fork it') between ocr-import-pipeline's parsers (ThndrParser/CsvStatementParser) and stes-workbook-import's StesWorkbookParser.ts. Originally mis-attributed to ocr-import-pipeline alone, which the Graph Validator's circular-dependency check correctly flagged as creating a false cycle (ocr-import-pipeline -> stes-workbook-import -> ocr-import-pipeline) — moved here to fix the modeling error, not the code."
+    }
+  ],
+  "acceptedCycles": [
+    {
+      "nodes": [
+        "allocation-engine",
+        "commit-engine",
+        "ledger-engine",
+        "ledger-projection",
+        "ledger-rebuild",
+        "reconciliation",
+        "trade-service",
+        "verification-engine"
+      ],
+      "reason": "Not one designed cycle — the union of several independently-real mutual-import pairs inside the Fact Pipeline / Legacy Projection cluster, discovered by this validator's SCC check (never previously visible as a single connected component across the separate docs that each mention one pairwise edge): reconciliation <-> verification-engine <-> commit-engine (reconciliationSweep.ts calls commitTicker; commitEngine.ts calls verifyAll; verificationEngine.ts calls latestByTicker from reconciliation.ts) and ledger-rebuild <-> trade-service (ledgerRebuild.ts calls recordBuy/deleteTrade; TradeService.ts imports ledgerRebuild's canonicalKey), joined into one component via commit-engine -> ledger-projection -> ledger-rebuild -> reconciliation. Every edge is real and independently disclosed elsewhere (docs/ARCHITECTURAL_DEBT.md's Legacy Projection / dual-writer items, docs/VERIFICATION_ENGINE.md). Not fixed here — untangling it would be architectural refactoring, explicitly out of scope for the Graph Validator task. Closure path, if ever revisited: PR3/PR4/PR5 in docs/PORTFOLIO_OS_V2_SPEC.md's migration roadmap (Policy module consolidation, Guardian pipeline, single Holdings read model) are the changes that would eventually break these edges, not a standalone fix."
+    },
+    {
+      "nodes": [
+        "allocation-engine",
+        "commit-engine",
+        "constraint-validation",
+        "fact-store-writes",
+        "ledger-engine",
+        "ledger-projection",
+        "ledger-rebuild",
+        "reconciliation",
+        "trade-service",
+        "verification-engine"
+      ],
+      "reason": "The same cluster as the declared-graph SCC above, but as seen in REAL imports rather than the hand-authored upstream/downstream lists: two more nodes join the component once constraint-validation (verificationEngine.ts imports buildTickerConstraintReport) and fact-store-writes (verificationEngine.ts and commitEngine.ts both import rawTransactionFolds.ts's isRetracted) are included. Same disclosure and closure-path note as the declared-graph entry above."
+    },
+    {
+      "nodes": [
+        "ocr-import-pipeline",
+        "thndr-orders-workbook"
+      ],
+      "reason": "ImportOrchestrator.ts (ocr-import-pipeline) imports parseThndrOrdersWorkbook from ThndrOrdersWorkbookParser.ts (thndr-orders-workbook) to route workbook uploads to it; ThndrOrdersWorkbookParser.ts imports parsePrice back from ThndrParser.ts (ocr-import-pipeline) to reuse its price-parsing logic instead of duplicating it. A small, real, two-file mutual dependency. Not fixed here (extracting parsePrice to a shared, neutral module would be the closure path, but that's a code change and this task's scope is documentation/tooling only, not architectural refactoring)."
+    }
+  ],
   "criticalityLevels": {
     "critical": "Writes or directly derives primary financial state (shares, cost basis, cash) in the replay/write path. A defect is a silent, compounding money-correctness bug — the class of incident named repeatedly in docs/ROADMAP.md.",
     "high": "Gates, corrects, or orchestrates what reaches a critical node, or aggregates critical nodes into a load-bearing decision. A defect causes a critical node to receive wrong input or lets a wrong verdict reach the user undetected.",
@@ -14,20 +87,21 @@
     "critical": 11,
     "high": 9,
     "medium": 6,
-    "low": 5
+    "low": 6
   },
-  "nodeCount": 31,
+  "nodeCount": 32,
   "nodes": [
     {
       "id": "fact-store-writes",
       "name": "Fact Store writes",
       "layer": "application",
       "cluster": "fact-pipeline",
-      "responsibility": "Append-only creation of RawTransaction facts from parsed import evidence, with identity dedup against already-live facts.",
+      "responsibility": "Append-only creation of RawTransaction facts from parsed import evidence, with identity dedup against already-live facts; also owns provenanceRepair.ts's corrective-fact writes (extraction-provenance repair, ProvenanceRepairPanel/ImportPage).",
       "filesOwned": [
         "src/application/services/importRecording.ts",
         "src/application/services/backfillRawTransactions.ts",
-        "src/application/services/rawTransactionFolds.ts"
+        "src/application/services/rawTransactionFolds.ts",
+        "src/application/services/provenanceRepair.ts"
       ],
       "publicInterfaces": [
         {
@@ -94,6 +168,36 @@
           "file": "src/application/services/rawTransactionFolds.ts",
           "kind": "function",
           "name": "findLiveExecutionFact"
+        },
+        {
+          "file": "src/application/services/provenanceRepair.ts",
+          "kind": "interface",
+          "name": "ProvenanceRepairFinding"
+        },
+        {
+          "file": "src/application/services/provenanceRepair.ts",
+          "kind": "interface",
+          "name": "ProvenanceRepairReport"
+        },
+        {
+          "file": "src/application/services/provenanceRepair.ts",
+          "kind": "function",
+          "name": "dryRunProvenanceRepair"
+        },
+        {
+          "file": "src/application/services/provenanceRepair.ts",
+          "kind": "interface",
+          "name": "ProvenanceRepairResult"
+        },
+        {
+          "file": "src/application/services/provenanceRepair.ts",
+          "kind": "function",
+          "name": "applyProvenanceRepair"
+        },
+        {
+          "file": "src/application/services/provenanceRepair.ts",
+          "kind": "function",
+          "name": "upgradeSellExecutionFact"
         }
       ],
       "upstreamDependencies": [
@@ -130,6 +234,7 @@
         "coLocatedUnitTests": [
           "src/application/services/backfillRawTransactions.test.ts",
           "src/application/services/importRecording.test.ts",
+          "src/application/services/provenanceRepair.test.ts",
           "src/application/services/rawTransactionFolds.test.ts"
         ],
         "crossCuttingOrIntegrationTests": [
@@ -184,6 +289,14 @@
         },
         {
           "id": "system-validation-snapshot"
+        },
+        {
+          "id": "ledger-projection",
+          "via": "type-only import (LedgerEvent/LotOpenedEvent)"
+        },
+        {
+          "id": "lot-manager",
+          "via": "generateLedgerEvents"
         }
       ],
       "sharedState": [],
@@ -233,6 +346,14 @@
         },
         {
           "id": "system-validation-snapshot"
+        },
+        {
+          "id": "ledger-projection",
+          "via": "type-only import (Allocation)"
+        },
+        {
+          "id": "lot-manager",
+          "via": "generateAllocations"
         }
       ],
       "sharedState": [],
@@ -411,6 +532,18 @@
           "id": "evidence-authority"
         },
         {
+          "id": "ledger-engine",
+          "via": "commitProjectionWorker.ts/commitProjection.worker.ts import generateLedgerEvents"
+        },
+        {
+          "id": "allocation-engine",
+          "via": "commitProjectionWorker.ts/commitProjection.worker.ts import generateAllocations"
+        },
+        {
+          "id": "fact-store-writes",
+          "via": "rawTransactionFolds.ts (isRetracted/resolveCurrentTicker)"
+        },
+        {
           "external": "duplicateDetection.ts",
           "note": "shared leaf helper (timesConflict) — not its own node"
         }
@@ -431,6 +564,10 @@
         },
         {
           "id": "import-page"
+        },
+        {
+          "id": "diagnostics-application-support",
+          "via": "resolveCurrentPortfolioId"
         }
       ],
       "sharedState": [
@@ -562,17 +699,20 @@
           "id": "evidence-authority"
         },
         {
-          "external": "constraintValidation.ts",
-          "note": "buildTickerConstraintReport composition"
+          "id": "constraint-validation",
+          "via": "buildTickerConstraintReport composition"
         },
         {
-          "external": "duplicateDetection.ts"
+          "id": "fact-store-writes",
+          "via": "rawTransactionFolds.ts (isRetracted)"
         },
         {
-          "external": "netShareTimeline.ts"
+          "external": "duplicateDetection.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
         },
         {
-          "external": "mismatchResolver.ts"
+          "external": "netShareTimeline.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
         }
       ],
       "downstreamConsumers": [
@@ -722,9 +862,11 @@
       "name": "Evidence Graph",
       "layer": "application",
       "cluster": "read-only-consumer",
-      "responsibility": "Read-only composed view: transaction/document/ticker-position nodes plus corroborate/contradict/missing edges.",
+      "responsibility": "Read-only composed view: transaction/document/ticker-position nodes plus corroborate/contradict/missing edges. Also owns evidenceIntelligence.ts + canonicalTransaction.ts, a further composition over Verification/Completeness Engine output that is currently dormant (zero production callers, per MIGRATION_STATUS.md's dormant-function note) but lives in the same evidence-composition category.",
       "filesOwned": [
-        "src/application/services/evidenceGraph.ts"
+        "src/application/services/evidenceGraph.ts",
+        "src/application/services/evidenceIntelligence.ts",
+        "src/application/services/canonicalTransaction.ts"
       ],
       "publicInterfaces": [
         {
@@ -771,6 +913,26 @@
           "file": "src/application/services/evidenceGraph.ts",
           "kind": "function",
           "name": "buildEvidenceGraph"
+        },
+        {
+          "file": "src/application/services/evidenceIntelligence.ts",
+          "kind": "interface",
+          "name": "EvidenceIntelligenceReport"
+        },
+        {
+          "file": "src/application/services/evidenceIntelligence.ts",
+          "kind": "function",
+          "name": "getEvidenceIntelligence"
+        },
+        {
+          "file": "src/application/services/canonicalTransaction.ts",
+          "kind": "interface",
+          "name": "CanonicalTransaction"
+        },
+        {
+          "file": "src/application/services/canonicalTransaction.ts",
+          "kind": "function",
+          "name": "buildCanonicalTransactions"
         }
       ],
       "upstreamDependencies": [
@@ -791,7 +953,9 @@
       "criticalityRationale": "Deliberately unpersisted, rebuilt on every read; a bug is visible in the Diagnostics Center UI and correctable without any stored-state risk.",
       "requiredRegressionTests": {
         "coLocatedUnitTests": [
-          "src/application/services/evidenceGraph.test.ts"
+          "src/application/services/canonicalTransaction.test.ts",
+          "src/application/services/evidenceGraph.test.ts",
+          "src/application/services/evidenceIntelligence.test.ts"
         ],
         "crossCuttingOrIntegrationTests": [],
         "ciRegressionGuards": []
@@ -899,11 +1063,16 @@
           "id": "evidence-authority"
         },
         {
-          "external": "duplicateDetection.ts"
+          "external": "duplicateDetection.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
         },
         {
           "id": "commit-engine",
           "via": "reconciliationSweep.ts calls commitTicker"
+        },
+        {
+          "id": "ledger-projection",
+          "via": "reconciliationSweep.ts imports LegacyLedgerRepos"
         }
       ],
       "downstreamConsumers": [
@@ -913,6 +1082,10 @@
         {
           "id": "dashboard-pages",
           "via": "PortfolioDetailPage mismatch banner"
+        },
+        {
+          "id": "ledger-rebuild",
+          "via": "latestByTicker"
         }
       ],
       "sharedState": [
@@ -1087,9 +1260,10 @@
       "name": "TradeService (legacy projection)",
       "layer": "application",
       "cluster": "legacy-projection",
-      "responsibility": "Use-case layer for Buy/Sell/delete/move on Trade/TradeAllocation; computePositions (legacy holdings read).",
+      "responsibility": "Use-case layer for Buy/Sell/delete/move on Trade/TradeAllocation; computePositions (legacy holdings read). Also owns duplicateTradeCleanup.ts (DuplicateTradeCleanupPanel's bulk-delete backend, itself calling deleteTrade).",
       "filesOwned": [
-        "src/application/services/TradeService.ts"
+        "src/application/services/TradeService.ts",
+        "src/application/services/duplicateTradeCleanup.ts"
       ],
       "publicInterfaces": [
         {
@@ -1201,6 +1375,26 @@
           "file": "src/application/services/TradeService.ts",
           "kind": "function",
           "name": "computePositions"
+        },
+        {
+          "file": "src/application/services/duplicateTradeCleanup.ts",
+          "kind": "interface",
+          "name": "DuplicateTradeGroup"
+        },
+        {
+          "file": "src/application/services/duplicateTradeCleanup.ts",
+          "kind": "function",
+          "name": "findDuplicateTradeGroups"
+        },
+        {
+          "file": "src/application/services/duplicateTradeCleanup.ts",
+          "kind": "interface",
+          "name": "DuplicateTradeCleanupReport"
+        },
+        {
+          "file": "src/application/services/duplicateTradeCleanup.ts",
+          "kind": "function",
+          "name": "cleanupDuplicateTrades"
         }
       ],
       "upstreamDependencies": [
@@ -1213,10 +1407,12 @@
           "via": "resolveLotRef"
         },
         {
-          "external": "rawTransactionFolds.ts"
+          "external": "rawTransactionFolds.ts",
+          "note": "isRetracted/resolveCurrentTicker — folded into fact-store-writes; referenced here as a leaf helper"
         },
         {
-          "external": "duplicateDetection.ts"
+          "external": "duplicateDetection.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
         }
       ],
       "downstreamConsumers": [
@@ -1232,6 +1428,10 @@
         },
         {
           "id": "system-validation-snapshot"
+        },
+        {
+          "id": "import-page",
+          "via": "recordBuy during Extract/Distribute"
         }
       ],
       "sharedState": [
@@ -1242,7 +1442,8 @@
       "criticalityRationale": "One of two direct writers of the legacy Trade/TradeAllocation tables that most of the UI still reads through canonicalHoldings' fallback path; also one of the six cash writers.",
       "requiredRegressionTests": {
         "coLocatedUnitTests": [
-          "src/application/services/TradeService.test.ts"
+          "src/application/services/TradeService.test.ts",
+          "src/application/services/duplicateTradeCleanup.test.ts"
         ],
         "crossCuttingOrIntegrationTests": [
           "src/application/services/BackupService.test.ts",
@@ -1307,10 +1508,12 @@
           "via": "canonicalKey"
         },
         {
-          "external": "rawTransactionFolds.ts"
+          "external": "rawTransactionFolds.ts",
+          "note": "isRetracted/resolveCurrentTicker — folded into fact-store-writes; referenced here as a leaf helper"
         },
         {
-          "external": "duplicateDetection.ts"
+          "external": "duplicateDetection.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
         },
         {
           "id": "ledger-engine",
@@ -1323,9 +1526,6 @@
       ],
       "downstreamConsumers": [
         {
-          "id": "canonical-holdings"
-        },
-        {
           "id": "commit-engine"
         },
         {
@@ -1333,7 +1533,11 @@
         },
         {
           "id": "reconciliation",
-          "via": "reconciliationSweep.ts"
+          "via": "reconciliationSweep.ts imports LegacyLedgerRepos"
+        },
+        {
+          "id": "trade-service",
+          "via": "resolveLotRef"
         }
       ],
       "sharedState": [
@@ -1528,6 +1732,14 @@
         {
           "id": "ledger-projection",
           "via": "canonicalKey"
+        },
+        {
+          "id": "diagnostics-application-support",
+          "via": "canonicalKey"
+        },
+        {
+          "id": "commit-engine",
+          "via": "canonicalKey"
         }
       ],
       "sharedState": [
@@ -1671,7 +1883,8 @@
           "id": "evidence-authority"
         },
         {
-          "external": "serialize.ts"
+          "external": "serialize.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
         }
       ],
       "downstreamConsumers": [
@@ -1702,9 +1915,10 @@
       "name": "PortfolioService.ts",
       "layer": "application",
       "cluster": "fact-pipeline",
-      "responsibility": "Deposits/withdrawals/cash adjustments/dividends/splits/rights-issues/archiving.",
+      "responsibility": "Deposits/withdrawals/cash adjustments/dividends/splits/rights-issues/archiving. Also owns cashProjection.ts (computeCashProjection) — a pure, tested cash-as-projection function that exists but has zero production callers yet (ARCHITECTURAL_DEBT.md 1.2: the read side is still imperative Portfolio.cash, not this projection).",
       "filesOwned": [
-        "src/application/services/PortfolioService.ts"
+        "src/application/services/PortfolioService.ts",
+        "src/application/services/cashProjection.ts"
       ],
       "publicInterfaces": [
         {
@@ -1766,6 +1980,11 @@
           "file": "src/application/services/PortfolioService.ts",
           "kind": "function",
           "name": "recordRightsIssue"
+        },
+        {
+          "file": "src/application/services/cashProjection.ts",
+          "kind": "function",
+          "name": "computeCashProjection"
         }
       ],
       "upstreamDependencies": [
@@ -1790,10 +2009,12 @@
       "criticalityRationale": "One of the six direct writers of Portfolio.cash (ARCHITECTURAL_DEBT.md 1.2, still OPEN, no projection live) — a cash bug here is immediately user-visible as a wrong balance with no reconciliation net under it yet.",
       "requiredRegressionTests": {
         "coLocatedUnitTests": [
-          "src/application/services/PortfolioService.test.ts"
+          "src/application/services/PortfolioService.test.ts",
+          "src/application/services/cashProjection.test.ts"
         ],
         "crossCuttingOrIntegrationTests": [
-          "src/application/services/BackupService.test.ts"
+          "src/application/services/BackupService.test.ts",
+          "src/application/services/backfillRawTransactions.test.ts"
         ],
         "ciRegressionGuards": []
       }
@@ -1957,7 +2178,22 @@
       "filesOwned": [
         "src/application/analytics/AnalyticsEngine.ts",
         "src/application/analytics/analytics.worker.ts",
-        "src/application/analytics/analyticsWorker.ts"
+        "src/application/analytics/analyticsWorker.ts",
+        "src/application/analytics/calculators/avgLoser.ts",
+        "src/application/analytics/calculators/avgWinner.ts",
+        "src/application/analytics/calculators/capitalDeployment.ts",
+        "src/application/analytics/calculators/cashRatio.ts",
+        "src/application/analytics/calculators/exposure.ts",
+        "src/application/analytics/calculators/holdingTime.ts",
+        "src/application/analytics/calculators/openPositionStats.ts",
+        "src/application/analytics/calculators/performanceCurve.ts",
+        "src/application/analytics/calculators/portfolioHealth.ts",
+        "src/application/analytics/calculators/profitFactor.ts",
+        "src/application/analytics/calculators/sectorAllocation.ts",
+        "src/application/analytics/calculators/shared.ts",
+        "src/application/analytics/calculators/strategyAttribution.ts",
+        "src/application/analytics/calculators/testFixtures.ts",
+        "src/application/analytics/calculators/winRate.ts"
       ],
       "publicInterfaces": [
         {
@@ -1984,6 +2220,151 @@
           "file": "src/application/analytics/analyticsWorker.ts",
           "kind": "function",
           "name": "computeAnalyticsBatch"
+        },
+        {
+          "file": "src/application/analytics/calculators/avgLoser.ts",
+          "kind": "function",
+          "name": "avgLoser"
+        },
+        {
+          "file": "src/application/analytics/calculators/avgWinner.ts",
+          "kind": "function",
+          "name": "avgWinner"
+        },
+        {
+          "file": "src/application/analytics/calculators/capitalDeployment.ts",
+          "kind": "function",
+          "name": "capitalDeployment"
+        },
+        {
+          "file": "src/application/analytics/calculators/cashRatio.ts",
+          "kind": "function",
+          "name": "cashRatio"
+        },
+        {
+          "file": "src/application/analytics/calculators/exposure.ts",
+          "kind": "function",
+          "name": "exposure"
+        },
+        {
+          "file": "src/application/analytics/calculators/holdingTime.ts",
+          "kind": "function",
+          "name": "holdingTime"
+        },
+        {
+          "file": "src/application/analytics/calculators/openPositionStats.ts",
+          "kind": "interface",
+          "name": "OpenPositionStats"
+        },
+        {
+          "file": "src/application/analytics/calculators/openPositionStats.ts",
+          "kind": "function",
+          "name": "openPositionStats"
+        },
+        {
+          "file": "src/application/analytics/calculators/performanceCurve.ts",
+          "kind": "interface",
+          "name": "PerformancePoint"
+        },
+        {
+          "file": "src/application/analytics/calculators/performanceCurve.ts",
+          "kind": "interface",
+          "name": "PerformancePeriod"
+        },
+        {
+          "file": "src/application/analytics/calculators/performanceCurve.ts",
+          "kind": "function",
+          "name": "performanceCurve"
+        },
+        {
+          "file": "src/application/analytics/calculators/performanceCurve.ts",
+          "kind": "function",
+          "name": "bucketPerformance"
+        },
+        {
+          "file": "src/application/analytics/calculators/performanceCurve.ts",
+          "kind": "function",
+          "name": "performanceDrawdown"
+        },
+        {
+          "file": "src/application/analytics/calculators/portfolioHealth.ts",
+          "kind": "interface",
+          "name": "PortfolioHealth"
+        },
+        {
+          "file": "src/application/analytics/calculators/portfolioHealth.ts",
+          "kind": "function",
+          "name": "portfolioHealth"
+        },
+        {
+          "file": "src/application/analytics/calculators/profitFactor.ts",
+          "kind": "function",
+          "name": "profitFactor"
+        },
+        {
+          "file": "src/application/analytics/calculators/sectorAllocation.ts",
+          "kind": "interface",
+          "name": "SectorAllocationSlice"
+        },
+        {
+          "file": "src/application/analytics/calculators/sectorAllocation.ts",
+          "kind": "interface",
+          "name": "SectorPositionInput"
+        },
+        {
+          "file": "src/application/analytics/calculators/sectorAllocation.ts",
+          "kind": "function",
+          "name": "sectorAllocation"
+        },
+        {
+          "file": "src/application/analytics/calculators/shared.ts",
+          "kind": "function",
+          "name": "realizedPnlMicrosForAllocations"
+        },
+        {
+          "file": "src/application/analytics/calculators/shared.ts",
+          "kind": "function",
+          "name": "costBasisMicrosForAllocations"
+        },
+        {
+          "file": "src/application/analytics/calculators/shared.ts",
+          "kind": "function",
+          "name": "realizedReturnPctForAllocations"
+        },
+        {
+          "file": "src/application/analytics/calculators/shared.ts",
+          "kind": "interface",
+          "name": "OpenPositionsSummary"
+        },
+        {
+          "file": "src/application/analytics/calculators/shared.ts",
+          "kind": "function",
+          "name": "summarizeOpenPositions"
+        },
+        {
+          "file": "src/application/analytics/calculators/strategyAttribution.ts",
+          "kind": "interface",
+          "name": "StrategyAttribution"
+        },
+        {
+          "file": "src/application/analytics/calculators/strategyAttribution.ts",
+          "kind": "function",
+          "name": "strategyAttribution"
+        },
+        {
+          "file": "src/application/analytics/calculators/testFixtures.ts",
+          "kind": "function",
+          "name": "makeTrade"
+        },
+        {
+          "file": "src/application/analytics/calculators/testFixtures.ts",
+          "kind": "function",
+          "name": "makeAllocation"
+        },
+        {
+          "file": "src/application/analytics/calculators/winRate.ts",
+          "kind": "function",
+          "name": "winRate"
         }
       ],
       "upstreamDependencies": [],
@@ -1998,7 +2379,20 @@
       "requiredRegressionTests": {
         "coLocatedUnitTests": [
           "src/application/analytics/AnalyticsEngine.test.ts",
-          "src/application/analytics/analyticsWorker.test.ts"
+          "src/application/analytics/analyticsWorker.test.ts",
+          "src/application/analytics/calculators/avgLoser.test.ts",
+          "src/application/analytics/calculators/avgWinner.test.ts",
+          "src/application/analytics/calculators/capitalDeployment.test.ts",
+          "src/application/analytics/calculators/cashRatio.test.ts",
+          "src/application/analytics/calculators/exposure.test.ts",
+          "src/application/analytics/calculators/holdingTime.test.ts",
+          "src/application/analytics/calculators/openPositionStats.test.ts",
+          "src/application/analytics/calculators/performanceCurve.test.ts",
+          "src/application/analytics/calculators/portfolioHealth.test.ts",
+          "src/application/analytics/calculators/profitFactor.test.ts",
+          "src/application/analytics/calculators/sectorAllocation.test.ts",
+          "src/application/analytics/calculators/strategyAttribution.test.ts",
+          "src/application/analytics/calculators/winRate.test.ts"
         ],
         "crossCuttingOrIntegrationTests": [],
         "ciRegressionGuards": []
@@ -2372,7 +2766,8 @@
       "upstreamDependencies": [],
       "downstreamConsumers": [
         {
-          "id": "verification-engine"
+          "external": "src/application/services/orderEvidence.ts",
+          "note": "order evidence rows flow into orderEvidence.ts's corroboration logic several hops downstream of ImportOrchestrator — not a direct import from Verification Engine, so not modeled as a hard node-to-node edge (see the doc's own edge-semantics note)."
         }
       ],
       "sharedState": [],
@@ -2397,7 +2792,20 @@
       "filesOwned": [
         "src/infrastructure/db/db.ts",
         "src/infrastructure/db/purge.ts",
-        "src/infrastructure/db/repositories/index.ts"
+        "src/infrastructure/db/test-setup.ts",
+        "src/infrastructure/db/repositories/index.ts",
+        "src/infrastructure/db/repositories/DexieCommittedLedgerRepository.ts",
+        "src/infrastructure/db/repositories/DexieDiagnosticCaseRepository.ts",
+        "src/infrastructure/db/repositories/DexieDiagnosticEventRepository.ts",
+        "src/infrastructure/db/repositories/DexieJournalRepository.ts",
+        "src/infrastructure/db/repositories/DexiePendingExecutionRepository.ts",
+        "src/infrastructure/db/repositories/DexiePortfolioRepository.ts",
+        "src/infrastructure/db/repositories/DexieRawTransactionRepository.ts",
+        "src/infrastructure/db/repositories/DexieTimelineRepository.ts",
+        "src/infrastructure/db/repositories/DexieTradeAllocationRepository.ts",
+        "src/infrastructure/db/repositories/DexieTradeRepository.ts",
+        "src/infrastructure/db/repositories/DexieUploadRepository.ts",
+        "src/infrastructure/db/repositories/DexieVerificationRepository.ts"
       ],
       "publicInterfaces": [
         {
@@ -2454,24 +2862,73 @@
           "file": "src/infrastructure/db/repositories/index.ts",
           "kind": "function",
           "name": "createDiagnosticsRepositories"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieCommittedLedgerRepository.ts",
+          "kind": "class",
+          "name": "DexieCommittedLedgerRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieDiagnosticCaseRepository.ts",
+          "kind": "class",
+          "name": "DexieDiagnosticCaseRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieDiagnosticEventRepository.ts",
+          "kind": "class",
+          "name": "DexieDiagnosticEventRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieJournalRepository.ts",
+          "kind": "class",
+          "name": "DexieJournalRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexiePendingExecutionRepository.ts",
+          "kind": "class",
+          "name": "DexiePendingExecutionRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexiePortfolioRepository.ts",
+          "kind": "class",
+          "name": "DexiePortfolioRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieRawTransactionRepository.ts",
+          "kind": "class",
+          "name": "DexieRawTransactionRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieTimelineRepository.ts",
+          "kind": "class",
+          "name": "DexieTimelineRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieTradeAllocationRepository.ts",
+          "kind": "class",
+          "name": "DexieTradeAllocationRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieTradeRepository.ts",
+          "kind": "class",
+          "name": "DexieTradeRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieUploadRepository.ts",
+          "kind": "class",
+          "name": "DexieUploadRepository"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/DexieVerificationRepository.ts",
+          "kind": "class",
+          "name": "DexieVerificationRepository"
         }
       ],
       "upstreamDependencies": [],
       "downstreamConsumers": [
         {
-          "id": "fact-store-writes"
-        },
-        {
-          "id": "trade-service"
-        },
-        {
-          "id": "commit-engine"
-        },
-        {
-          "id": "portfolio-service"
-        },
-        {
-          "id": "backup-service"
+          "external": "src/presentation/lib/data.ts",
+          "note": "the composition root — the only file that calls createRepositories()/new SnapshotPriceRepository() and injects them into application services as AppRepositories. No application-layer node imports src/infrastructure/db directly (dependency-cruiser forbids it: application depends only on @domain's repository interfaces) — every application node listed as a 'critical' writer elsewhere in this file receives its repository through dependency injection at this one composition root, not a compile-time import of this node's files. This is why this node has no direct node-to-node downstream edges despite being the literal storage for everything."
         }
       ],
       "sharedState": [
@@ -2481,10 +2938,7 @@
       "criticalityRationale": "The literal source-of-truth storage layer for the entire app (no backend exists) — a defect here is total or partial data loss/corruption, the maximum blast radius in this codebase.",
       "requiredRegressionTests": {
         "coLocatedUnitTests": [
-          "src/infrastructure/db/purge.test.ts"
-        ],
-        "crossCuttingOrIntegrationTests": [
-          "src/architecture/regressionGuards.test.ts",
+          "src/infrastructure/db/purge.test.ts",
           "src/infrastructure/db/repositories/DexieCommittedLedgerRepository.test.ts",
           "src/infrastructure/db/repositories/DexieDiagnosticCaseRepository.test.ts",
           "src/infrastructure/db/repositories/DexieDiagnosticEventRepository.test.ts",
@@ -2492,7 +2946,10 @@
           "src/infrastructure/db/repositories/DexieTradeAllocationRepository.test.ts",
           "src/infrastructure/db/repositories/DexieTradeRepository.test.ts",
           "src/infrastructure/db/repositories/DexieUploadRepository.test.ts",
-          "src/infrastructure/db/repositories/DexieVerificationRepository.test.ts",
+          "src/infrastructure/db/repositories/DexieVerificationRepository.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/architecture/regressionGuards.test.ts",
           "src/presentation/lib/rawTransactionQueries.test.tsx",
           "src/presentation/pages/ImportPage.batchCommitIsolation.test.tsx",
           "src/presentation/pages/ImportPage.batchCommitIsolationDividend.test.tsx",
@@ -2526,9 +2983,6 @@
       ],
       "upstreamDependencies": [],
       "downstreamConsumers": [
-        {
-          "id": "analytics-engine"
-        },
         {
           "id": "dashboard-pages"
         }
@@ -2586,6 +3040,115 @@
         "ciRegressionGuards": [
           "src/infrastructure/diagnostics/*.ts never calls a business repository write method or imports a business writer's writing functions"
         ]
+      }
+    },
+    {
+      "id": "diagnostics-application-support",
+      "name": "Diagnostics Center application-layer support",
+      "layer": "application",
+      "cluster": "read-only-consumer",
+      "responsibility": "Application-layer helpers for the Diagnostics Center that aren't part of the recorder itself: canonicalGroupEvidence.ts (read-only lookup backing CanonicalGroupEvidencePanel) and retentionPolicy.ts (pruneDiagnostics — startup retention pruning, called once per boot only when Developer Mode is on).",
+      "filesOwned": [
+        "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+        "src/application/services/diagnostics/retentionPolicy.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+          "kind": "interface",
+          "name": "CanonicalGroupFactEvidence"
+        },
+        {
+          "file": "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+          "kind": "type",
+          "name": "CanonicalGroupLabel"
+        },
+        {
+          "file": "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+          "kind": "interface",
+          "name": "CanonicalGroupEvidence"
+        },
+        {
+          "file": "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+          "kind": "interface",
+          "name": "TickerReconciliationEvidence"
+        },
+        {
+          "file": "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+          "kind": "function",
+          "name": "listAllTickers"
+        },
+        {
+          "file": "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+          "kind": "function",
+          "name": "buildTickerReconciliationEvidence"
+        },
+        {
+          "file": "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+          "kind": "interface",
+          "name": "TickerSummaryEvidence"
+        },
+        {
+          "file": "src/application/services/diagnostics/canonicalGroupEvidence.ts",
+          "kind": "function",
+          "name": "summarizeTicker"
+        },
+        {
+          "file": "src/application/services/diagnostics/retentionPolicy.ts",
+          "kind": "const",
+          "name": "EVENT_RETENTION_DAYS"
+        },
+        {
+          "file": "src/application/services/diagnostics/retentionPolicy.ts",
+          "kind": "const",
+          "name": "EVENT_RETENTION_MAX_COUNT"
+        },
+        {
+          "file": "src/application/services/diagnostics/retentionPolicy.ts",
+          "kind": "const",
+          "name": "CASE_RETENTION_MAX_COUNT"
+        },
+        {
+          "file": "src/application/services/diagnostics/retentionPolicy.ts",
+          "kind": "function",
+          "name": "pruneDiagnostics"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "commit-engine",
+          "via": "resolveCurrentPortfolioId"
+        },
+        {
+          "id": "ledger-rebuild",
+          "via": "canonicalKey"
+        },
+        {
+          "external": "duplicateDetection.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
+        },
+        {
+          "external": "rawTransactionFolds.ts",
+          "note": "isRetracted/resolveCurrentTicker — folded into fact-store-writes, referenced here as a shared leaf helper"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "diagnostics-center-pages"
+        }
+      ],
+      "sharedState": [
+        "diagnosticEvents, diagnosticCases (retentionPolicy.ts prunes these — the one write path this cluster has, and it only ever deletes diagnostic-store rows, never business data)"
+      ],
+      "criticality": "low",
+      "criticalityRationale": "canonicalGroupEvidence.ts is read-only; retentionPolicy.ts's only write is bounded, disposable diagnostic-log pruning — never business data (DIAGNOSTICS_CENTER_SPEC.md Part 5.4's structural guarantee applies here too, just from the application-layer side of the boundary rather than the recorder itself).",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/diagnostics/canonicalGroupEvidence.test.ts",
+          "src/application/services/diagnostics/retentionPolicy.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
       }
     },
     {
@@ -2698,7 +3261,23 @@
           "id": "portfolio-service"
         },
         {
-          "external": "duplicateDetection.ts"
+          "id": "completeness-engine",
+          "via": "recovery-plan banner"
+        },
+        {
+          "id": "pending-executions"
+        },
+        {
+          "external": "duplicateDetection.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
+        },
+        {
+          "external": "orderEvidence.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
+        },
+        {
+          "external": "netShareTimeline.ts",
+          "note": "shared leaf helper — see sharedHelperFiles"
         }
       ],
       "downstreamConsumers": [],
@@ -2915,7 +3494,7 @@
           "id": "evidence-graph"
         },
         {
-          "id": "system-validation-snapshot"
+          "id": "diagnostics-application-support"
         }
       ],
       "downstreamConsumers": [],

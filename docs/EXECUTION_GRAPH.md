@@ -13,7 +13,7 @@ Where this repo already has a deeper authority on a subsystem (`docs/PORTFOLIO_O
 Ownership Matrix, `docs/ARCHITECTURAL_DEBT.md`'s violation catalog), this document links to it rather than
 re-deriving it — this file's job is the cross-subsystem *shape*, not the per-field detail.
 
-A machine-readable companion, `docs/EXECUTION_GRAPH.json`, carries the same 31 nodes plus criticality,
+A machine-readable companion, `docs/EXECUTION_GRAPH.json`, carries the same 32 nodes plus criticality,
 required regression tests, files owned, and public interfaces per node — see "Impact map" below.
 
 ## How to use this
@@ -85,6 +85,7 @@ flowchart TB
         EG["Evidence Graph"]
         SS["System Snapshot / systemValidation"]
         COMP["Completeness Engine"]
+        DIAGSUP["Diagnostics Center\napplication-layer support"]
     end
 
     subgraph Persist["Persistence (infrastructure)"]
@@ -129,6 +130,9 @@ flowchart TB
     AN --> DASH
     SS -.-> DIAG_UI
     EG -.-> DIAG_UI
+    CE --> DIAGSUP
+    LR --> DIAGSUP
+    DIAGSUP --> DIAG_UI
 
     FS --> DEXIE
     TS --> DEXIE
@@ -172,6 +176,7 @@ through).
 | **Dexie Persistence** (`db.ts`, `repositories/*.ts`, `purge.ts`) | Implements every domain repository port; the only code allowed to touch `db.ts` directly (dependency-cruiser-enforced) besides `purge.ts` | Domain entities | Persisted rows | Domain repository interfaces only | Every application-layer node (indirectly, via `AppRepositories`) | All 11 Dexie tables (see `regressionGuards.test.ts`'s categorized allowlist) |
 | **SnapshotPriceRepository** (`market-data/`) | Reads `public/price-snapshot.json`/`price-history.json`; the only class allowed to read price data | Static JSON snapshot (produced out-of-band by `scripts/fetch-prices` + `update-prices.yml`) | Current price / history per ticker | None | Analytics Engine, Dashboard, PortfolioDetailPage, `PriceFreshness` component | None (read-only static asset) |
 | **Diagnostics recorder** (`infrastructure/diagnostics/*`) | Observe-only instrumentation (session/write/read/decision/rule/perf events) | Instrumented call sites | `DiagnosticEvent`/`DiagnosticCase` rows | None | Diagnostics Center pages only | `diagnosticEvents`, `diagnosticCases` — **structurally forbidden** from ever calling a business write method (CI-guarded, zero-tolerance) |
+| **Diagnostics Center application-layer support** (`application/services/diagnostics/canonicalGroupEvidence.ts`, `retentionPolicy.ts`) | Application-layer helpers the recorder itself doesn't cover: read-only canonical-group evidence lookups (`CanonicalGroupEvidencePanel`) and startup retention pruning (`pruneDiagnostics`, called once per boot only when Developer Mode is on) | Facts (canonicalGroupEvidence), diagnostic repositories (retentionPolicy) | Evidence lookup results; pruned diagnostic rows | Commit Engine (`resolveCurrentPortfolioId`), `ledgerRebuild.ts` (`canonicalKey`), `duplicateDetection.ts`, `rawTransactionFolds.ts` | Diagnostics Center pages | `diagnosticEvents`/`diagnosticCases` (retention pruning's only write — disposable diagnostic rows, never business data, per DIAGNOSTICS_CENTER_SPEC.md Part 5.4) |
 | **ImportPage** (presentation) | Two-phase Extract/Distribute import UI | OCR pipeline output, `importSession.ts` (localStorage-backed pool) | Committed facts via TradeService/Commit Engine/PortfolioService | OCR Pipeline, TradeService, Commit Engine, Verification Engine, PortfolioService, `duplicateDetection.ts` | — | **Known drift**: re-derives some verification signals instead of calling `verifyAllDetailed` (`ARCHITECTURAL_DEBT.md` 3.2) — treat as its own node when touching verification-adjacent UI logic, don't assume it already matches the engine |
 | **Dashboard / PortfolioDetail / Portfolios pages** | Read canonical hybrid holdings + analytics for display | `canonicalHoldings.ts`, Analytics Engine, prices | Rendered UI | canonicalHoldings, Analytics Engine, SnapshotPriceRepository | — | Read-only |
 | **TradesPage / SellAllocationForm** | Entity-CRUD and lot-picking UI reading `Trade` directly | TradeService | Rendered UI, sell allocations | TradeService | — | Reads `trades`/`tradeAllocations` directly (documented exception to the "read via canonical hybrid" rule — entity-CRUD/lot-picking needs raw rows) |
@@ -230,7 +235,7 @@ constraints that were already real and already enforced. No code changed to prod
 
 ## Impact map (machine-readable)
 
-`docs/EXECUTION_GRAPH.json` is the same 31 nodes as the table above, in a machine-readable form with six
+`docs/EXECUTION_GRAPH.json` is the same 32 nodes as the table above, in a machine-readable form with six
 fields the prose table doesn't carry: **criticality**, **required regression tests** (co-located unit
 tests, cross-cutting/integration tests, and CI regression guards — all three extracted or verified
 against real files, not asserted from memory), **files owned**, and **public interfaces** (every
@@ -249,7 +254,7 @@ label means the same thing everywhere it's used:
 | `critical` | Writes or directly derives primary financial state (shares, cost basis, cash) in the replay/write path. A defect is a silent, compounding money-correctness bug. | 11 |
 | `high` | Gates, corrects, or orchestrates what reaches a `critical` node, or aggregates `critical` nodes into a load-bearing decision. | 9 |
 | `medium` | Derived, read-only, or observability output. Visible and correctable at read time; never mutates stored state. | 6 |
-| `low` | Isolated leaf ingestion (gated by a `critical`/`high` node downstream before it can affect stored state), or purely additive, no-op-by-default instrumentation. | 5 |
+| `low` | Isolated leaf ingestion (gated by a `critical`/`high` node downstream before it can affect stored state), or purely additive, no-op-by-default instrumentation. | 6 |
 
 **Required regression tests** per node has three parts, all machine-verified against the repo at
 generation time (not hand-curated): `coLocatedUnitTests` (the file's own `*.test.ts(x)` siblings),
@@ -264,68 +269,167 @@ Summary (full detail — responsibility, files, exports, every test path — is 
 
 | Node (`id`) | Criticality | Upstream | Downstream | Co-located tests | CI regression guards |
 |---|---|---|---|---|---|
-| Allocation Engine (`allocation-engine`) | critical | 1 | 3 | 1 | 1 |
+| Allocation Engine (`allocation-engine`) | critical | 1 | 5 | 1 | 1 |
 | Backup Service (`backup-service`) | critical | 0 | 0 | 1 | 1 |
-| Commit Engine (`commit-engine`) | critical | 5 | 5 | 3 | 0 |
-| Dexie Persistence (`dexie-persistence`) | critical | 0 | 5 | 1 | 2 |
-| Fact Store writes (`fact-store-writes`) | critical | 3 | 3 | 3 | 1 |
+| Commit Engine (`commit-engine`) | critical | 8 | 6 | 3 | 0 |
+| Dexie Persistence (`dexie-persistence`) | critical | 0 | 1 | 9 | 2 |
+| Fact Store writes (`fact-store-writes`) | critical | 3 | 3 | 4 | 1 |
 | Holdings Engine (`holdings-engine`) | critical | 2 | 2 | 1 | 1 |
-| Ledger Engine (`ledger-engine`) | critical | 2 | 4 | 1 | 1 |
+| Ledger Engine (`ledger-engine`) | critical | 2 | 6 | 1 | 1 |
 | ledgerProjection.ts (`ledger-projection`) | critical | 5 | 4 | 1 | 1 |
-| ledgerRebuild.ts (`ledger-rebuild`) | critical | 4 | 3 | 1 | 2 |
-| PortfolioService.ts (`portfolio-service`) | critical | 1 | 2 | 1 | 0 |
-| TradeService (legacy projection) (`trade-service`) | critical | 4 | 4 | 1 | 2 |
+| ledgerRebuild.ts (`ledger-rebuild`) | critical | 4 | 5 | 1 | 2 |
+| PortfolioService.ts (`portfolio-service`) | critical | 1 | 2 | 2 | 0 |
+| TradeService (legacy projection) (`trade-service`) | critical | 4 | 5 | 2 | 2 |
 | canonicalHoldings.ts (`canonical-holdings`) | high | 2 | 1 | 1 | 1 |
 | Constraint Validation (`constraint-validation`) | high | 1 | 2 | 1 | 0 |
 | Evidence Authority (`evidence-authority`) | high | 0 | 6 | 1 | 1 |
-| ImportPage (`import-page`) | high | 6 | 0 | 19 | 0 |
+| ImportPage (`import-page`) | high | 10 | 0 | 19 | 0 |
 | lotManager.ts (`lot-manager`) | high | 6 | 1 | 1 | 1 |
 | pendingExecutions.ts (`pending-executions`) | high | 0 | 1 | 1 | 0 |
-| Reconciliation (`reconciliation`) | high | 4 | 2 | 3 | 1 |
+| Reconciliation (`reconciliation`) | high | 5 | 3 | 3 | 1 |
 | systemValidation.ts / systemSnapshot.ts (`system-validation-snapshot`) | high | 7 | 0 | 2 | 0 |
 | Verification Engine (`verification-engine`) | high | 6 | 5 | 2 | 1 |
-| Analytics Engine (`analytics-engine`) | medium | 0 | 1 | 2 | 0 |
+| Analytics Engine (`analytics-engine`) | medium | 0 | 1 | 15 | 0 |
 | Completeness Engine (`completeness-engine`) | medium | 1 | 2 | 2 | 0 |
 | Dashboard / PortfolioDetail / Portfolios / TickerDetail pages (`dashboard-pages`) | medium | 5 | 0 | 3 | 0 |
 | Diagnostics Center pages (`diagnostics-center-pages`) | medium | 3 | 0 | 1 | 0 |
-| Evidence Graph (`evidence-graph`) | medium | 2 | 1 | 1 | 0 |
+| Evidence Graph (`evidence-graph`) | medium | 2 | 1 | 3 | 0 |
 | TradesPage / SellAllocationForm (`trades-page`) | medium | 2 | 0 | 1 | 0 |
+| Diagnostics Center application-layer support (`diagnostics-application-support`) | low | 4 | 1 | 2 | 0 |
 | Diagnostics recorder (`diagnostics-recorder`) | low | 0 | 1 | 2 | 1 |
 | OCR/Import Pipeline (`ocr-import-pipeline`) | low | 0 | 2 | 7 | 0 |
-| SnapshotPriceRepository (`snapshot-price-repository`) | low | 0 | 2 | 1 | 0 |
+| SnapshotPriceRepository (`snapshot-price-repository`) | low | 0 | 1 | 1 | 0 |
 | STES Workbook Import (`stes-workbook-import`) | low | 0 | 1 | 1 | 0 |
 | Thndr Orders Workbook (`thndr-orders-workbook`) | low | 0 | 1 | 1 | 0 |
 
 Two things worth reading directly off this table before touching a node: **ImportPage has 19 co-located
 tests and zero CI guards** — its correctness is tested, not structurally enforced, consistent with its
-known-drift status (see the Subsystem table above); and **11 of 31 nodes are `critical`**, all of them
+known-drift status (see the Subsystem table above); and **11 of 32 nodes are `critical`**, all of them
 inside the Fact Pipeline and Legacy Projection clusters — matching "Parallel-work rules" #3 and #5 above,
 which is exactly why those two clusters get the strictest parallel-work treatment in this document.
 
-**Regenerating this file**: it was produced by a one-off script (export-statement regex + test-file glob
-+ import-string grep over the files named in the Subsystem table above, merged with hand-authored
-criticality/edges/guards), not a checked-in tool — see "Adoption / keeping this in sync" below for why
-no CI guard cross-checks it automatically yet. If it drifts, regenerate by re-deriving `filesOwned`/
-`publicInterfaces`/`coLocatedUnitTests`/`crossCuttingOrIntegrationTests` from the current source tree and
-re-reviewing `criticality`/edges/`ciRegressionGuards` by hand against `ARCHITECTURAL_DEBT.md` and
-`regressionGuards.test.ts`, the same way this version was built.
+**Regenerating this file's data fields**: `filesOwned`/`publicInterfaces`/`coLocatedUnitTests`/
+`crossCuttingOrIntegrationTests` were originally extracted with a one-off script (export-statement regex +
+test-file glob + import-string grep) and merged with hand-authored `criticality`/edges/`ciGuards`
+rationale — the same split `scripts/validate-execution-graph.ts` (see "Validator" below) checks against on
+every run. There is deliberately no committed *generator* script, only a *validator* — `criticality`,
+`criticalityRationale`, `sharedState` prose, and `acceptedCycles` reasons require human judgment about
+blast radius and intent that a script shouldn't be trusted to author unsupervised; `filesOwned`,
+`publicInterfaces`, and dependency edges are mechanically checkable (and the validator checks them), so
+those are the fields to trust its warnings/suggestions on when hand-editing the JSON after a code change.
+
+## Validator
+
+`npm run graph:check` (`scripts/validate-execution-graph.ts`) is the enforcement layer this document was
+missing until now: it checks `docs/EXECUTION_GRAPH.json` against the real repository and fails CI
+(non-zero exit) if the graph asserts something that's no longer true. It runs in CI (`.github/workflows/ci.yml`,
+right after `npm run lint`) on every PR and push to `main`.
+
+### What it reuses vs. what's new
+
+Per this task's own first requirement, it does **not** duplicate existing tooling:
+
+- **Layer boundaries** (`domain` → nothing, `application` → `domain` only, etc.) are `.dependency-cruiser.cjs`'s
+  job (`npm run arch:check`) — not re-checked here. The validator's own "architecture drift" check is
+  narrower: it confirms each node's declared `layer` field matches the real path of every file in its
+  `filesOwned`, which is a claim about the *graph's own data*, not the import graph dependency-cruiser
+  already covers.
+- **Frozen writer counts / singular-function assertions** are `src/architecture/regressionGuards.test.ts`'s
+  job — not re-implemented here. The validator only checks that each node's `ciRegressionGuards` citations
+  still correspond to a real `it()`/`describe()` title in that file (a heuristic keyword-overlap match,
+  explicitly flagged as approximate in its own warning text — a citation to a renamed guard is a real,
+  if soft, form of drift worth a human glance, not something worth a brittle exact-string match).
+- **File scanning** reuses `src/architecture/sourceScan.ts`'s `allSourceFiles()` — the same plain-text
+  scan `regressionGuards.test.ts` already established as this codebase's house technique for cross-layer
+  source inspection (see that module's own doc comment for why: reading source as text, not real
+  TS/AST parsing, is deliberate here, not a shortcut).
+- **Import/export extraction** is new (a regex-based import-specifier extractor + `@alias` resolution via
+  `tsconfig.json`'s own `paths`, and the same export-statement regex the original data-extraction script
+  used) — dependency-cruiser reasons about the import graph for layer *boundaries*, not for comparing it
+  against a *hand-authored* per-node edge list, and regressionGuards.test.ts doesn't touch imports at all.
+
+### The eight checks
+
+| Check | What it does | Severity when violated |
+|---|---|---|
+| Graph consistency | Unique node ids; `nodeCount`/`criticalityCounts` match the actual node list; every edge resolves to a real node or has an `external` + `note`; upstream/downstream edges are mirrored on both ends | Error (unresolvable edge, duplicate id, wrong count) / Warning (asymmetric mirror, missing `external` note) |
+| Ownership validation | Every `filesOwned`/`sharedHelperFiles` entry exists on disk | Error |
+| Ownership conflicts | No file is claimed by more than one node, or by a node **and** `sharedHelperFiles` | Error |
+| Orphan file detection | Every non-test file inside an `ownershipScope` directory is claimed by some node's `filesOwned` or `sharedHelperFiles` | Error |
+| Architecture drift (layer) | A node's declared `layer` matches the real path prefix of every file it owns | Error |
+| Architecture drift (CI guards) | Each `ciRegressionGuards` citation still matches a real guard title in `regressionGuards.test.ts` | Warning (heuristic) |
+| Public interface drift | Declared `publicInterfaces` vs. the file's real top-level exports | Error (a declared export no longer exists — the graph asserts something false) / Warning (a real export isn't documented yet — the graph is incomplete, not wrong) |
+| Dependency validation | Declared upstream/downstream edges vs. edges derived from real `import` statements (resolved through `@alias` and relative paths, looked up against `filesOwned`) | Warning both directions (undeclared real edge; declared edge with no backing import — either can be a legitimate soft/data-flow relationship, so never auto-failed) |
+| Circular dependency detection | Tarjan's strongly-connected-components algorithm over both the declared-edge graph and the real-import graph — reports each cluster of mutually-reachable nodes once, not every rotation of every cycle path within it | Error, unless the exact node-set matches an entry in `acceptedCycles` (then Warning) |
+
+### Severity policy
+
+- **Errors fail CI.** They mean the graph asserts something demonstrably false (a missing file, a
+  dangling edge, a stale export claim, an undisclosed new cycle) — the graph must be fixed before merging.
+- **Warnings never fail CI**, but are never hidden either — they're real, disclosed gaps (an
+  undocumented export, an edge whose backing import may have moved, a CI-guard citation worth a manual
+  glance). The baseline the day this validator shipped was 0 errors / 53 warnings / 38 suggestions —
+  **zero warnings is not the target**; a shrinking-or-stable warning count over time is. A sudden jump is
+  the signal worth investigating, the same way a sudden jump in `ARCHITECTURAL_DEBT.md`'s tracked counts
+  would be.
+- **Suggestions are never enforced** — concrete, copy-pasteable next steps (which node to add an orphan
+  file to, which edge to declare, which `publicInterfaces` entry to add) attached to the warning that
+  produced them.
+
+Known, deliberately accepted circular dependencies live in `docs/EXECUTION_GRAPH.json`'s `acceptedCycles`
+array (`{nodes: [...sorted node ids], reason: "..."}`) — the same frozen-allowlist pattern
+`regressionGuards.test.ts` already uses for other known violations: a new, undisclosed cycle fails CI; a
+previously-reviewed one is downgraded to a warning, with its reason visible in the report, never silently
+passed. Three are accepted as of this writing — one small, real, two-file cycle in the ingestion layer
+(`ocr-import-pipeline` ↔ `thndr-orders-workbook`, reusing `parsePrice`), and one large cluster inside the
+Fact Pipeline / Legacy Projection track (`allocation-engine`, `commit-engine`, `constraint-validation`,
+`fact-store-writes`, `ledger-engine`, `ledger-projection`, `ledger-rebuild`, `reconciliation`,
+`trade-service`, `verification-engine`) that the validator's SCC check discovered as a single connected
+component for the first time — every individual edge in it was already real and already disclosed
+somewhere (mostly `ARCHITECTURAL_DEBT.md`'s Legacy Projection items), just never visible as one cluster
+until this tool existed. None of these were fixed by this task — untangling them is architectural
+refactoring, out of scope here by explicit instruction; see each entry's own `reason` for the closure path
+if a future sprint picks it up.
+
+### How developers should use it
+
+- Run `npm run graph:check` locally after touching any file inside `ownershipScope` (see the JSON's own
+  field) or changing a node's public exports — it's fast (a few seconds; no Dexie, no browser, no test
+  runner) and will tell you immediately whether the graph still describes what you just changed.
+- `npm run graph:check -- --json` prints the same findings as JSON instead of the human-readable report,
+  for scripting or a future dashboard.
+- A **new file** inside `ownershipScope`: add it to the right node's `filesOwned` (or `sharedHelperFiles`
+  if 2+ nodes will genuinely import it), or the orphan-file check fails CI. The validator suggests a node
+  based on directory proximity — read the suggestion, don't take it uncritically.
+- **New/changed imports**: the dependency-validation warnings tell you exactly which edge to add (and
+  where to mirror it). Fixing every warning immediately isn't required — but a change that makes a
+  `critical`/`high` node's dependency set diverge further from reality is worth closing before merging,
+  since that's precisely the data this graph exists to keep trustworthy.
+- **New/renamed/removed exports**: interface-drift warnings (new export) are optional to close
+  immediately; errors (a documented export that no longer exists) must be fixed — either restore the
+  export or remove the stale `publicInterfaces` entry.
+- **A genuinely new circular dependency**: first check whether it's actually new or just newly-detected
+  (i.e., was the underlying import already there, just not yet reflected in the declared edges?). If it's
+  a real, reviewed, accepted mutual dependency, add it to `acceptedCycles` with a factual reason in the
+  same commit — never widen that allowlist silently, same discipline as every other frozen allowlist in
+  this codebase.
 
 ## Adoption / keeping this in sync
 
-This is a documentation-only deliverable, so there is no code migration plan — the "migration" is
+This started as a documentation-only deliverable; a real enforcement layer (`npm run graph:check`, see
+"Validator" above) now exists on top of it, so the discipline below is partly tool-verified, not purely
 procedural:
 
 1. **Read this alongside `docs/ROADMAP.md` at the start of any session touching more than one
    subsystem** — use it to decide dependency order and what's safe to split across parallel work, per
    "How to use this" above. (`CLAUDE.md`'s "Working on this repo" section now points here.)
-2. **Update the table (and regenerate `docs/EXECUTION_GRAPH.json`) in the same commit as any change that
-   adds/removes/renames a subsystem file, changes a dependency edge, or changes which Dexie table a node
-   writes** — same discipline `ARCHITECTURAL_DEBT.md` already asks for its own catalog. A stale graph is
-   worse than no graph, since it produces confidently wrong parallel-work decisions; a stale JSON is worse
-   still, since nothing forces a human to eyeball it before it's consumed programmatically.
-3. **Not done, not planned**: no CI guard cross-checks this document (or the JSON) against the real
-   import graph automatically. `regressionGuards.test.ts`'s existing source-scan (`sourceScan.ts`) could
-   plausibly grow one (e.g. "every file in `application/services/` appears in exactly one graph node's
-   `filesOwned`"), but that's new tooling, not a documentation task — leave it for a future sprint if
-   drift between this file and the codebase becomes a real, observed problem, per this repo's own "don't
-   build for hypothetical future requirements" convention.
+2. **Update `docs/EXECUTION_GRAPH.json` in the same commit as any change that adds/removes/renames a
+   subsystem file, changes a dependency edge, or changes which Dexie table a node writes, then run
+   `npm run graph:check` before committing** — CI runs it too, but catching it locally is faster. A stale
+   graph is worse than no graph, since it produces confidently wrong parallel-work decisions.
+3. **Done, this task**: `npm run graph:check` cross-checks this document (and the JSON) against the real
+   import graph automatically, in CI, on every PR — see "Validator" above for the full check list. What's
+   still deliberately NOT automated: regenerating `filesOwned`/`publicInterfaces` after a change (the
+   validator tells you what's wrong, a human still edits the JSON — see the JSON-regeneration note above
+   for why that split is intentional), and `criticality`/`sharedState`/`acceptedCycles` reasoning, which
+   stays a human judgment call by design.
