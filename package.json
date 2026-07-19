@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit && npm run arch:check",
     "arch:check": "depcruise --config .dependency-cruiser.cjs src",
+    "graph:check": "tsx scripts/validate-execution-graph.ts",
     "fetch-prices": "tsx scripts/fetch-prices/index.ts",
     "determinism:regenerate-golden": "tsx scripts/regenerate-determinism-golden.ts",
     "deploy": "npm run build && wrangler deploy"

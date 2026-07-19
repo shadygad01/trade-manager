@@ -3094,3 +3094,111 @@ and filter each store's `getAll()` result by `.ticker === "ELKA"` the same way.
   unexplained; deprioritized behind (1) since it's optional maintenance, not on the critical path. (4) ADIB
   (~4-share discrepancy, likely a pre-tracking-window opening balance) remains untouched, per the user's own
   explicit "do this last" ordering.
+
+### Execution Graph — formalizing the cross-subsystem dependency/parallel-work map (docs only, requested directly)
+
+User asked for an architecture-discovery task, explicitly scoped to *not* touch business logic: audit
+every subsystem, build a dependency graph (responsibilities/upstream/downstream/shared state/ownership),
+and produce it as a standing document future work should consult before deciding what's safe to change in
+parallel. Audited the existing architecture docs first (`ARCHITECTURE.md`, `DATA_MODEL.md`,
+`ARCHITECTURAL_DEBT.md`, `MIGRATION_STATUS.md`, `OCR_SUBSYSTEM.md`, `EVIDENCE_ARCHITECTURE.md`,
+`VERIFICATION_ENGINE.md`, `ANALYTICS_ENGINE.md`, `PORTFOLIO_OS_V2_SPEC.md`'s Ownership Matrix and Guardian
+design) plus the real import graph (`grep` across `src/application/services/*.ts`,
+`src/presentation/lib/data.ts`'s composition root, `serialize.ts`'s per-`(portfolioId, ticker)` concurrency
+lock) to avoid re-deriving anything that already had a canonical answer.
+
+**Delivered**: `docs/EXECUTION_GRAPH.md` — ~30 subsystem nodes (Fact Pipeline, Policy/Judgment, Legacy
+Projection track, read-only consumers, ingestion, persistence, presentation) as a table
+(responsibility/inputs/outputs/depends-on/consumers/shared-state) plus a Mermaid dependency diagram and an
+explicit "parallel-work rules" section — e.g. independent `BrokerParser`/analytics-calculator additions are
+always parallel-safe, the Legacy Projection track's two Dexie tables are not (despite being separate files),
+same-ticker Fact Pipeline work is serialized at runtime already via `serialize.ts` so different-ticker work
+is genuinely concurrent today. Cross-linked from `ARCHITECTURE.md` (points to it for the granular graph) and
+`CLAUDE.md`'s "Working on this repo" section (read it alongside `ROADMAP.md` for any multi-subsystem task).
+
+**No architectural blockers found, none fixed.** The layering (`.dependency-cruiser.cjs`) and frozen-count
+guards (`regressionGuards.test.ts`) already machine-enforce most of the edges/shared-state boundaries this
+document describes — the task was formalizing an already-real, already-enforced structure, not changing it.
+Zero `src/` files touched; zero tests affected.
+
+**Deliberately not built**: no CI guard cross-checking the new document's node list against the live import
+graph for drift (`sourceScan.ts` could plausibly grow one) — new tooling, not part of this documentation
+task; left for a future sprint if drift becomes an observed problem rather than a hypothetical one.
+
+- **Next recommended sprint**: same open items as above (ELKA/ESRS/HDBK forensic root-cause work) — this
+  entry was a direct, explicit documentation request and doesn't change that priority ordering. If picked
+  up next, `docs/EXECUTION_GRAPH.md`'s Fact Pipeline / Policy / Legacy Projection rows are the fastest way
+  to see which engines that investigation will touch and in what order.
+
+### Execution Graph — per-node impact map (criticality, required regression tests, files owned, public interfaces), machine-readable
+
+Direct follow-up request on the Execution Graph entry above: same 31 nodes, extended with per-node
+upstream/downstream dependencies, a 4-level criticality rating, required regression tests, files owned,
+and public interfaces — plus a machine-readable JSON form, not just prose.
+
+**Delivered**: `docs/EXECUTION_GRAPH.json` (31 nodes; `filesOwned`/`publicInterfaces`/co-located and
+cross-cutting test lists extracted programmatically — export-statement scan + test-file glob + import
+grep against the real source tree, not asserted from memory) plus an "Impact map" section in
+`docs/EXECUTION_GRAPH.md` documenting the schema, the criticality methodology (`critical` = writes/derives
+primary financial state, 11 nodes; `high` = gates/orchestrates a `critical` node, 9; `medium` =
+derived/read-only, 6; `low` = leaf ingestion or no-op-by-default instrumentation, 5), and a summary table.
+CI regression guards per node were hand-mapped from `regressionGuards.test.ts` (not greppable from the
+node's own files, since a guard's existence is a fact about a different file).
+
+**No architectural blockers found, none fixed.** Every structural check (no dangling edge references, no
+missing owned files, no duplicate node ids) passed programmatically before writing the file. Zero `src/`
+files touched.
+
+- **Next recommended sprint**: unchanged — ELKA/ESRS/HDBK forensic root-cause work remains the highest-
+  priority open item; this was a direct documentation follow-up request, not a re-prioritization.
+
+### Graph Validator — making the execution graph enforceable instead of documentation-only
+
+Direct follow-up request: build a validator that checks `docs/EXECUTION_GRAPH.json` against the real
+repository and fails CI on drift, instead of trusting the graph to stay accurate by convention. Audited
+existing tooling first (`.dependency-cruiser.cjs` for layer boundaries, `src/architecture/regressionGuards.test.ts` +
+`sourceScan.ts` for frozen-writer/singular-function guards) and deliberately did not duplicate either —
+the new validator reuses `sourceScan.ts`'s file scan directly and only cross-references
+`regressionGuards.test.ts`'s guard titles (a heuristic staleness check), rather than re-implementing layer
+rules or frozen counts.
+
+**Ran the validator against the graph before shipping it — found real bugs in the graph itself, not just
+in the tooling**: 41 files (all of `application/analytics/calculators/`, every `DexieXRepository.ts`, and
+several standalone services — `canonicalTransaction.ts`, `cashProjection.ts`, `duplicateTradeCleanup.ts`,
+`evidenceIntelligence.ts`, `provenanceRepair.ts`, `orderEvidence.ts`, `netShareTimeline.ts`,
+`duplicateDetection.ts`, `serialize.ts`, `types.ts`, `trackedDateRange.ts`, two Diagnostics Center
+application-layer files) were never claimed by any node — fixed by assigning them to the right existing
+node, a new `diagnostics-application-support` node (32nd), or a new `sharedHelperFiles` allowlist for
+genuinely cross-node leaf utilities. 25 upstream/downstream edges were asymmetric (declared on one side,
+missing on the other) — fixed; two were backwards (`reconciliation`/`ledger-projection`) and five were
+outright false (`dexie-persistence` claimed direct edges to application nodes it can't actually have —
+Clean Architecture means those nodes receive it via dependency injection at `presentation/lib/data.ts`,
+never a compile-time import — the validator's own dependency-validation check caught this). The
+circular-dependency check (Tarjan SCC, not naive path enumeration, after the first attempt produced 20+
+duplicate rotations of the same 2 underlying clusters) found 3 real circular dependencies, one of them a
+graph-modeling bug (`trackedDateRange.ts` mis-attributed, creating a false OCR↔STES cycle — fixed by
+moving it to `sharedHelperFiles`) and two genuinely real in the code (`ocr-import-pipeline` ↔
+`thndr-orders-workbook` via `parsePrice`; a 10-node Fact Pipeline/Legacy Projection cluster whose
+individual edges were already disclosed separately across `ARCHITECTURAL_DEBT.md` but never visible as one
+connected component before this tool existed) — both recorded in a new `acceptedCycles` allowlist with a
+factual reason each, the same frozen-allowlist pattern `regressionGuards.test.ts` already uses, not fixed
+in code (untangling them is architectural refactoring, explicitly out of scope this sprint).
+
+**Delivered**: `scripts/validate-execution-graph.ts` (`npm run graph:check`, added to
+`.github/workflows/ci.yml` right after `npm run lint`) — 8 checks (ownership, dependency validation,
+circular dependency detection, orphan files, ownership conflicts, public-interface drift, architecture
+drift, graph consistency), each Error (fails CI) or Warning (visible, doesn't block) by a documented
+policy, plus a Suggestions section with concrete next steps. `docs/EXECUTION_GRAPH.md` gained a
+"Validator" section (how it works, the severity policy, how to use it, how to update the graph) and its
+"Adoption" section's "not done, not planned" item is now marked done. `CLAUDE.md` and the JSON's own
+`$schemaNote` point at it. Baseline after all fixes: **0 errors, 53 warnings, 38 suggestions** — zero
+warnings is explicitly not the target (documented in the doc); a stable-or-shrinking count is.
+
+**Verified**: `npm run graph:check` passes; `tsc --noEmit` and `npm run arch:check` clean; `npm run build`
+succeeds; full test suite run twice (1105 passed, 2 pre-existing failures in
+`ImportPage.brokerExcelLoadRace.test.tsx` confirmed via `git stash` to fail identically on the untouched
+checkout — unrelated to this change, not investigated further per this task's own scope). Zero business
+logic touched.
+
+- **Next recommended sprint**: unchanged — ELKA/ESRS/HDBK forensic root-cause work remains the
+  highest-priority open item.
