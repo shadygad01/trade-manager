@@ -13,6 +13,9 @@ Where this repo already has a deeper authority on a subsystem (`docs/PORTFOLIO_O
 Ownership Matrix, `docs/ARCHITECTURAL_DEBT.md`'s violation catalog), this document links to it rather than
 re-deriving it — this file's job is the cross-subsystem *shape*, not the per-field detail.
 
+A machine-readable companion, `docs/EXECUTION_GRAPH.json`, carries the same 31 nodes plus criticality,
+required regression tests, files owned, and public interfaces per node — see "Impact map" below.
+
 ## How to use this
 
 1. Find the node(s) your task touches in the table below.
@@ -225,6 +228,88 @@ of the edges and shared-state boundaries in this document as machine-checked ass
 adds the *shape* (which nodes exist, how they cluster, what's safe to run in parallel) on top of
 constraints that were already real and already enforced. No code changed to produce it.
 
+## Impact map (machine-readable)
+
+`docs/EXECUTION_GRAPH.json` is the same 31 nodes as the table above, in a machine-readable form with six
+fields the prose table doesn't carry: **criticality**, **required regression tests** (co-located unit
+tests, cross-cutting/integration tests, and CI regression guards — all three extracted or verified
+against real files, not asserted from memory), **files owned**, and **public interfaces** (every
+top-level `export` in each owned file). Upstream/downstream edges reference other nodes by `id` (e.g.
+`"upstreamDependencies": [{"id": "verification-engine"}]`) or, for a shared leaf helper that isn't its
+own node (`duplicateDetection.ts`, `serialize.ts`, `netShareTimeline.ts`), `{"external": "<name>", "note": "..."}`.
+Every application/infrastructure node also depends on `src/domain` for types/ports per the enforced
+layering (`ARCHITECTURE.md`) — omitted from each node's edge list since it's universal and never a
+parallel-work conflict (domain is read-only from every other layer's perspective).
+
+**Criticality** is a 4-level scale, defined once in the JSON's own `criticalityLevels` object so the
+label means the same thing everywhere it's used:
+
+| Level | Meaning | Count |
+|---|---|---|
+| `critical` | Writes or directly derives primary financial state (shares, cost basis, cash) in the replay/write path. A defect is a silent, compounding money-correctness bug. | 11 |
+| `high` | Gates, corrects, or orchestrates what reaches a `critical` node, or aggregates `critical` nodes into a load-bearing decision. | 9 |
+| `medium` | Derived, read-only, or observability output. Visible and correctable at read time; never mutates stored state. | 6 |
+| `low` | Isolated leaf ingestion (gated by a `critical`/`high` node downstream before it can affect stored state), or purely additive, no-op-by-default instrumentation. | 5 |
+
+**Required regression tests** per node has three parts, all machine-verified against the repo at
+generation time (not hand-curated): `coLocatedUnitTests` (the file's own `*.test.ts(x)` siblings),
+`crossCuttingOrIntegrationTests` (other test files whose imports reference this node's files — e.g. the
+determinism E2E test importing the Ledger/Allocation/Holdings Engines), and `ciRegressionGuards` (the
+specific `regressionGuards.test.ts` assertions that would fail if this node grew a new writer/duplicate
+implementation — authored from that file directly, since a guard's existence isn't discoverable by
+grepping the node's own files). Run all three before merging a change to a `critical` or `high` node;
+`medium`/`low` nodes are adequately covered by `coLocatedUnitTests` alone in the common case.
+
+Summary (full detail — responsibility, files, exports, every test path — is in the JSON, not repeated here):
+
+| Node (`id`) | Criticality | Upstream | Downstream | Co-located tests | CI regression guards |
+|---|---|---|---|---|---|
+| Allocation Engine (`allocation-engine`) | critical | 1 | 3 | 1 | 1 |
+| Backup Service (`backup-service`) | critical | 0 | 0 | 1 | 1 |
+| Commit Engine (`commit-engine`) | critical | 5 | 5 | 3 | 0 |
+| Dexie Persistence (`dexie-persistence`) | critical | 0 | 5 | 1 | 2 |
+| Fact Store writes (`fact-store-writes`) | critical | 3 | 3 | 3 | 1 |
+| Holdings Engine (`holdings-engine`) | critical | 2 | 2 | 1 | 1 |
+| Ledger Engine (`ledger-engine`) | critical | 2 | 4 | 1 | 1 |
+| ledgerProjection.ts (`ledger-projection`) | critical | 5 | 4 | 1 | 1 |
+| ledgerRebuild.ts (`ledger-rebuild`) | critical | 4 | 3 | 1 | 2 |
+| PortfolioService.ts (`portfolio-service`) | critical | 1 | 2 | 1 | 0 |
+| TradeService (legacy projection) (`trade-service`) | critical | 4 | 4 | 1 | 2 |
+| canonicalHoldings.ts (`canonical-holdings`) | high | 2 | 1 | 1 | 1 |
+| Constraint Validation (`constraint-validation`) | high | 1 | 2 | 1 | 0 |
+| Evidence Authority (`evidence-authority`) | high | 0 | 6 | 1 | 1 |
+| ImportPage (`import-page`) | high | 6 | 0 | 19 | 0 |
+| lotManager.ts (`lot-manager`) | high | 6 | 1 | 1 | 1 |
+| pendingExecutions.ts (`pending-executions`) | high | 0 | 1 | 1 | 0 |
+| Reconciliation (`reconciliation`) | high | 4 | 2 | 3 | 1 |
+| systemValidation.ts / systemSnapshot.ts (`system-validation-snapshot`) | high | 7 | 0 | 2 | 0 |
+| Verification Engine (`verification-engine`) | high | 6 | 5 | 2 | 1 |
+| Analytics Engine (`analytics-engine`) | medium | 0 | 1 | 2 | 0 |
+| Completeness Engine (`completeness-engine`) | medium | 1 | 2 | 2 | 0 |
+| Dashboard / PortfolioDetail / Portfolios / TickerDetail pages (`dashboard-pages`) | medium | 5 | 0 | 3 | 0 |
+| Diagnostics Center pages (`diagnostics-center-pages`) | medium | 3 | 0 | 1 | 0 |
+| Evidence Graph (`evidence-graph`) | medium | 2 | 1 | 1 | 0 |
+| TradesPage / SellAllocationForm (`trades-page`) | medium | 2 | 0 | 1 | 0 |
+| Diagnostics recorder (`diagnostics-recorder`) | low | 0 | 1 | 2 | 1 |
+| OCR/Import Pipeline (`ocr-import-pipeline`) | low | 0 | 2 | 7 | 0 |
+| SnapshotPriceRepository (`snapshot-price-repository`) | low | 0 | 2 | 1 | 0 |
+| STES Workbook Import (`stes-workbook-import`) | low | 0 | 1 | 1 | 0 |
+| Thndr Orders Workbook (`thndr-orders-workbook`) | low | 0 | 1 | 1 | 0 |
+
+Two things worth reading directly off this table before touching a node: **ImportPage has 19 co-located
+tests and zero CI guards** — its correctness is tested, not structurally enforced, consistent with its
+known-drift status (see the Subsystem table above); and **11 of 31 nodes are `critical`**, all of them
+inside the Fact Pipeline and Legacy Projection clusters — matching "Parallel-work rules" #3 and #5 above,
+which is exactly why those two clusters get the strictest parallel-work treatment in this document.
+
+**Regenerating this file**: it was produced by a one-off script (export-statement regex + test-file glob
++ import-string grep over the files named in the Subsystem table above, merged with hand-authored
+criticality/edges/guards), not a checked-in tool — see "Adoption / keeping this in sync" below for why
+no CI guard cross-checks it automatically yet. If it drifts, regenerate by re-deriving `filesOwned`/
+`publicInterfaces`/`coLocatedUnitTests`/`crossCuttingOrIntegrationTests` from the current source tree and
+re-reviewing `criticality`/edges/`ciRegressionGuards` by hand against `ARCHITECTURAL_DEBT.md` and
+`regressionGuards.test.ts`, the same way this version was built.
+
 ## Adoption / keeping this in sync
 
 This is a documentation-only deliverable, so there is no code migration plan — the "migration" is
@@ -233,13 +318,14 @@ procedural:
 1. **Read this alongside `docs/ROADMAP.md` at the start of any session touching more than one
    subsystem** — use it to decide dependency order and what's safe to split across parallel work, per
    "How to use this" above. (`CLAUDE.md`'s "Working on this repo" section now points here.)
-2. **Update the table in the same commit as any change that adds/removes/renames a subsystem file,
-   changes a dependency edge, or changes which Dexie table a node writes** — same discipline
-   `ARCHITECTURAL_DEBT.md` already asks for its own catalog. A stale graph is worse than no graph, since
-   it produces confidently wrong parallel-work decisions.
-3. **Not done, not planned**: no CI guard cross-checks this document's "Key files"/edges against the
-   real import graph automatically. `regressionGuards.test.ts`'s existing source-scan (`sourceScan.ts`)
-   could plausibly grow one (e.g. "every file in `application/services/` appears in exactly one graph
-   node"), but that's new tooling, not a documentation task — leave it for a future sprint if drift
-   between this file and the codebase becomes a real, observed problem, per this repo's own
-   "don't build for hypothetical future requirements" convention.
+2. **Update the table (and regenerate `docs/EXECUTION_GRAPH.json`) in the same commit as any change that
+   adds/removes/renames a subsystem file, changes a dependency edge, or changes which Dexie table a node
+   writes** — same discipline `ARCHITECTURAL_DEBT.md` already asks for its own catalog. A stale graph is
+   worse than no graph, since it produces confidently wrong parallel-work decisions; a stale JSON is worse
+   still, since nothing forces a human to eyeball it before it's consumed programmatically.
+3. **Not done, not planned**: no CI guard cross-checks this document (or the JSON) against the real
+   import graph automatically. `regressionGuards.test.ts`'s existing source-scan (`sourceScan.ts`) could
+   plausibly grow one (e.g. "every file in `application/services/` appears in exactly one graph node's
+   `filesOwned`"), but that's new tooling, not a documentation task — leave it for a future sprint if
+   drift between this file and the codebase becomes a real, observed problem, per this repo's own "don't
+   build for hypothetical future requirements" convention.

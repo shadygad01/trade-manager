@@ -3129,3 +3129,25 @@ task; left for a future sprint if drift becomes an observed problem rather than 
   entry was a direct, explicit documentation request and doesn't change that priority ordering. If picked
   up next, `docs/EXECUTION_GRAPH.md`'s Fact Pipeline / Policy / Legacy Projection rows are the fastest way
   to see which engines that investigation will touch and in what order.
+
+### Execution Graph — per-node impact map (criticality, required regression tests, files owned, public interfaces), machine-readable
+
+Direct follow-up request on the Execution Graph entry above: same 31 nodes, extended with per-node
+upstream/downstream dependencies, a 4-level criticality rating, required regression tests, files owned,
+and public interfaces — plus a machine-readable JSON form, not just prose.
+
+**Delivered**: `docs/EXECUTION_GRAPH.json` (31 nodes; `filesOwned`/`publicInterfaces`/co-located and
+cross-cutting test lists extracted programmatically — export-statement scan + test-file glob + import
+grep against the real source tree, not asserted from memory) plus an "Impact map" section in
+`docs/EXECUTION_GRAPH.md` documenting the schema, the criticality methodology (`critical` = writes/derives
+primary financial state, 11 nodes; `high` = gates/orchestrates a `critical` node, 9; `medium` =
+derived/read-only, 6; `low` = leaf ingestion or no-op-by-default instrumentation, 5), and a summary table.
+CI regression guards per node were hand-mapped from `regressionGuards.test.ts` (not greppable from the
+node's own files, since a guard's existence is a fact about a different file).
+
+**No architectural blockers found, none fixed.** Every structural check (no dangling edge references, no
+missing owned files, no duplicate node ids) passed programmatically before writing the file. Zero `src/`
+files touched.
+
+- **Next recommended sprint**: unchanged — ELKA/ESRS/HDBK forensic root-cause work remains the highest-
+  priority open item; this was a direct documentation follow-up request, not a re-prioritization.

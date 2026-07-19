@@ -1,0 +1,2934 @@
+{
+  "$schemaNote": "Informal schema (no external JSON Schema file). Each node: id/name/layer/cluster/responsibility/filesOwned/publicInterfaces/upstreamDependencies/downstreamConsumers/sharedState/criticality/criticalityRationale/requiredRegressionTests. Edges are {id: <node id in this file>} or {external: <name>, note: <why it's not its own node>}. See docs/EXECUTION_GRAPH.md for the prose version, the Mermaid diagram, and parallel-work rules this file doesn't repeat.",
+  "generatedFrom": {
+    "commit": "086d8b37b5907f6a490e0812f91238f0ce8d61ca",
+    "method": "filesOwned/publicInterfaces/requiredRegressionTests.coLocatedUnitTests/crossCuttingOrIntegrationTests were extracted programmatically (export-statement regex + test-file glob + import-string grep) against the files listed in docs/EXECUTION_GRAPH.md's Subsystem table. layer/cluster/responsibility/upstream/downstream/sharedState/criticality/ciRegressionGuards were authored from docs/EXECUTION_GRAPH.md, docs/ARCHITECTURAL_DEBT.md, docs/PORTFOLIO_OS_V2_SPEC.md Part 5, and src/architecture/regressionGuards.test.ts."
+  },
+  "criticalityLevels": {
+    "critical": "Writes or directly derives primary financial state (shares, cost basis, cash) in the replay/write path. A defect is a silent, compounding money-correctness bug — the class of incident named repeatedly in docs/ROADMAP.md.",
+    "high": "Gates, corrects, or orchestrates what reaches a critical node, or aggregates critical nodes into a load-bearing decision. A defect causes a critical node to receive wrong input or lets a wrong verdict reach the user undetected.",
+    "medium": "Derived, read-only, or observability output. A defect is visible and correctable at read time; it never mutates stored state.",
+    "low": "Isolated leaf ingestion (gated by a critical/high node downstream before it can affect stored state) or purely additive, no-op-by-default instrumentation."
+  },
+  "criticalityCounts": {
+    "critical": 11,
+    "high": 9,
+    "medium": 6,
+    "low": 5
+  },
+  "nodeCount": 31,
+  "nodes": [
+    {
+      "id": "fact-store-writes",
+      "name": "Fact Store writes",
+      "layer": "application",
+      "cluster": "fact-pipeline",
+      "responsibility": "Append-only creation of RawTransaction facts from parsed import evidence, with identity dedup against already-live facts.",
+      "filesOwned": [
+        "src/application/services/importRecording.ts",
+        "src/application/services/backfillRawTransactions.ts",
+        "src/application/services/rawTransactionFolds.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/importRecording.ts",
+          "kind": "type",
+          "name": "ImportRecordingRepos"
+        },
+        {
+          "file": "src/application/services/importRecording.ts",
+          "kind": "interface",
+          "name": "ImportRecordingInput"
+        },
+        {
+          "file": "src/application/services/importRecording.ts",
+          "kind": "function",
+          "name": "candidateSource"
+        },
+        {
+          "file": "src/application/services/importRecording.ts",
+          "kind": "function",
+          "name": "recordImportedRawTransactions"
+        },
+        {
+          "file": "src/application/services/backfillRawTransactions.ts",
+          "kind": "interface",
+          "name": "BackfillRepos"
+        },
+        {
+          "file": "src/application/services/backfillRawTransactions.ts",
+          "kind": "interface",
+          "name": "BackfillResult"
+        },
+        {
+          "file": "src/application/services/backfillRawTransactions.ts",
+          "kind": "class",
+          "name": "BackfillAlreadyRanError"
+        },
+        {
+          "file": "src/application/services/backfillRawTransactions.ts",
+          "kind": "function",
+          "name": "backfillRawTransactions"
+        },
+        {
+          "file": "src/application/services/backfillRawTransactions.ts",
+          "kind": "function",
+          "name": "backfillRawTransactionsSilently"
+        },
+        {
+          "file": "src/application/services/rawTransactionFolds.ts",
+          "kind": "function",
+          "name": "isRetracted"
+        },
+        {
+          "file": "src/application/services/rawTransactionFolds.ts",
+          "kind": "function",
+          "name": "resolveCurrentTicker"
+        },
+        {
+          "file": "src/application/services/rawTransactionFolds.ts",
+          "kind": "function",
+          "name": "findUnclaimedSellExecutionFact"
+        },
+        {
+          "file": "src/application/services/rawTransactionFolds.ts",
+          "kind": "function",
+          "name": "findLiveExecutionFact"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "evidence-authority",
+          "via": "authority rank stamped onto facts at write time"
+        },
+        {
+          "id": "ocr-import-pipeline",
+          "via": "ParsedTradeCandidate/ParsedDividendCandidate input"
+        },
+        {
+          "id": "stes-workbook-import",
+          "via": "same candidate shapes"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "ledger-engine"
+        },
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "verification-engine"
+        }
+      ],
+      "sharedState": [
+        "rawTransactions (append-only, structurally enforced — RawTransactionRepository exposes no update/delete)"
+      ],
+      "criticality": "critical",
+      "criticalityRationale": "The single entry point for every financial fact in the system; a defect here (e.g. a missed dedup check) is the historical root cause class named repeatedly in ROADMAP.md (duplicate execution facts, ARCC/backfill incident).",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/backfillRawTransactions.test.ts",
+          "src/application/services/importRecording.test.ts",
+          "src/application/services/rawTransactionFolds.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/commitEngine.reconcileDuplicateAuthority.test.ts",
+          "src/application/services/crossTransactionIsolation.test.ts",
+          "src/application/services/officialBrokerClosedPosition.test.ts",
+          "src/application/services/reconciliationSweep.test.ts",
+          "src/application/services/systemValidation.test.ts",
+          "src/presentation/pages/backfillRawTransactionsSilently.realDb.test.ts",
+          "src/presentation/pages/excelWorkflowEndToEnd.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "one canonical execution fact per business execution identity — every BuyExecution/SellExecution constructor site is in the known, reviewed writer set"
+        ]
+      }
+    },
+    {
+      "id": "ledger-engine",
+      "name": "Ledger Engine",
+      "layer": "application",
+      "cluster": "fact-pipeline",
+      "responsibility": "Pure replay: RawTransaction[] -> LedgerEvent[] for one (portfolio, ticker).",
+      "filesOwned": [
+        "src/application/services/ledgerEngine.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/ledgerEngine.ts",
+          "kind": "function",
+          "name": "generateLedgerEvents"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "ledger-rebuild",
+          "via": "canonicalizeTradeEntries/canonicalKey for canonicalization only"
+        },
+        {
+          "id": "fact-store-writes",
+          "via": "reads facts"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "allocation-engine"
+        },
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "holdings-engine"
+        },
+        {
+          "id": "system-validation-snapshot"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "critical",
+      "criticalityRationale": "Canonical replay stage that turns facts into ledger events; every downstream position/cash number is derived from its output.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/ledgerEngine.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/allocationEngine.test.ts",
+          "src/application/services/holdingsEngine.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "generateLedgerEvents stays defined in exactly one file (ledgerEngine.ts)"
+        ]
+      }
+    },
+    {
+      "id": "allocation-engine",
+      "name": "Allocation Engine",
+      "layer": "application",
+      "cluster": "fact-pipeline",
+      "responsibility": "Pure replay: LedgerEvent[] -> Allocation[] (which sell closed which lot).",
+      "filesOwned": [
+        "src/application/services/allocationEngine.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/allocationEngine.ts",
+          "kind": "function",
+          "name": "generateAllocations"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "ledger-engine",
+          "via": "LedgerEvent/SellRecordedEvent types"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "holdings-engine"
+        },
+        {
+          "id": "system-validation-snapshot"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "critical",
+      "criticalityRationale": "Implements ADR-002 (explicit lot allocation, never FIFO/avg-cost) — the core product invariant. A bug here misattributes realized P/L per lot.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/allocationEngine.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/holdingsEngine.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "generateAllocations stays defined in exactly one file (allocationEngine.ts)"
+        ]
+      }
+    },
+    {
+      "id": "holdings-engine",
+      "name": "Holdings Engine",
+      "layer": "application",
+      "cluster": "fact-pipeline",
+      "responsibility": "Pure replay: Ledger + Allocations -> current per-ticker positions (computeHoldings).",
+      "filesOwned": [
+        "src/application/services/holdingsEngine.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/holdingsEngine.ts",
+          "kind": "interface",
+          "name": "OpenLot"
+        },
+        {
+          "file": "src/application/services/holdingsEngine.ts",
+          "kind": "interface",
+          "name": "Holding"
+        },
+        {
+          "file": "src/application/services/holdingsEngine.ts",
+          "kind": "function",
+          "name": "computeHoldings"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "ledger-engine",
+          "via": "LedgerEvent/LotOpenedEvent types"
+        },
+        {
+          "id": "allocation-engine",
+          "via": "Allocation types"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "canonical-holdings"
+        },
+        {
+          "id": "system-validation-snapshot"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "critical",
+      "criticalityRationale": "One of the 3 CI-frozen position-computation functions; directly feeds the canonical holdings number shown to users.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/holdingsEngine.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": [
+          "computePositions/computeHoldings/computeCanonicalPositions stay the only three position-computation functions"
+        ]
+      }
+    },
+    {
+      "id": "commit-engine",
+      "name": "Commit Engine",
+      "layer": "application",
+      "cluster": "fact-pipeline",
+      "responsibility": "Orchestrates verify -> replay -> cache for one (portfolio, ticker); the only writer of CommittedLedgerRepository. Owns the (portfolioId, ticker) serialization lock.",
+      "filesOwned": [
+        "src/application/services/commitEngine.ts",
+        "src/application/services/commitProjectionWorker.ts",
+        "src/application/services/commitProjection.worker.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "interface",
+          "name": "CommitEngineRepos"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "interface",
+          "name": "WriterContext"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "resolveCurrentPortfolioId"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "relevantTradeTransactions"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "shouldCommit"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "commitTicker"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "appendAndMaybeCommit"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "assignPortfolio"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "assignPortfolioToFact"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "retractRawTransaction"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "convergeOfficialBrokerAuthority"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "repairOfficialBrokerSellAllocations"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "reconcileDuplicateAuthority"
+        },
+        {
+          "file": "src/application/services/commitEngine.ts",
+          "kind": "function",
+          "name": "renameRawTransactionsTicker"
+        },
+        {
+          "file": "src/application/services/commitProjectionWorker.ts",
+          "kind": "function",
+          "name": "projectInWorker"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "verification-engine"
+        },
+        {
+          "id": "ledger-projection",
+          "via": "ensureLegacyFactsExist/projectLegacyTicker"
+        },
+        {
+          "id": "ledger-rebuild",
+          "via": "canonicalKey"
+        },
+        {
+          "id": "evidence-authority"
+        },
+        {
+          "external": "duplicateDetection.ts",
+          "note": "shared leaf helper (timesConflict) — not its own node"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "portfolio-service"
+        },
+        {
+          "id": "lot-manager"
+        },
+        {
+          "id": "reconciliation",
+          "via": "reconciliationSweep.ts calls commitTicker"
+        },
+        {
+          "id": "system-validation-snapshot"
+        },
+        {
+          "id": "import-page"
+        }
+      ],
+      "sharedState": [
+        "ledgerCache, allocationsCache (full delete-and-replace per key, never patched); serialized per `${portfolioId}|${ticker}` via serialize.ts"
+      ],
+      "criticality": "critical",
+      "criticalityRationale": "The single orchestration point where facts become the cached ledger everything else reads; recursive-lock and partial-commit failure modes are named, historical incident classes (ROADMAP.md).",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/commitEngine.diagnostics.test.ts",
+          "src/application/services/commitEngine.reconcileDuplicateAuthority.test.ts",
+          "src/application/services/commitEngine.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/TradeService.test.ts",
+          "src/application/services/canonicalHoldings.test.ts",
+          "src/application/services/commitTickerGroupVsSmartAllocateRace.test.ts",
+          "src/application/services/crossTransactionIsolation.test.ts",
+          "src/application/services/ledgerProjection.test.ts",
+          "src/application/services/lotManager.test.ts",
+          "src/application/services/officialBrokerClosedPosition.test.ts",
+          "src/application/services/provenanceRepair.test.ts",
+          "src/application/services/setTickerPortfolioVsBuyConfirmRace.test.ts",
+          "src/application/services/systemValidation.test.ts",
+          "src/presentation/pages/ImportPage.retraction.test.tsx",
+          "src/presentation/pages/excelWorkflowEndToEnd.test.ts"
+        ],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "verification-engine",
+      "name": "Verification Engine",
+      "layer": "application",
+      "cluster": "policy-judgment",
+      "responsibility": "Judges each fact Verified/Rejected/Needs Review; computes per-ticker match status (checkTickerMatch).",
+      "filesOwned": [
+        "src/application/services/verificationEngine.ts",
+        "src/application/services/importVerification.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "type",
+          "name": "EvidenceType"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "interface",
+          "name": "EvidenceItem"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "type",
+          "name": "VerificationVerdict"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "interface",
+          "name": "TransactionVerification"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "interface",
+          "name": "VerifyAllParams"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "function",
+          "name": "verifyAll"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "function",
+          "name": "verifyTransaction"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "interface",
+          "name": "TickerStatus"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "interface",
+          "name": "VerificationResult"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "function",
+          "name": "verifyAllDetailed"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "function",
+          "name": "verifyTicker"
+        },
+        {
+          "file": "src/application/services/verificationEngine.ts",
+          "kind": "function",
+          "name": "buildConstraintReport"
+        },
+        {
+          "file": "src/application/services/importVerification.ts",
+          "kind": "type",
+          "name": "TickerMatchReason"
+        },
+        {
+          "file": "src/application/services/importVerification.ts",
+          "kind": "interface",
+          "name": "TickerMatchStatus"
+        },
+        {
+          "file": "src/application/services/importVerification.ts",
+          "kind": "function",
+          "name": "checkTickerMatch"
+        },
+        {
+          "file": "src/application/services/importVerification.ts",
+          "kind": "function",
+          "name": "isTickerFullyResolved"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "reconciliation",
+          "via": "latestByTicker"
+        },
+        {
+          "id": "evidence-authority"
+        },
+        {
+          "external": "constraintValidation.ts",
+          "note": "buildTickerConstraintReport composition"
+        },
+        {
+          "external": "duplicateDetection.ts"
+        },
+        {
+          "external": "netShareTimeline.ts"
+        },
+        {
+          "external": "mismatchResolver.ts"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "completeness-engine"
+        },
+        {
+          "id": "evidence-graph"
+        },
+        {
+          "id": "system-validation-snapshot"
+        },
+        {
+          "id": "import-page",
+          "via": "legacy re-derivation path, see ARCHITECTURAL_DEBT.md 3.2"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "high",
+      "criticalityRationale": "Gates whether a fact is trusted; wrong verdicts don't corrupt storage directly but drive Commit Engine's replay decisions and every user-facing verification banner.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/importVerification.test.ts",
+          "src/application/services/verificationEngine.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/canonicalTransaction.test.ts",
+          "src/application/services/commitEngine.test.ts",
+          "src/application/services/completenessEngine.test.ts",
+          "src/application/services/constraintValidation.test.ts",
+          "src/application/services/evidenceGraph.test.ts",
+          "src/application/services/evidenceIntelligence.test.ts",
+          "src/presentation/pages/excelWorkflowEndToEnd.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "every known trust/authority/verification-judgment function stays defined in exactly the one file that owns it (verifyAll/verifyTransaction/verifyAllDetailed/verifyTicker, checkTickerMatch)"
+        ]
+      }
+    },
+    {
+      "id": "completeness-engine",
+      "name": "Completeness Engine",
+      "layer": "application",
+      "cluster": "read-only-consumer",
+      "responsibility": "Builds minimal-document recovery plans for evidence gaps.",
+      "filesOwned": [
+        "src/application/services/completenessEngine.ts",
+        "src/application/services/evidenceCoverage.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "type",
+          "name": "LedgerCompletenessStatus"
+        },
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "interface",
+          "name": "MissingWindow"
+        },
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "type",
+          "name": "EvidenceDocumentType"
+        },
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "interface",
+          "name": "ExpectedExecution"
+        },
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "interface",
+          "name": "RecoveryPlan"
+        },
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "interface",
+          "name": "TickerCompletenessReport"
+        },
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "function",
+          "name": "assessTickerCompleteness"
+        },
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "function",
+          "name": "assessSingleTicker"
+        },
+        {
+          "file": "src/application/services/completenessEngine.ts",
+          "kind": "function",
+          "name": "assessAllTickersCompleteness"
+        },
+        {
+          "file": "src/application/services/evidenceCoverage.ts",
+          "kind": "type",
+          "name": "CoverageClaim"
+        },
+        {
+          "file": "src/application/services/evidenceCoverage.ts",
+          "kind": "function",
+          "name": "buildCoverageClaims"
+        },
+        {
+          "file": "src/application/services/evidenceCoverage.ts",
+          "kind": "function",
+          "name": "isDateAlreadyCovered"
+        },
+        {
+          "file": "src/application/services/evidenceCoverage.ts",
+          "kind": "function",
+          "name": "hasOrdersHistoryFor"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "verification-engine"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "evidence-graph"
+        },
+        {
+          "id": "import-page"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "medium",
+      "criticalityRationale": "Pure, read-only advisory output (a recovery-plan suggestion); wrong output misleads the user's next upload but never mutates stored data.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/completenessEngine.test.ts",
+          "src/application/services/evidenceCoverage.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "evidence-graph",
+      "name": "Evidence Graph",
+      "layer": "application",
+      "cluster": "read-only-consumer",
+      "responsibility": "Read-only composed view: transaction/document/ticker-position nodes plus corroborate/contradict/missing edges.",
+      "filesOwned": [
+        "src/application/services/evidenceGraph.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "type",
+          "name": "EvidenceNodeKind"
+        },
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "interface",
+          "name": "DocumentNode"
+        },
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "interface",
+          "name": "TransactionNode"
+        },
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "interface",
+          "name": "TickerPositionNode"
+        },
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "type",
+          "name": "EvidenceNode"
+        },
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "type",
+          "name": "EvidenceEdgeType"
+        },
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "interface",
+          "name": "EvidenceEdge"
+        },
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "interface",
+          "name": "EvidenceGraph"
+        },
+        {
+          "file": "src/application/services/evidenceGraph.ts",
+          "kind": "function",
+          "name": "buildEvidenceGraph"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "verification-engine"
+        },
+        {
+          "id": "completeness-engine"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "diagnostics-center-pages"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "medium",
+      "criticalityRationale": "Deliberately unpersisted, rebuilt on every read; a bug is visible in the Diagnostics Center UI and correctable without any stored-state risk.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/evidenceGraph.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "reconciliation",
+      "name": "Reconciliation",
+      "layer": "application",
+      "cluster": "policy-judgment",
+      "responsibility": "Compares ledger position to PositionVerification ground truth; runs the ticker-wide reconciliation sweep re-commit.",
+      "filesOwned": [
+        "src/application/services/reconciliation.ts",
+        "src/application/services/reconciliationSweep.ts",
+        "src/application/services/mismatchResolver.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/reconciliation.ts",
+          "kind": "function",
+          "name": "isTickerFullyOfficialBrokerExcelSourced"
+        },
+        {
+          "file": "src/application/services/reconciliation.ts",
+          "kind": "function",
+          "name": "isTickerOfficialBrokerExcelCoveredByCandidates"
+        },
+        {
+          "file": "src/application/services/reconciliation.ts",
+          "kind": "interface",
+          "name": "PositionReconciliation"
+        },
+        {
+          "file": "src/application/services/reconciliation.ts",
+          "kind": "interface",
+          "name": "PendingConfirmation"
+        },
+        {
+          "file": "src/application/services/reconciliation.ts",
+          "kind": "function",
+          "name": "findPendingConfirmations"
+        },
+        {
+          "file": "src/application/services/reconciliation.ts",
+          "kind": "function",
+          "name": "latestByTicker"
+        },
+        {
+          "file": "src/application/services/reconciliation.ts",
+          "kind": "function",
+          "name": "reconcilePositions"
+        },
+        {
+          "file": "src/application/services/reconciliation.ts",
+          "kind": "function",
+          "name": "suggestDuplicateTradeIds"
+        },
+        {
+          "file": "src/application/services/reconciliationSweep.ts",
+          "kind": "type",
+          "name": "ReconciliationSweepRepos"
+        },
+        {
+          "file": "src/application/services/reconciliationSweep.ts",
+          "kind": "interface",
+          "name": "ReconciliationSweepTickerResult"
+        },
+        {
+          "file": "src/application/services/reconciliationSweep.ts",
+          "kind": "interface",
+          "name": "ReconciliationSweepReport"
+        },
+        {
+          "file": "src/application/services/reconciliationSweep.ts",
+          "kind": "function",
+          "name": "runReconciliationSweep"
+        },
+        {
+          "file": "src/application/services/mismatchResolver.ts",
+          "kind": "interface",
+          "name": "ReconcilableRow"
+        },
+        {
+          "file": "src/application/services/mismatchResolver.ts",
+          "kind": "interface",
+          "name": "ReconcileSuggestion"
+        },
+        {
+          "file": "src/application/services/mismatchResolver.ts",
+          "kind": "const",
+          "name": "MAX_RECONCILE_ROWS"
+        },
+        {
+          "file": "src/application/services/mismatchResolver.ts",
+          "kind": "function",
+          "name": "suggestRemovalsToReconcile"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "external": "importVerification.ts",
+          "note": "folded into verification-engine node"
+        },
+        {
+          "id": "evidence-authority"
+        },
+        {
+          "external": "duplicateDetection.ts"
+        },
+        {
+          "id": "commit-engine",
+          "via": "reconciliationSweep.ts calls commitTicker"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "verification-engine"
+        },
+        {
+          "id": "dashboard-pages",
+          "via": "PortfolioDetailPage mismatch banner"
+        }
+      ],
+      "sharedState": [
+        "verifications table (owned-mutable)"
+      ],
+      "criticality": "high",
+      "criticalityRationale": "Drives the mismatch/shortfall banners users act on and the sweep's re-commit trigger; wrong output can mask a real data gap or falsely flag a clean ledger.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/mismatchResolver.test.ts",
+          "src/application/services/reconciliation.test.ts",
+          "src/application/services/reconciliationSweep.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/TradeService.test.ts",
+          "src/application/services/backfillRawTransactions.test.ts",
+          "src/application/services/commitTickerGroupVsSmartAllocateRace.test.ts",
+          "src/application/services/lotManager.test.ts",
+          "src/application/services/provenanceRepair.test.ts",
+          "src/application/services/setTickerPortfolioVsBuyConfirmRace.test.ts",
+          "src/application/services/verificationEngine.test.ts",
+          "src/presentation/pages/excelWorkflowEndToEnd.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "isTickerFullyOfficialBrokerExcelSourced stays defined in exactly reconciliation.ts"
+        ]
+      }
+    },
+    {
+      "id": "evidence-authority",
+      "name": "Evidence Authority",
+      "layer": "application",
+      "cluster": "policy-judgment",
+      "responsibility": "Canonical trust/authority ranking (authorityRank, higherAuthority) across document/source types.",
+      "filesOwned": [
+        "src/application/services/evidenceAuthority.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/evidenceAuthority.ts",
+          "kind": "const",
+          "name": "MY_POSITION_EXCLUDED_REASON"
+        },
+        {
+          "file": "src/application/services/evidenceAuthority.ts",
+          "kind": "function",
+          "name": "authorityRank"
+        },
+        {
+          "file": "src/application/services/evidenceAuthority.ts",
+          "kind": "function",
+          "name": "higherAuthority"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "fact-store-writes"
+        },
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "reconciliation"
+        },
+        {
+          "id": "verification-engine"
+        },
+        {
+          "id": "system-validation-snapshot"
+        },
+        {
+          "id": "lot-manager"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "high",
+      "criticalityRationale": "Every trust decision in the system reduces to this ranking; a wrong rank silently changes which document wins a conflict everywhere at once (the exact bug class this file was created to close).",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/evidenceAuthority.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": [
+          "the only file allowed to define an AUTHORITY_RANK/SOURCE_RANK/TRUST_RANK-shaped table"
+        ]
+      }
+    },
+    {
+      "id": "constraint-validation",
+      "name": "Constraint Validation",
+      "layer": "application",
+      "cluster": "policy-judgment",
+      "responsibility": "Inventory/completeness contradiction checks (buildInventoryFacts, evaluateInventoryConstraint, diagnoseInventoryContradiction).",
+      "filesOwned": [
+        "src/application/services/constraintValidation.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "interface",
+          "name": "InventoryFacts"
+        },
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "function",
+          "name": "buildInventoryFacts"
+        },
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "interface",
+          "name": "InventoryContradiction"
+        },
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "function",
+          "name": "evaluateInventoryConstraint"
+        },
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "interface",
+          "name": "DiagnosisHypothesis"
+        },
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "interface",
+          "name": "DiagnosisInputs"
+        },
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "function",
+          "name": "diagnoseInventoryContradiction"
+        },
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "interface",
+          "name": "TickerConstraintReport"
+        },
+        {
+          "file": "src/application/services/constraintValidation.ts",
+          "kind": "function",
+          "name": "buildTickerConstraintReport"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "external": "importVerification.ts",
+          "note": "TickerMatchReason type only"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "verification-engine"
+        },
+        {
+          "id": "ledger-rebuild"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "high",
+      "criticalityRationale": "Feeds Verification Engine's constraint report; a wrong contradiction verdict can hide (or falsely raise) a real inventory gap.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/constraintValidation.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "trade-service",
+      "name": "TradeService (legacy projection)",
+      "layer": "application",
+      "cluster": "legacy-projection",
+      "responsibility": "Use-case layer for Buy/Sell/delete/move on Trade/TradeAllocation; computePositions (legacy holdings read).",
+      "filesOwned": [
+        "src/application/services/TradeService.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "RecordBuyInput"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "RecordBuyResult"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "recordBuyBatch"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "recordBuy"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "deleteTrade"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "correctTradeExecutionDate"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "RenameTickerResult"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "renameTickerEverywhere"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "RecordSellAllocationInput"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "RecordSellInput"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "RecordSellResult"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "recordSell"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "MoveTradeResult"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "moveTrade"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "SplitTickerEntry"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "findTickersSplitAcrossPortfolios"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "MisnamedTickerEntry"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "findMisnamedTickers"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "ConsolidateTickerResult"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "consolidateTicker"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "interface",
+          "name": "PositionAggregate"
+        },
+        {
+          "file": "src/application/services/TradeService.ts",
+          "kind": "function",
+          "name": "computePositions"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "ledger-rebuild",
+          "via": "canonicalKey"
+        },
+        {
+          "id": "ledger-projection",
+          "via": "resolveLotRef"
+        },
+        {
+          "external": "rawTransactionFolds.ts"
+        },
+        {
+          "external": "duplicateDetection.ts"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "canonical-holdings"
+        },
+        {
+          "id": "trades-page"
+        },
+        {
+          "id": "ledger-rebuild",
+          "via": "recordBuy/deleteTrade"
+        },
+        {
+          "id": "system-validation-snapshot"
+        }
+      ],
+      "sharedState": [
+        "trades, tradeAllocations (dual-writer, FROZEN — ARCHITECTURAL_DEBT.md 1.1)",
+        "portfolios.cash (N writers, OPEN — ARCHITECTURAL_DEBT.md 1.2)"
+      ],
+      "criticality": "critical",
+      "criticalityRationale": "One of two direct writers of the legacy Trade/TradeAllocation tables that most of the UI still reads through canonicalHoldings' fallback path; also one of the six cash writers.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/TradeService.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/BackupService.test.ts",
+          "src/application/services/canonicalHoldings.test.ts",
+          "src/application/services/canonicalTransaction.test.ts",
+          "src/application/services/commitEngine.diagnostics.test.ts",
+          "src/application/services/commitTickerGroupVsSmartAllocateRace.test.ts",
+          "src/application/services/completenessEngine.test.ts",
+          "src/application/services/crossTransactionIsolation.test.ts",
+          "src/application/services/evidenceGraph.test.ts",
+          "src/application/services/evidenceIntelligence.test.ts",
+          "src/application/services/ledgerProjection.test.ts",
+          "src/application/services/lotManager.test.ts",
+          "src/application/services/officialBrokerClosedPosition.test.ts",
+          "src/application/services/pendingExecutions.test.ts",
+          "src/application/services/reconciliation.test.ts",
+          "src/application/services/setTickerPortfolioVsBuyConfirmRace.test.ts",
+          "src/application/services/verificationEngine.test.ts",
+          "src/presentation/pages/ImportPage.brokerExcelProvenanceUpgrade.test.tsx",
+          "src/presentation/pages/excelWorkflowEndToEnd.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "one of the known direct writers of Trade/TradeAllocation (frozen allowlist)",
+          "one of the 3 frozen position-computation functions (computePositions)"
+        ]
+      }
+    },
+    {
+      "id": "ledger-projection",
+      "name": "ledgerProjection.ts",
+      "layer": "application",
+      "cluster": "legacy-projection",
+      "responsibility": "Rewrites trades/tradeAllocations rows from replayed facts (the second, disclosed dual-writer).",
+      "filesOwned": [
+        "src/application/services/ledgerProjection.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/ledgerProjection.ts",
+          "kind": "interface",
+          "name": "LegacyLedgerRepos"
+        },
+        {
+          "file": "src/application/services/ledgerProjection.ts",
+          "kind": "function",
+          "name": "resolveLotRef"
+        },
+        {
+          "file": "src/application/services/ledgerProjection.ts",
+          "kind": "function",
+          "name": "ensureLegacyFactsExist"
+        },
+        {
+          "file": "src/application/services/ledgerProjection.ts",
+          "kind": "function",
+          "name": "projectLegacyTicker"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "ledger-rebuild",
+          "via": "canonicalKey"
+        },
+        {
+          "external": "rawTransactionFolds.ts"
+        },
+        {
+          "external": "duplicateDetection.ts"
+        },
+        {
+          "id": "ledger-engine",
+          "via": "types"
+        },
+        {
+          "id": "allocation-engine",
+          "via": "types"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "canonical-holdings"
+        },
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "lot-manager"
+        },
+        {
+          "id": "reconciliation",
+          "via": "reconciliationSweep.ts"
+        }
+      ],
+      "sharedState": [
+        "trades, tradeAllocations (same FROZEN dual-writer pair as trade-service)"
+      ],
+      "criticality": "critical",
+      "criticalityRationale": "The replay-side writer of the same frozen dual-writer pair as TradeService; disagreement between the two is the exact class of incident the canonicalHoldings fallback exists to catch.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/ledgerProjection.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": [
+          "one of the known direct writers of Trade/TradeAllocation (frozen allowlist)"
+        ]
+      }
+    },
+    {
+      "id": "canonical-holdings",
+      "name": "canonicalHoldings.ts",
+      "layer": "application",
+      "cluster": "legacy-projection",
+      "responsibility": "Hybrid read: serves canonical (replay-derived) holdings when they agree with legacy TradeService, else falls back per-ticker with a disclosed reason.",
+      "filesOwned": [
+        "src/application/services/canonicalHoldings.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/canonicalHoldings.ts",
+          "kind": "interface",
+          "name": "CanonicalPosition"
+        },
+        {
+          "file": "src/application/services/canonicalHoldings.ts",
+          "kind": "interface",
+          "name": "CanonicalHoldingsRepos"
+        },
+        {
+          "file": "src/application/services/canonicalHoldings.ts",
+          "kind": "function",
+          "name": "computeCanonicalPositions"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "trade-service"
+        },
+        {
+          "id": "holdings-engine"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "dashboard-pages"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "high",
+      "criticalityRationale": "The production read cutover's safety net — every Dashboard/PortfolioDetail/Portfolios number goes through this; a bug here surfaces as wrong headline numbers even though nothing it reads is itself wrong.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/canonicalHoldings.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/presentation/pages/excelWorkflowEndToEnd.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "one of the 3 frozen position-computation functions (computeCanonicalPositions)"
+        ]
+      }
+    },
+    {
+      "id": "ledger-rebuild",
+      "name": "ledgerRebuild.ts",
+      "layer": "application",
+      "cluster": "legacy-projection",
+      "responsibility": "Alternate, Upload-based reconstruction with dry-run/apply split; the one deliberately-kept second replay pipeline.",
+      "filesOwned": [
+        "src/application/services/ledgerRebuild.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "CanonicalTrade"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "function",
+          "name": "canonicalKey"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "function",
+          "name": "canonicalizeTradeEntries"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "function",
+          "name": "buildCanonicalTrades"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "TradeFieldChange"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "TradeToAdd"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "TradeToRemove"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "TradeToModify"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "SellToAdd"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "SellExtraneous"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "SellModified"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "HoldingsMismatch"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "LedgerRebuildReport"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "function",
+          "name": "dryRunLedgerRebuild"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "ApplyLedgerRebuildDecisions"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "interface",
+          "name": "ApplyLedgerRebuildResult"
+        },
+        {
+          "file": "src/application/services/ledgerRebuild.ts",
+          "kind": "function",
+          "name": "applyLedgerRebuild"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "reconciliation"
+        },
+        {
+          "id": "constraint-validation"
+        },
+        {
+          "external": "importVerification.ts"
+        },
+        {
+          "id": "trade-service",
+          "via": "recordBuy/deleteTrade"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "trade-service",
+          "via": "canonicalKey consumed back"
+        },
+        {
+          "id": "ledger-engine",
+          "via": "canonicalizeTradeEntries"
+        },
+        {
+          "id": "ledger-projection",
+          "via": "canonicalKey"
+        }
+      ],
+      "sharedState": [
+        "trades/tradeAllocations metadata-only writes (companyName/transactionNumber — never shares/allocations)"
+      ],
+      "criticality": "critical",
+      "criticalityRationale": "Auto-applies corrections directly to Trade rows; also the one CI-frozen exception to 'only the Ledger/Allocation Engines replay' — any third replay-shaped pipeline appearing elsewhere is the exact bug class this file's own genesis fixed.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/ledgerRebuild.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/presentation/pages/excelWorkflowEndToEnd.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "one of the known direct writers of Trade/TradeAllocation (frozen allowlist)",
+          "dryRunLedgerRebuild stays defined in exactly one file"
+        ]
+      }
+    },
+    {
+      "id": "lot-manager",
+      "name": "lotManager.ts",
+      "layer": "application",
+      "cluster": "legacy-projection",
+      "responsibility": "Ticker-scoped manual sell/allocation UI backend (Lot Manager); home of the identity-collision cross-sell fix.",
+      "filesOwned": [
+        "src/application/services/lotManager.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "type",
+          "name": "LotManagerRepos"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "type",
+          "name": "BuyLotStatus"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "type",
+          "name": "SellStatus"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "BuyLot"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "AllocationLine"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "LotClosingLine"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "Sell"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "TimelineEntry"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "ValidationIssue"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "LotManagerSnapshot"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "RecordSellTransactionInput"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "function",
+          "name": "recordSellTransaction"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "function",
+          "name": "isTemporallyValid"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "SetSellAllocationLine"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "function",
+          "name": "setSellAllocation"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "function",
+          "name": "resetSellAllocation"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "interface",
+          "name": "FifoProposalLine"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "function",
+          "name": "proposeFifoAllocation"
+        },
+        {
+          "file": "src/application/services/lotManager.ts",
+          "kind": "function",
+          "name": "getLotManagerSnapshot"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "ledger-engine"
+        },
+        {
+          "id": "allocation-engine"
+        },
+        {
+          "id": "ledger-projection"
+        },
+        {
+          "id": "evidence-authority"
+        },
+        {
+          "external": "serialize.ts"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "trades-page",
+          "via": "TickerDetailPage's Lot Manager"
+        }
+      ],
+      "sharedState": [
+        "trades/tradeAllocations (stale-allocation cleanup only, on retraction)"
+      ],
+      "criticality": "high",
+      "criticalityRationale": "Direct manual-allocation entry point outside the import-verification gate (by design); the identity-collision bug it fixed was a real cross-sell corruption incident.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/lotManager.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/crossTransactionIsolation.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "one of the known direct writers of Trade/TradeAllocation (frozen allowlist)"
+        ]
+      }
+    },
+    {
+      "id": "portfolio-service",
+      "name": "PortfolioService.ts",
+      "layer": "application",
+      "cluster": "fact-pipeline",
+      "responsibility": "Deposits/withdrawals/cash adjustments/dividends/splits/rights-issues/archiving.",
+      "filesOwned": [
+        "src/application/services/PortfolioService.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "interface",
+          "name": "CreatePortfolioInput"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "createPortfolioAndSave"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "archivePortfolio"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "unarchivePortfolio"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "renamePortfolio"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "setCash"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "interface",
+          "name": "RecordDividendInput"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "recordDividend"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "deleteDividend"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "recordCashAdjustment"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "recordSplit"
+        },
+        {
+          "file": "src/application/services/PortfolioService.ts",
+          "kind": "function",
+          "name": "recordRightsIssue"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "commit-engine",
+          "via": "appendAndMaybeCommit/retractRawTransaction"
+        }
+      ],
+      "downstreamConsumers": [
+        {
+          "id": "dashboard-pages"
+        },
+        {
+          "id": "import-page",
+          "via": "recordDividend"
+        }
+      ],
+      "sharedState": [
+        "portfolios, timelineEvents (owned-mutable)"
+      ],
+      "criticality": "critical",
+      "criticalityRationale": "One of the six direct writers of Portfolio.cash (ARCHITECTURAL_DEBT.md 1.2, still OPEN, no projection live) — a cash bug here is immediately user-visible as a wrong balance with no reconciliation net under it yet.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/PortfolioService.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/BackupService.test.ts"
+        ],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "pending-executions",
+      "name": "pendingExecutions.ts",
+      "layer": "application",
+      "cluster": "policy-judgment",
+      "responsibility": "Partial-fill executions awaiting invoice confirmation.",
+      "filesOwned": [
+        "src/application/services/pendingExecutions.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/pendingExecutions.ts",
+          "kind": "interface",
+          "name": "CreatePendingExecutionInput"
+        },
+        {
+          "file": "src/application/services/pendingExecutions.ts",
+          "kind": "function",
+          "name": "createPendingExecutionRecord"
+        },
+        {
+          "file": "src/application/services/pendingExecutions.ts",
+          "kind": "interface",
+          "name": "ConfirmPendingExecutionInput"
+        },
+        {
+          "file": "src/application/services/pendingExecutions.ts",
+          "kind": "interface",
+          "name": "ConfirmPendingExecutionResult"
+        },
+        {
+          "file": "src/application/services/pendingExecutions.ts",
+          "kind": "function",
+          "name": "confirmPendingExecution"
+        },
+        {
+          "file": "src/application/services/pendingExecutions.ts",
+          "kind": "function",
+          "name": "completeSellAllocationForPendingExecution"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "import-page"
+        }
+      ],
+      "sharedState": [
+        "pendingExecutions (owned-mutable, explicitly not a Fact)"
+      ],
+      "criticality": "high",
+      "criticalityRationale": "Gates whether a partial fill becomes a confirmed execution; leaf node with no upstream, but its output feeds directly into Fact Store writes once confirmed.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/pendingExecutions.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "system-validation-snapshot",
+      "name": "systemValidation.ts / systemSnapshot.ts",
+      "layer": "application",
+      "cluster": "read-only-consumer",
+      "responsibility": "Determinism/observability: cross-checks TradeService vs. Holdings Engine; exports a 7-category state hash.",
+      "filesOwned": [
+        "src/application/services/systemValidation.ts",
+        "src/application/services/systemSnapshot.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/systemValidation.ts",
+          "kind": "type",
+          "name": "ValidationDifferenceCategory"
+        },
+        {
+          "file": "src/application/services/systemValidation.ts",
+          "kind": "interface",
+          "name": "ValidationDifference"
+        },
+        {
+          "file": "src/application/services/systemValidation.ts",
+          "kind": "interface",
+          "name": "TickerValidationResult"
+        },
+        {
+          "file": "src/application/services/systemValidation.ts",
+          "kind": "interface",
+          "name": "PortfolioValidationReport"
+        },
+        {
+          "file": "src/application/services/systemValidation.ts",
+          "kind": "function",
+          "name": "validatePortfolio"
+        },
+        {
+          "file": "src/application/services/systemSnapshot.ts",
+          "kind": "interface",
+          "name": "SnapshotRepos"
+        },
+        {
+          "file": "src/application/services/systemSnapshot.ts",
+          "kind": "interface",
+          "name": "SystemSnapshot"
+        },
+        {
+          "file": "src/application/services/systemSnapshot.ts",
+          "kind": "function",
+          "name": "computeSystemSnapshot"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "trade-service"
+        },
+        {
+          "id": "holdings-engine"
+        },
+        {
+          "id": "ledger-engine"
+        },
+        {
+          "id": "allocation-engine"
+        },
+        {
+          "id": "verification-engine"
+        },
+        {
+          "id": "evidence-authority"
+        },
+        {
+          "id": "commit-engine"
+        }
+      ],
+      "downstreamConsumers": [],
+      "sharedState": [],
+      "criticality": "high",
+      "criticalityRationale": "Read-only itself, but is the only structural proof this codebase has that two independent replay runs stay byte-identical — the golden-reference determinism gate everything else's correctness claim rests on.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/systemSnapshot.test.ts",
+          "src/application/services/systemValidation.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/presentation/pages/determinism.e2e.test.ts"
+        ],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "analytics-engine",
+      "name": "Analytics Engine",
+      "layer": "application",
+      "cluster": "read-only-consumer",
+      "responsibility": "Pure metrics: win rate, profit factor, exposure, health score, sector allocation, etc.",
+      "filesOwned": [
+        "src/application/analytics/AnalyticsEngine.ts",
+        "src/application/analytics/analytics.worker.ts",
+        "src/application/analytics/analyticsWorker.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/analytics/AnalyticsEngine.ts",
+          "kind": "const",
+          "name": "calculators"
+        },
+        {
+          "file": "src/application/analytics/AnalyticsEngine.ts",
+          "kind": "interface",
+          "name": "AnalyticsInput"
+        },
+        {
+          "file": "src/application/analytics/AnalyticsEngine.ts",
+          "kind": "interface",
+          "name": "AnalyticsResult"
+        },
+        {
+          "file": "src/application/analytics/AnalyticsEngine.ts",
+          "kind": "function",
+          "name": "computeAnalytics"
+        },
+        {
+          "file": "src/application/analytics/analyticsWorker.ts",
+          "kind": "function",
+          "name": "computeAnalyticsBatch"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "dashboard-pages"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "medium",
+      "criticalityRationale": "Zero repository dependency, pure functions over an input struct; a wrong metric is visible on the Analytics page and never mutates stored data.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/analytics/AnalyticsEngine.test.ts",
+          "src/application/analytics/analyticsWorker.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "backup-service",
+      "name": "Backup Service",
+      "layer": "application",
+      "cluster": "fact-pipeline",
+      "responsibility": "Full-ledger export/import (versioned JSON snapshot); import is always a full replace, never a merge.",
+      "filesOwned": [
+        "src/application/services/BackupService.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/application/services/BackupService.ts",
+          "kind": "const",
+          "name": "LEDGER_SNAPSHOT_VERSION"
+        },
+        {
+          "file": "src/application/services/BackupService.ts",
+          "kind": "interface",
+          "name": "LedgerSnapshot"
+        },
+        {
+          "file": "src/application/services/BackupService.ts",
+          "kind": "class",
+          "name": "UnsupportedSnapshotVersionError"
+        },
+        {
+          "file": "src/application/services/BackupService.ts",
+          "kind": "class",
+          "name": "InvalidSnapshotError"
+        },
+        {
+          "file": "src/application/services/BackupService.ts",
+          "kind": "function",
+          "name": "exportLedger"
+        },
+        {
+          "file": "src/application/services/BackupService.ts",
+          "kind": "function",
+          "name": "parseLedgerSnapshot"
+        },
+        {
+          "file": "src/application/services/BackupService.ts",
+          "kind": "function",
+          "name": "importLedger"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [],
+      "sharedState": [
+        "portfolios, trades, tradeAllocations, timelineEvents, journalEntries, verifications (full replace on import)"
+      ],
+      "criticality": "critical",
+      "criticalityRationale": "A bulk writer of six core tables with a full-replace semantics — a defect here can silently discard or corrupt an entire ledger in one action, the largest single blast radius of any node.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/application/services/BackupService.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": [
+          "one of the known direct writers of Trade/TradeAllocation (disclosed exception — bulk import/export, not a business write path)"
+        ]
+      }
+    },
+    {
+      "id": "ocr-import-pipeline",
+      "name": "OCR/Import Pipeline",
+      "layer": "infrastructure",
+      "cluster": "ingestion",
+      "responsibility": "File -> ParsedTradeCandidate/ParsedDividendCandidate/ParsedOrderEvidence, entirely client-side.",
+      "filesOwned": [
+        "src/infrastructure/ocr/ImportOrchestrator.ts",
+        "src/infrastructure/ocr/parsers/BrokerParser.ts",
+        "src/infrastructure/ocr/parsers/ThndrParser.ts",
+        "src/infrastructure/ocr/parsers/CsvStatementParser.ts",
+        "src/infrastructure/ocr/imagePreprocess.ts",
+        "src/infrastructure/ocr/tesseractClient.ts",
+        "src/infrastructure/ocr/pdfText.ts",
+        "src/infrastructure/ocr/textNormalize.ts",
+        "src/infrastructure/ocr/ordersScanSelection.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/infrastructure/ocr/ImportOrchestrator.ts",
+          "kind": "type",
+          "name": "ImportDocType"
+        },
+        {
+          "file": "src/infrastructure/ocr/ImportOrchestrator.ts",
+          "kind": "interface",
+          "name": "ImportResult"
+        },
+        {
+          "file": "src/infrastructure/ocr/ImportOrchestrator.ts",
+          "kind": "class",
+          "name": "ImportOrchestrator"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/BrokerParser.ts",
+          "kind": "interface",
+          "name": "OrderRowText"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/BrokerParser.ts",
+          "kind": "interface",
+          "name": "OrderRowsParseResult"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/BrokerParser.ts",
+          "kind": "interface",
+          "name": "OrdersScreenParseResult"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/BrokerParser.ts",
+          "kind": "interface",
+          "name": "OrdersTimelineParseResult"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/BrokerParser.ts",
+          "kind": "interface",
+          "name": "BrokerParser"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/ThndrParser.ts",
+          "kind": "function",
+          "name": "normalizeCompanyKey"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/ThndrParser.ts",
+          "kind": "function",
+          "name": "canonicalNameForTicker"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/ThndrParser.ts",
+          "kind": "function",
+          "name": "fuzzyMatchTicker"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/ThndrParser.ts",
+          "kind": "function",
+          "name": "normalizeDigits"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/ThndrParser.ts",
+          "kind": "function",
+          "name": "parsePrice"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/ThndrParser.ts",
+          "kind": "class",
+          "name": "ThndrParser"
+        },
+        {
+          "file": "src/infrastructure/ocr/parsers/CsvStatementParser.ts",
+          "kind": "class",
+          "name": "CsvStatementParser"
+        },
+        {
+          "file": "src/infrastructure/ocr/imagePreprocess.ts",
+          "kind": "function",
+          "name": "loadImageToCanvas"
+        },
+        {
+          "file": "src/infrastructure/ocr/imagePreprocess.ts",
+          "kind": "function",
+          "name": "preprocessForOcr"
+        },
+        {
+          "file": "src/infrastructure/ocr/imagePreprocess.ts",
+          "kind": "function",
+          "name": "cropHeaderBand"
+        },
+        {
+          "file": "src/infrastructure/ocr/imagePreprocess.ts",
+          "kind": "interface",
+          "name": "OrderRowSlice"
+        },
+        {
+          "file": "src/infrastructure/ocr/imagePreprocess.ts",
+          "kind": "function",
+          "name": "rowGroupingGapThreshold"
+        },
+        {
+          "file": "src/infrastructure/ocr/imagePreprocess.ts",
+          "kind": "function",
+          "name": "segmentOrderRows"
+        },
+        {
+          "file": "src/infrastructure/ocr/tesseractClient.ts",
+          "kind": "interface",
+          "name": "OcrProgress"
+        },
+        {
+          "file": "src/infrastructure/ocr/tesseractClient.ts",
+          "kind": "type",
+          "name": "OcrProgressCallback"
+        },
+        {
+          "file": "src/infrastructure/ocr/tesseractClient.ts",
+          "kind": "type",
+          "name": "OcrImageInput"
+        },
+        {
+          "file": "src/infrastructure/ocr/tesseractClient.ts",
+          "kind": "function",
+          "name": "runOcr"
+        },
+        {
+          "file": "src/infrastructure/ocr/tesseractClient.ts",
+          "kind": "function",
+          "name": "recognizeBatch"
+        },
+        {
+          "file": "src/infrastructure/ocr/tesseractClient.ts",
+          "kind": "function",
+          "name": "recognizeWithFallback"
+        },
+        {
+          "file": "src/infrastructure/ocr/pdfText.ts",
+          "kind": "function",
+          "name": "extractPdfText"
+        },
+        {
+          "file": "src/infrastructure/ocr/textNormalize.ts",
+          "kind": "function",
+          "name": "normalizeExtractedText"
+        },
+        {
+          "file": "src/infrastructure/ocr/ordersScanSelection.ts",
+          "kind": "function",
+          "name": "missingFulfilledCount"
+        },
+        {
+          "file": "src/infrastructure/ocr/ordersScanSelection.ts",
+          "kind": "function",
+          "name": "flatResultIsDeficient"
+        },
+        {
+          "file": "src/infrastructure/ocr/ordersScanSelection.ts",
+          "kind": "function",
+          "name": "shouldPreferRowScan"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "import-page"
+        },
+        {
+          "id": "fact-store-writes",
+          "via": "importRecording.ts"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "low",
+      "criticalityRationale": "Every candidate it emits passes through Fact Store writes' identity dedup and Verification Engine's judgment before affecting stored state — a parse defect here surfaces as a bad candidate, not silent data corruption.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/infrastructure/ocr/ImportOrchestrator.stes.test.ts",
+          "src/infrastructure/ocr/ImportOrchestrator.thndrOrdersWorkbook.test.ts",
+          "src/infrastructure/ocr/imagePreprocess.test.ts",
+          "src/infrastructure/ocr/ordersScanSelection.test.ts",
+          "src/infrastructure/ocr/parsers/CsvStatementParser.test.ts",
+          "src/infrastructure/ocr/parsers/ThndrParser.test.ts",
+          "src/infrastructure/ocr/textNormalize.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "stes-workbook-import",
+      "name": "STES Workbook Import",
+      "layer": "infrastructure",
+      "cluster": "ingestion",
+      "responsibility": "Frozen AI-exchange .xlsx contract (STES v1.1) -> same candidate shapes as OCR.",
+      "filesOwned": [
+        "src/infrastructure/stes/StesWorkbookParser.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/infrastructure/stes/StesWorkbookParser.ts",
+          "kind": "const",
+          "name": "STES_PARSER_ID"
+        },
+        {
+          "file": "src/infrastructure/stes/StesWorkbookParser.ts",
+          "kind": "const",
+          "name": "STES_PARSER_VERSION"
+        },
+        {
+          "file": "src/infrastructure/stes/StesWorkbookParser.ts",
+          "kind": "const",
+          "name": "STES_SCHEMA_NAME"
+        },
+        {
+          "file": "src/infrastructure/stes/StesWorkbookParser.ts",
+          "kind": "const",
+          "name": "STES_SUPPORTED_MAJOR"
+        },
+        {
+          "file": "src/infrastructure/stes/StesWorkbookParser.ts",
+          "kind": "function",
+          "name": "isStesWorkbookFile"
+        },
+        {
+          "file": "src/infrastructure/stes/StesWorkbookParser.ts",
+          "kind": "interface",
+          "name": "StesParseResult"
+        },
+        {
+          "file": "src/infrastructure/stes/StesWorkbookParser.ts",
+          "kind": "function",
+          "name": "parseStesWorkbook"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "fact-store-writes"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "low",
+      "criticalityRationale": "Same reasoning as OCR/Import Pipeline — gated by Fact Store writes/Verification Engine downstream.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/infrastructure/stes/StesWorkbookParser.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/infrastructure/ocr/ImportOrchestrator.stes.test.ts"
+        ],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "thndr-orders-workbook",
+      "name": "Thndr Orders Workbook",
+      "layer": "infrastructure",
+      "cluster": "ingestion",
+      "responsibility": "Account-wide 'Orders' export parsing -> order-confirmation evidence.",
+      "filesOwned": [
+        "src/infrastructure/thndrOrders/ThndrOrdersWorkbookParser.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/infrastructure/thndrOrders/ThndrOrdersWorkbookParser.ts",
+          "kind": "const",
+          "name": "THNDR_ORDERS_WORKBOOK_PARSER_ID"
+        },
+        {
+          "file": "src/infrastructure/thndrOrders/ThndrOrdersWorkbookParser.ts",
+          "kind": "const",
+          "name": "THNDR_ORDERS_WORKBOOK_PARSER_VERSION"
+        },
+        {
+          "file": "src/infrastructure/thndrOrders/ThndrOrdersWorkbookParser.ts",
+          "kind": "interface",
+          "name": "ThndrOrdersWorkbookParseResult"
+        },
+        {
+          "file": "src/infrastructure/thndrOrders/ThndrOrdersWorkbookParser.ts",
+          "kind": "function",
+          "name": "parseThndrOrdersWorkbook"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "verification-engine"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "low",
+      "criticalityRationale": "Evidence-only input to Verification Engine's corroboration signal, never a direct fact writer.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/infrastructure/thndrOrders/ThndrOrdersWorkbookParser.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/infrastructure/ocr/ImportOrchestrator.thndrOrdersWorkbook.test.ts"
+        ],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "dexie-persistence",
+      "name": "Dexie Persistence",
+      "layer": "infrastructure",
+      "cluster": "persistence",
+      "responsibility": "Implements every domain repository port over IndexedDB; the only code allowed to touch db.ts directly besides purge.ts.",
+      "filesOwned": [
+        "src/infrastructure/db/db.ts",
+        "src/infrastructure/db/purge.ts",
+        "src/infrastructure/db/repositories/index.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/infrastructure/db/db.ts",
+          "kind": "interface",
+          "name": "LedgerCacheRow"
+        },
+        {
+          "file": "src/infrastructure/db/db.ts",
+          "kind": "interface",
+          "name": "AllocationCacheRow"
+        },
+        {
+          "file": "src/infrastructure/db/db.ts",
+          "kind": "class",
+          "name": "PortfolioOsDatabase"
+        },
+        {
+          "file": "src/infrastructure/db/db.ts",
+          "kind": "const",
+          "name": "db"
+        },
+        {
+          "file": "src/infrastructure/db/purge.ts",
+          "kind": "const",
+          "name": "allTables"
+        },
+        {
+          "file": "src/infrastructure/db/purge.ts",
+          "kind": "function",
+          "name": "purgeTickerData"
+        },
+        {
+          "file": "src/infrastructure/db/purge.ts",
+          "kind": "function",
+          "name": "purgeAllData"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/index.ts",
+          "kind": "interface",
+          "name": "Repositories"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/index.ts",
+          "kind": "function",
+          "name": "createRepositories"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/index.ts",
+          "kind": "interface",
+          "name": "DiagnosticsRepositories"
+        },
+        {
+          "file": "src/infrastructure/db/repositories/index.ts",
+          "kind": "function",
+          "name": "createDiagnosticsRepositories"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "fact-store-writes"
+        },
+        {
+          "id": "trade-service"
+        },
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "portfolio-service"
+        },
+        {
+          "id": "backup-service"
+        }
+      ],
+      "sharedState": [
+        "all 11 Dexie tables (see regressionGuards.test.ts's categorized allowlist)"
+      ],
+      "criticality": "critical",
+      "criticalityRationale": "The literal source-of-truth storage layer for the entire app (no backend exists) — a defect here is total or partial data loss/corruption, the maximum blast radius in this codebase.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/infrastructure/db/purge.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/architecture/regressionGuards.test.ts",
+          "src/infrastructure/db/repositories/DexieCommittedLedgerRepository.test.ts",
+          "src/infrastructure/db/repositories/DexieDiagnosticCaseRepository.test.ts",
+          "src/infrastructure/db/repositories/DexieDiagnosticEventRepository.test.ts",
+          "src/infrastructure/db/repositories/DexieRawTransactionRepository.test.ts",
+          "src/infrastructure/db/repositories/DexieTradeAllocationRepository.test.ts",
+          "src/infrastructure/db/repositories/DexieTradeRepository.test.ts",
+          "src/infrastructure/db/repositories/DexieUploadRepository.test.ts",
+          "src/infrastructure/db/repositories/DexieVerificationRepository.test.ts",
+          "src/presentation/lib/rawTransactionQueries.test.tsx",
+          "src/presentation/pages/ImportPage.batchCommitIsolation.test.tsx",
+          "src/presentation/pages/ImportPage.batchCommitIsolationDividend.test.tsx",
+          "src/presentation/pages/ImportPage.brokerExcelProvenanceUpgrade.test.tsx",
+          "src/presentation/pages/ImportPage.inFlightDuplicateRace.test.tsx",
+          "src/presentation/pages/ImportPage.multiBuySameTickerRace.test.tsx",
+          "src/presentation/pages/backfillRawTransactionsSilently.realDb.test.ts",
+          "src/presentation/pages/excelWorkflowEndToEnd.test.ts"
+        ],
+        "ciRegressionGuards": [
+          "the live schema's table list matches the reviewed, categorized allowlist exactly",
+          "only repository adapters and purge.ts's disclosed exception may touch db.ts directly (dependency-cruiser)"
+        ]
+      }
+    },
+    {
+      "id": "snapshot-price-repository",
+      "name": "SnapshotPriceRepository",
+      "layer": "infrastructure",
+      "cluster": "persistence",
+      "responsibility": "Reads the static price-snapshot.json/price-history.json; the only class allowed to read price data.",
+      "filesOwned": [
+        "src/infrastructure/market-data/SnapshotPriceRepository.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/infrastructure/market-data/SnapshotPriceRepository.ts",
+          "kind": "class",
+          "name": "SnapshotPriceRepository"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "analytics-engine"
+        },
+        {
+          "id": "dashboard-pages"
+        }
+      ],
+      "sharedState": [],
+      "criticality": "low",
+      "criticalityRationale": "Read-only over a static, out-of-band-produced asset; worst case is stale/missing prices, never a ledger-correctness defect.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/infrastructure/market-data/SnapshotPriceRepository.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "diagnostics-recorder",
+      "name": "Diagnostics recorder",
+      "layer": "infrastructure",
+      "cluster": "read-only-consumer",
+      "responsibility": "Observe-only instrumentation (session/write/read/decision/rule/perf events); no-op unless Developer Mode is on.",
+      "filesOwned": [
+        "src/infrastructure/diagnostics/NoopDiagnosticsRecorder.ts",
+        "src/infrastructure/diagnostics/RecordingDiagnosticsRecorder.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/infrastructure/diagnostics/NoopDiagnosticsRecorder.ts",
+          "kind": "class",
+          "name": "NoopDiagnosticsRecorder"
+        },
+        {
+          "file": "src/infrastructure/diagnostics/RecordingDiagnosticsRecorder.ts",
+          "kind": "class",
+          "name": "RecordingDiagnosticsRecorder"
+        }
+      ],
+      "upstreamDependencies": [],
+      "downstreamConsumers": [
+        {
+          "id": "diagnostics-center-pages"
+        }
+      ],
+      "sharedState": [
+        "diagnosticEvents, diagnosticCases — structurally forbidden from ever calling a business write method (CI-guarded, zero-tolerance)"
+      ],
+      "criticality": "low",
+      "criticalityRationale": "No-op by default, structurally forbidden from writing business data; a bug here can at most produce a wrong diagnostic observation, never a wrong business outcome.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/infrastructure/diagnostics/NoopDiagnosticsRecorder.test.ts",
+          "src/infrastructure/diagnostics/RecordingDiagnosticsRecorder.test.ts"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": [
+          "src/infrastructure/diagnostics/*.ts never calls a business repository write method or imports a business writer's writing functions"
+        ]
+      }
+    },
+    {
+      "id": "import-page",
+      "name": "ImportPage",
+      "layer": "presentation",
+      "cluster": "presentation",
+      "responsibility": "Two-phase Extract/Distribute import UI; the primary way facts enter the system in practice.",
+      "filesOwned": [
+        "src/presentation/pages/ImportPage.tsx",
+        "src/presentation/lib/importSession.ts",
+        "src/presentation/lib/importJob.ts"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/presentation/pages/ImportPage.tsx",
+          "kind": "function",
+          "name": "isLotEligibleForSell"
+        },
+        {
+          "file": "src/presentation/pages/ImportPage.tsx",
+          "kind": "function",
+          "name": "hasSharesToReconcile"
+        },
+        {
+          "file": "src/presentation/pages/ImportPage.tsx",
+          "kind": "function",
+          "name": "ImportPage"
+        },
+        {
+          "file": "src/presentation/pages/ImportPage.tsx",
+          "kind": "function",
+          "name": "TickerGroupCard"
+        },
+        {
+          "file": "src/presentation/pages/ImportPage.tsx",
+          "kind": "function",
+          "name": "AutoCommitRow"
+        },
+        {
+          "file": "src/presentation/pages/ImportPage.tsx",
+          "kind": "function",
+          "name": "CandidateRow"
+        },
+        {
+          "file": "src/presentation/lib/importSession.ts",
+          "kind": "interface",
+          "name": "CandidateEntry"
+        },
+        {
+          "file": "src/presentation/lib/importSession.ts",
+          "kind": "interface",
+          "name": "VerificationEntry"
+        },
+        {
+          "file": "src/presentation/lib/importSession.ts",
+          "kind": "interface",
+          "name": "DividendEntry"
+        },
+        {
+          "file": "src/presentation/lib/importSession.ts",
+          "kind": "interface",
+          "name": "OrderEvidenceEntry"
+        },
+        {
+          "file": "src/presentation/lib/importSession.ts",
+          "kind": "interface",
+          "name": "ImportSessionState"
+        },
+        {
+          "file": "src/presentation/lib/importSession.ts",
+          "kind": "const",
+          "name": "importSession"
+        },
+        {
+          "file": "src/presentation/lib/importSession.ts",
+          "kind": "function",
+          "name": "useImportSession"
+        },
+        {
+          "file": "src/presentation/lib/importJob.ts",
+          "kind": "type",
+          "name": "ImportJobStatus"
+        },
+        {
+          "file": "src/presentation/lib/importJob.ts",
+          "kind": "interface",
+          "name": "ImportJobState"
+        },
+        {
+          "file": "src/presentation/lib/importJob.ts",
+          "kind": "const",
+          "name": "importJob"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "ocr-import-pipeline"
+        },
+        {
+          "id": "trade-service"
+        },
+        {
+          "id": "commit-engine"
+        },
+        {
+          "id": "verification-engine"
+        },
+        {
+          "id": "portfolio-service"
+        },
+        {
+          "external": "duplicateDetection.ts"
+        }
+      ],
+      "downstreamConsumers": [],
+      "sharedState": [],
+      "criticality": "high",
+      "criticalityRationale": "Highest-traffic write surface in the UI, and has known, disclosed policy drift (re-derives some Verification Engine signals instead of calling it — ARCHITECTURAL_DEBT.md 3.2), so a change to Verification Engine does not automatically propagate here.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/presentation/lib/importJob.test.ts",
+          "src/presentation/lib/importSession.test.ts",
+          "src/presentation/pages/ImportPage.aggregateStatement-control.test.tsx",
+          "src/presentation/pages/ImportPage.aggregateStatement.test.tsx",
+          "src/presentation/pages/ImportPage.autoAssignPortfolio.test.tsx",
+          "src/presentation/pages/ImportPage.batchCommitIsolation.test.tsx",
+          "src/presentation/pages/ImportPage.batchCommitIsolationDividend.test.tsx",
+          "src/presentation/pages/ImportPage.brokerExcelClosedPosition.test.tsx",
+          "src/presentation/pages/ImportPage.brokerExcelLoadRace.test.tsx",
+          "src/presentation/pages/ImportPage.brokerExcelNewRowStillVerifies.test.tsx",
+          "src/presentation/pages/ImportPage.brokerExcelProvenanceUpgrade.test.tsx",
+          "src/presentation/pages/ImportPage.confidenceCorroboration.test.tsx",
+          "src/presentation/pages/ImportPage.inFlightDuplicateRace.test.tsx",
+          "src/presentation/pages/ImportPage.multiBuySameTickerRace.test.tsx",
+          "src/presentation/pages/ImportPage.reconciliation-control.test.tsx",
+          "src/presentation/pages/ImportPage.reconciliation.test.tsx",
+          "src/presentation/pages/ImportPage.render-order.test.tsx",
+          "src/presentation/pages/ImportPage.retraction.test.tsx",
+          "src/presentation/pages/ImportPage.test.tsx"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/application/services/setTickerPortfolioVsBuyConfirmRace.test.ts",
+          "src/presentation/pages/AutoCommitRow.test.tsx",
+          "src/presentation/pages/CandidateRow.test.tsx"
+        ],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "dashboard-pages",
+      "name": "Dashboard / PortfolioDetail / Portfolios / TickerDetail pages",
+      "layer": "presentation",
+      "cluster": "presentation",
+      "responsibility": "Read canonical hybrid holdings + analytics + reconciliation flags for display.",
+      "filesOwned": [
+        "src/presentation/pages/DashboardPage.tsx",
+        "src/presentation/pages/PortfolioDetailPage.tsx",
+        "src/presentation/pages/PortfoliosPage.tsx",
+        "src/presentation/pages/TickerDetailPage.tsx"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/presentation/pages/DashboardPage.tsx",
+          "kind": "function",
+          "name": "mergeComparisonCurves"
+        },
+        {
+          "file": "src/presentation/pages/DashboardPage.tsx",
+          "kind": "function",
+          "name": "mergeMonthlyPerformance"
+        },
+        {
+          "file": "src/presentation/pages/DashboardPage.tsx",
+          "kind": "function",
+          "name": "DashboardPage"
+        },
+        {
+          "file": "src/presentation/pages/PortfolioDetailPage.tsx",
+          "kind": "function",
+          "name": "PortfolioDetailPage"
+        },
+        {
+          "file": "src/presentation/pages/PortfoliosPage.tsx",
+          "kind": "function",
+          "name": "PortfoliosPage"
+        },
+        {
+          "file": "src/presentation/pages/TickerDetailPage.tsx",
+          "kind": "function",
+          "name": "TickerDetailPage"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "canonical-holdings"
+        },
+        {
+          "id": "analytics-engine"
+        },
+        {
+          "id": "snapshot-price-repository"
+        },
+        {
+          "id": "reconciliation"
+        },
+        {
+          "id": "portfolio-service"
+        }
+      ],
+      "downstreamConsumers": [],
+      "sharedState": [],
+      "criticality": "medium",
+      "criticalityRationale": "Read-only presentation of already-validated data; a rendering bug is visible and doesn't affect stored state.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/presentation/pages/DashboardPage.test.tsx",
+          "src/presentation/pages/PortfolioDetailPage.test.tsx",
+          "src/presentation/pages/PortfoliosPage.test.tsx"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "trades-page",
+      "name": "TradesPage / SellAllocationForm",
+      "layer": "presentation",
+      "cluster": "presentation",
+      "responsibility": "Entity-CRUD and lot-picking UI reading Trade directly (documented exception to reading via canonicalHoldings).",
+      "filesOwned": [
+        "src/presentation/pages/TradesPage.tsx",
+        "src/presentation/components/SellAllocationForm.tsx"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/presentation/pages/TradesPage.tsx",
+          "kind": "function",
+          "name": "TradesPage"
+        },
+        {
+          "file": "src/presentation/pages/TradesPage.tsx",
+          "kind": "function",
+          "name": "RecordBuyModal"
+        },
+        {
+          "file": "src/presentation/components/SellAllocationForm.tsx",
+          "kind": "function",
+          "name": "SellAllocationForm"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "trade-service"
+        },
+        {
+          "id": "lot-manager"
+        }
+      ],
+      "downstreamConsumers": [],
+      "sharedState": [
+        "reads trades/tradeAllocations directly"
+      ],
+      "criticality": "medium",
+      "criticalityRationale": "Reads raw legacy rows by design for lot-picking; a display bug is visible, but this is the UI surface closest to the FROZEN dual-writer tables so treat changes here as touching legacy-projection's shared state.",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/presentation/components/SellAllocationForm.test.tsx"
+        ],
+        "crossCuttingOrIntegrationTests": [
+          "src/presentation/pages/RecordBuyModal.test.tsx"
+        ],
+        "ciRegressionGuards": []
+      }
+    },
+    {
+      "id": "diagnostics-center-pages",
+      "name": "Diagnostics Center pages",
+      "layer": "presentation",
+      "cluster": "presentation",
+      "responsibility": "Session Recorder / Writer & Reader Trace / Case Detection UI.",
+      "filesOwned": [
+        "src/presentation/pages/DiagnosticsPage.tsx",
+        "src/presentation/pages/diagnostics/CanonicalGroupEvidencePanel.tsx",
+        "src/presentation/pages/diagnostics/DuplicateTradeCleanupPanel.tsx",
+        "src/presentation/pages/diagnostics/FactLifecyclePanel.tsx",
+        "src/presentation/pages/diagnostics/ReconciliationSweepPanel.tsx",
+        "src/presentation/pages/diagnostics/TickerAuthorityPanel.tsx"
+      ],
+      "publicInterfaces": [
+        {
+          "file": "src/presentation/pages/DiagnosticsPage.tsx",
+          "kind": "function",
+          "name": "DiagnosticsPage"
+        },
+        {
+          "file": "src/presentation/pages/diagnostics/CanonicalGroupEvidencePanel.tsx",
+          "kind": "function",
+          "name": "CanonicalGroupEvidencePanel"
+        },
+        {
+          "file": "src/presentation/pages/diagnostics/DuplicateTradeCleanupPanel.tsx",
+          "kind": "function",
+          "name": "DuplicateTradeCleanupPanel"
+        },
+        {
+          "file": "src/presentation/pages/diagnostics/FactLifecyclePanel.tsx",
+          "kind": "function",
+          "name": "FactLifecyclePanel"
+        },
+        {
+          "file": "src/presentation/pages/diagnostics/ReconciliationSweepPanel.tsx",
+          "kind": "function",
+          "name": "ReconciliationSweepPanel"
+        },
+        {
+          "file": "src/presentation/pages/diagnostics/TickerAuthorityPanel.tsx",
+          "kind": "function",
+          "name": "TickerAuthorityPanel"
+        }
+      ],
+      "upstreamDependencies": [
+        {
+          "id": "diagnostics-recorder"
+        },
+        {
+          "id": "evidence-graph"
+        },
+        {
+          "id": "system-validation-snapshot"
+        }
+      ],
+      "downstreamConsumers": [],
+      "sharedState": [],
+      "criticality": "medium",
+      "criticalityRationale": "Read-only, developer-facing observability UI; never reads a business repository for a business decision (DIAGNOSTICS_CENTER_SPEC.md Part 5.4).",
+      "requiredRegressionTests": {
+        "coLocatedUnitTests": [
+          "src/presentation/pages/DiagnosticsPage.test.tsx"
+        ],
+        "crossCuttingOrIntegrationTests": [],
+        "ciRegressionGuards": []
+      }
+    }
+  ]
+}
