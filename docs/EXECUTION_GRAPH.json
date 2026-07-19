@@ -170,6 +170,11 @@
           "name": "findLiveExecutionFact"
         },
         {
+          "file": "src/application/services/rawTransactionFolds.ts",
+          "kind": "function",
+          "name": "findUnallocatedSellExecutions"
+        },
+        {
           "file": "src/application/services/provenanceRepair.ts",
           "kind": "interface",
           "name": "ProvenanceRepairFinding"

@@ -24,7 +24,7 @@ import { latestByTicker } from "./reconciliation";
 import { suggestRemovalsToReconcile, type ReconcileSuggestion } from "./mismatchResolver";
 import { findLastBalancedDate, type LastBalancedPoint } from "./netShareTimeline";
 import { buildTickerConstraintReport, type TickerConstraintReport } from "./constraintValidation";
-import { isRetracted } from "./rawTransactionFolds";
+import { isRetracted, findUnallocatedSellExecutions } from "./rawTransactionFolds";
 import type { PositionAggregate } from "./TradeService";
 
 /**
@@ -382,6 +382,7 @@ function computeVerification(params: VerifyAllParams): VerificationResult {
       lastBalancedDate,
       mergeSuggestion: mergeSuggestions.get(ticker),
       placeholderReplacement,
+      unallocatedSellExecutionIds: findUnallocatedSellExecutions(liveTransactions, ticker).map((t) => t.id),
     });
   }
 
@@ -519,6 +520,19 @@ export interface TickerStatus extends TickerMatchStatus {
   mergeSuggestion?: string;
   /** Existing open-Trade ids that are safely-deletable dateless "Opening balance" placeholders whose removal would let this batch's real dated rows verify instead of being discarded — requires the caller's PositionAggregate to carry `openTrades` (already part of the existing contract). */
   placeholderReplacement?: string[];
+  /**
+   * Ids of this ticker's live SellExecution facts that have no live
+   * SellAllocationDecision pointed at them yet (rawTransactionFolds.findUnallocatedSellExecutions)
+   * — i.e. sells the fact log confirms happened but whose lot(s) have never
+   * been chosen (ADR-002). Deliberately independent of `matched`: a ticker
+   * can be `matched: true` (the net-share arithmetic reconciles against the
+   * broker) while this is non-empty, because verifying that enough
+   * transactions exist and choosing which lots a sell closes are two
+   * different questions. Empty array (never undefined) when every live sell
+   * is allocated. See TradeService.recordSell/ensureSellFacts for the only
+   * place a SellAllocationDecision is ever created.
+   */
+  unallocatedSellExecutionIds: string[];
 }
 
 export interface VerificationResult {

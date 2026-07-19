@@ -14,6 +14,7 @@ import {
   renameRawTransactionsTicker,
   assignPortfolioToFact,
   appendAndMaybeCommit,
+  commitTicker,
   type CommitEngineRepos,
 } from "./commitEngine";
 import { canonicalKey } from "./ledgerRebuild";
@@ -286,6 +287,48 @@ export async function recordBuyBatch(
  * suites) — a stark, concrete reminder that Part 0's "never modifies
  * business logic" has to include timing, not just data.
  */
+
+/**
+ * Called when ensureBuyFact/ensureSellFacts throws, after recordBuy/recordSell
+ * already durably saved the corresponding legacy Trade/TradeAllocation row —
+ * per this codebase's own architecture (docs/ROADMAP.md's root-cause
+ * investigation), that row now has no backing RawTransaction fact, which is a
+ * real, structural source of "closed position shows open" drift:
+ * ledgerProjection.ensureLegacyFactsExist's own gap-fill already backfills a
+ * missing fact FROM an existing legacy row like this one, but only the next
+ * time this ticker is committed — nothing previously forced that to happen
+ * promptly, and the original failure was silently absorbed either way (a
+ * console.error only, the caller still saw a normal successful return).
+ *
+ * This closes both gaps at once, per the "silent success is prohibited"
+ * requirement: (1) forces an immediate commit for this ticker, so
+ * ensureLegacyFactsExist's self-heal fires right now instead of whenever this
+ * ticker next happens to be touched for an unrelated reason; (2) rethrows the
+ * original error regardless of whether the recovery commit succeeded — a
+ * fact-log write failure is real signal (e.g. a Dexie contention issue) that
+ * must never be silently dropped just because its immediate consequence
+ * usually self-heals. The caller (every existing recordBuy/recordSell caller
+ * already handles a thrown error from these functions for other reasons —
+ * e.g. "Trade not found" — so this adds no new error-handling contract, only
+ * a previously-missing failure mode surfacing through the same one).
+ */
+async function recoverFromFactWriteFailure(
+  repos: CommitEngineRepos,
+  portfolioId: string,
+  ticker: string,
+  operation: string,
+  err: unknown,
+): Promise<never> {
+  await commitTicker(repos, portfolioId, normalizeTicker(ticker)).catch((commitErr) => {
+    console.error(`Recovery commitTicker after ${operation} failure also failed:`, commitErr);
+  });
+  const message = err instanceof Error ? err.message : String(err);
+  throw new Error(
+    `${operation} failed to write its supporting fact-log entry (${message}). The already-recorded trade/allocation may be temporarily out of sync with the fact log; an immediate recovery commit was attempted. Verify this position's state before continuing.`,
+    { cause: err }
+  );
+}
+
 async function ensureBuyFact(
   repos: CommitEngineRepos & Partial<AppRepositories>,
   trade: Trade,
@@ -417,10 +460,10 @@ export async function recordBuy(
   let factSeqCursor: number | undefined;
   let durableTrade = trade;
   if (repos.rawTransactions && repos.committedLedger) {
-    const fact = await ensureBuyFact(repos as AppRepositories & CommitEngineRepos, trade, input, diagnostics).catch((err) => {
-      console.error("ensureBuyFact failed (fact write, non-fatal):", err);
-      return undefined;
-    });
+    const commitRepos = repos as AppRepositories & CommitEngineRepos;
+    const fact = await ensureBuyFact(commitRepos, trade, input, diagnostics).catch((err) =>
+      recoverFromFactWriteFailure(commitRepos, input.portfolioId, trade.ticker, "ensureBuyFact", err)
+    );
     factSeqCursor = fact?.seq;
     // Adoption may cause projection to replace the temporary legacy Trade
     // with a canonical event row. Resolve the row that actually survived the
@@ -883,18 +926,16 @@ export async function recordSell(
 
   let factSeqCursor: number | undefined;
   if (repos.rawTransactions && repos.committedLedger) {
+    const commitRepos = repos as AppRepositories & CommitEngineRepos;
     factSeqCursor = await ensureSellFacts(
-      repos as AppRepositories & CommitEngineRepos,
+      commitRepos,
       input,
       ticker,
       sellGroupId,
       createdAllocations,
       closedTrades,
       diagnostics
-    ).catch((err) => {
-      console.error("ensureSellFacts failed (fact write, non-fatal):", err);
-      return undefined;
-    });
+    ).catch((err) => recoverFromFactWriteFailure(commitRepos, input.portfolioId, ticker, "ensureSellFacts", err));
   }
 
   if (diagnostics && factSeqCursor !== undefined) {

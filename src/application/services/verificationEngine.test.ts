@@ -504,4 +504,61 @@ describe("verificationEngine — Phase 9.6 blocker elimination", () => {
       expect(buildConstraintReport("NOPE", { transactions: [], positions: [] })).toBeUndefined();
     });
   });
+
+  // Root-cause regression coverage (docs/ROADMAP.md's investigation):
+  // TickerStatus.unallocatedSellExecutionIds is the one canonical,
+  // fact-log-derived signal every layer (verificationEngine.ts itself,
+  // ImportPage.tsx's isTickerFullyResolved gate) reads instead of each
+  // independently deciding whether a sell's lot allocation is complete.
+  // Deliberately independent of `matched`: a ticker can be verified
+  // (net-share arithmetic reconciles) while this is non-empty, because
+  // verifying enough transactions exist and choosing which lots a sell
+  // closes are two different questions.
+  describe("TickerStatus.unallocatedSellExecutionIds", () => {
+    function decision(sellExecutionId: string, overrides: Partial<RawTransaction> = {}): RawTransaction {
+      return {
+        ...createRawTransaction({
+          kind: "SellAllocationDecision",
+          source: "manual",
+          ticker: "COMI",
+          payload: { sellExecutionId, allocations: [{ lotRef: "buy-1", shares: 100 }] },
+          ...overrides,
+        }),
+        seq: 5,
+      };
+    }
+
+    it("is non-empty for a matched ticker whose sell has no SellAllocationDecision fact — the exact ELKA-shaped gap", () => {
+      const b = buy({ id: "buy-1", shares: 100, executionDate: "2026-02-01" });
+      const s = sell({ id: "sell-1", shares: 100, executionDate: "2026-02-05", source: "official-broker-excel" });
+      const params: VerifyAllParams = {
+        transactions: [{ ...b, source: "official-broker-excel" }, s],
+        positions: [emptyPosition()],
+      };
+      const status = verifyTicker("COMI", params)!;
+      expect(status.matched).toBe(true); // net-share arithmetic reconciles — verification is genuinely correct here
+      expect(status.unallocatedSellExecutionIds).toEqual(["sell-1"]); // but the lot was never chosen (ADR-002)
+    });
+
+    it("is empty once a live SellAllocationDecision fact claims the sell", () => {
+      const b = buy({ id: "buy-1", shares: 100, executionDate: "2026-02-01", source: "official-broker-excel" });
+      const s = sell({ id: "sell-1", shares: 100, executionDate: "2026-02-05", source: "official-broker-excel" });
+      const params: VerifyAllParams = { transactions: [b, s, decision("sell-1")], positions: [emptyPosition()] };
+      const status = verifyTicker("COMI", params)!;
+      expect(status.unallocatedSellExecutionIds).toEqual([]);
+    });
+
+    it("is empty for a ticker with only Buy transactions (nothing to allocate)", () => {
+      const b = buy({ id: "buy-1", shares: 100, executionDate: "2026-02-01", source: "official-broker-excel" });
+      const status = verifyTicker("COMI", { transactions: [b], positions: [emptyPosition()] })!;
+      expect(status.unallocatedSellExecutionIds).toEqual([]);
+    });
+
+    it("excludes a retracted sell from the unallocated list — it's no longer a live subject of anything", () => {
+      const b = buy({ id: "buy-1", shares: 100, executionDate: "2026-02-01", source: "official-broker-excel" });
+      const s = sell({ id: "sell-1", shares: 100, executionDate: "2026-02-05", source: "official-broker-excel" });
+      const status = verifyTicker("COMI", { transactions: [b, s, retraction("sell-1")], positions: [emptyPosition()] })!;
+      expect(status.unallocatedSellExecutionIds).toEqual([]);
+    });
+  });
 });

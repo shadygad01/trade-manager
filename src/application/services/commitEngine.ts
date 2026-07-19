@@ -431,6 +431,30 @@ export async function appendAndMaybeCommit(
         await commitTicker(repos, resolvedPortfolioId, resolvedTicker, diagnostics);
       }
     }
+  } else if (appended.kind === "SellAllocationDecision") {
+    // Root-cause fix (docs/ROADMAP.md's investigation): unlike a fresh
+    // Buy/Sell EXECUTION fact — which can legitimately need to wait for the
+    // rest of its ticker's batch to reach a terminal verdict before
+    // shouldCommit's all-clear gate lets it through — a SellAllocationDecision
+    // can only ever make an ALREADY-verified sell's lot allocation visible;
+    // it never introduces new corroboration ambiguity of its own (neither
+    // checkTickerMatch nor shouldCommit reads SellAllocationDecision facts as
+    // verification input in the first place). This matters concretely for
+    // source:"backfill" Buy/Sell facts (verificationEngine.ts trusts them
+    // unconditionally, bypassing the ticker-wide checkTickerMatch gate
+    // entirely — see ensureLegacyFactsExist, which produces exactly this
+    // shape when converging a legacy Trade/TradeAllocation row into the fact
+    // log): gating the decision's own commit on shouldCommit let an
+    // unrelated, still-"Needs Review" row on the SAME ticker indefinitely
+    // block a just-recorded, already-correct allocation for an
+    // already-trusted backfilled sell from ever reaching the committed
+    // ledger — a real, confirmed source of a fully-allocated sell staying
+    // invisible in Holdings. Same "must refresh immediately, regardless of
+    // the rest of the batch's terminal status" reasoning as
+    // Retraction/Correction above, not a new exception shape.
+    if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
+      await commitTicker(repos, appended.portfolioId, appended.ticker, diagnostics);
+    }
   } else if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
     if (await shouldCommit(repos, appended.portfolioId, appended.ticker)) {
       await commitTicker(repos, appended.portfolioId, appended.ticker, diagnostics);

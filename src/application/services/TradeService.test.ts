@@ -196,6 +196,46 @@ describe("recordBuy", () => {
       })
     ).rejects.toThrow(/2026-01-01/);
   });
+
+  // Root-cause regression coverage, buy side (docs/ROADMAP.md's
+  // investigation) — symmetric with recordSell's own coverage below:
+  // ensureBuyFact's failure must never be silently absorbed either.
+  it("rejects instead of silently succeeding when the fact-log write fails, and forces an immediate recovery commit that self-heals the fact log", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    const realAppend = repos.rawTransactions.append.bind(repos.rawTransactions);
+    let failNextAppend = true;
+    repos.rawTransactions.append = async (t) => {
+      if (failNextAppend) {
+        failNextAppend = false;
+        throw new Error("simulated Dexie write-contention error");
+      }
+      return realAppend(t);
+    };
+
+    await expect(
+      recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 100,
+        entryPrice: 50,
+        executionDate: "2026-02-01",
+        executionTime: "10:30",
+      })
+    ).rejects.toThrow(/ensureBuyFact failed to write its supporting fact-log entry/);
+
+    // The legacy Trade row is already durably saved (recordBuy's own
+    // ordering) even though the first fact write attempt failed.
+    const trades = await repos.trades.getByPortfolio("p1");
+    expect(trades).toHaveLength(1);
+    expect(trades[0].shares).toBe(100);
+
+    // The forced recovery commit's ensureLegacyFactsExist backfilled the
+    // missing BuyExecution fact FROM the legacy Trade row — durably correct
+    // again, not left drifted.
+    const all = await repos.rawTransactions.getAll();
+    const buyFacts = all.filter((t) => t.kind === "BuyExecution" && t.ticker === "COMI");
+    expect(buyFacts).toHaveLength(1);
+  });
 });
 
 describe("deleteTrade", () => {
@@ -1031,6 +1071,92 @@ describe("recordSell", () => {
         executionTime: "11:00",
       })
     ).rejects.toThrow(/2026-01-01/);
+  });
+
+  // Root-cause regression coverage (docs/ROADMAP.md's investigation):
+  // TradeService.ensureSellFacts is the ONLY place a SellAllocationDecision
+  // fact is ever created going forward. A silently-swallowed failure here —
+  // the exact pre-fix behavior — let recordSell report success while the
+  // fact log never recorded which lot was actually closed, which is
+  // structurally indistinguishable from a sell candidate that was never
+  // allocated at all (see verificationEngine.ts's
+  // findUnallocatedSellExecutions and importVerification.isTickerFullyResolved).
+  describe("fact-log write failure (silent success is prohibited)", () => {
+    it("rejects instead of silently succeeding when the fact-log write fails, and forces an immediate recovery commit that self-heals the fact log for a PARTIALLY closed position", async () => {
+      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+      const { trade } = await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 100,
+        entryPrice: 50,
+        executionDate: "2026-02-01",
+        executionTime: "10:30",
+      });
+
+      // A broker "My Position" screenshot confirming 60 shares remain after
+      // the 40-share sell below — the ordinary, most common verification
+      // path (checkTickerMatch's verifiedUnits match), sidestepping the
+      // separate closed-position/uncorroborated-round-trip rule (the
+      // JUFO/SKPC fix) this test isn't about.
+      await repos.rawTransactions.append({
+        id: "pv1",
+        kind: "PositionVerificationCapture",
+        source: "position-verification",
+        portfolioId: "p1",
+        ticker: "COMI",
+        payload: { ticker: "COMI", units: 60, capturedAt: "2026-02-10T00:00" },
+      } as never);
+
+      // Simulate exactly one transient fact-log write failure (e.g. a Dexie
+      // write-contention error) on the very next append — ensureSellFacts's
+      // own SellExecution fact write.
+      const realAppend = repos.rawTransactions.append.bind(repos.rawTransactions);
+      let failNextAppend = true;
+      repos.rawTransactions.append = async (t) => {
+        if (failNextAppend) {
+          failNextAppend = false;
+          throw new Error("simulated Dexie write-contention error");
+        }
+        return realAppend(t);
+      };
+
+      await expect(
+        recordSell(repos, {
+          portfolioId: "p1",
+          ticker: "COMI",
+          allocations: [{ tradeId: trade.id, shares: 40, exitPrice: 60 }],
+          executionDate: "2026-02-05",
+          executionTime: "11:00",
+        })
+      ).rejects.toThrow(/ensureSellFacts failed to write its supporting fact-log entry/);
+
+      // The legacy Trade/TradeAllocation write already happened before the
+      // fact write was attempted (recordSell's own ordering) — this is the
+      // known, disclosed transient-inconsistency window, not silently hidden.
+      const updatedTrade = await repos.trades.getById(trade.id);
+      expect(updatedTrade?.remainingShares).toBe(60);
+
+      // The forced recovery commit's own ensureLegacyFactsExist gap-fill
+      // backfilled the missing SellExecution/SellAllocationDecision facts
+      // FROM the legacy TradeAllocation that recordSell already wrote — the
+      // fact log is durably correct again, not left drifted until whatever
+      // next happens to touch this ticker.
+      const all = await repos.rawTransactions.getAll();
+      const sellFacts = all.filter((t) => t.kind === "SellExecution" && t.ticker === "COMI");
+      const decisionFacts = all.filter((t) => t.kind === "SellAllocationDecision");
+      expect(sellFacts).toHaveLength(1);
+      expect(decisionFacts).toHaveLength(1);
+
+      // And the canonical ledger genuinely reflects the PARTIALLY closed
+      // position — not just the legacy table — proving the recovery commit
+      // actually ran commitTicker, not merely appended facts nobody replayed yet.
+      const canonicalAllocations = await repos.committedLedger.getAllocations("p1", "COMI");
+      expect(canonicalAllocations).toHaveLength(1);
+      expect(canonicalAllocations[0].shares).toBe(40);
+      const canonicalEvents = await repos.committedLedger.getLedgerEvents("p1", "COMI");
+      const lot = canonicalEvents.find((e) => e.type === "LotOpened")!;
+      expect(lot.shares).toBe(100); // the lot's original size, unallocated shares are derived by holdingsEngine, not stored here
+    });
   });
 });
 

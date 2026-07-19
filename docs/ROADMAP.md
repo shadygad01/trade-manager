@@ -3440,3 +3440,221 @@ is the input to that decision, not the decision itself.
   single data point will confirm or rule out Mechanism A vs. B above and turn this from a well-evidenced
   hypothesis into a confirmed root cause, at which point one or more of the implementation options above
   (evaluated together, not the whole list at once) becomes the actual next sprint.
+
+### Root cause fix implemented: allocation-completeness closes the Verification/Allocation gap; the silent `ensureSellFacts` catch and `shouldCommit` gate from the prior entry are both fixed
+
+Direct implementation of the previous entry's Root Cause Report. Five surgical changes, chosen from that
+entry's own "Implementation options" list ((a), (b), plus a narrower version of the `shouldCommit`-gate
+finding), each traced to the exact mechanism it closes. No new architectural layer, no new source of truth,
+no unrelated refactor — every change either reads an already-existing fact-log primitive or make an
+already-swallowed failure observable.
+
+**Phase 2 — the canonical rule.** `rawTransactionFolds.findUnallocatedSellExecutions`
+(`src/application/services/rawTransactionFolds.ts:190-204`, new) is now the single function that answers
+"does this ticker have a live `SellExecution` fact with no live `SellAllocationDecision` pointed at it" —
+retraction-aware, ticker-correction-aware (same resolution `findUnclaimedSellExecutionFact` already used).
+Every subsystem that needs to know whether a position's lifecycle is actually settled reads this one
+function instead of re-deriving the answer:
+- `verificationEngine.computeVerification` calls it once per ticker and publishes the result on
+  `TickerStatus.unallocatedSellExecutionIds` (`verificationEngine.ts:385`, field declared `:535`) — the
+  richer API (`verifyAllDetailed`/`verifyTicker`) now carries allocation-completeness alongside its
+  existing net-share `matched` verdict, without changing what `matched` itself means (finding 2's
+  Verification/Allocation gap was never about `checkTickerMatch`'s arithmetic being wrong — it was about
+  nothing else checking the orthogonal fact).
+- `ImportPage.tsx`'s own `isTickerFullyResolved` call site (the finding-5 ownership violation's exact call
+  site) now passes `hasUnallocatedSells` computed via the same function
+  (`ImportPage.tsx:2342`, wired into the resolution decision `:2353`) — `importVerification.isTickerFullyResolved`
+  gained a required `hasUnallocatedSells` parameter (`importVerification.ts:381`) that short-circuits to
+  "not resolved" before any of the existing session-tracking checks (`:384`), because session-tracking alone
+  only proves `TradeService.recordSell` *returned*, never that its fact-log write actually landed (see next
+  finding). This is the ELKA-shaped gap named in the prior entry's finding 2: a ticker Verification calls
+  "fully matched" can still have an unallocated sell sitting underneath it — now that state is visible to
+  both the diagnostic API and the Import UI's own "fully resolved" gate, instead of neither.
+
+**Phase 3.2 — the non-fatal `.catch()` (finding 3, Mechanism B).** `TradeService.ts`'s `recordBuy` and
+`recordSell` used to swallow a thrown `ensureBuyFact`/`ensureSellFacts` error with a `console.error` and a
+successful return — exactly the "successful legacy write, no backing fact, next unrelated commit reverts
+it" mechanism the prior entry traced. Both call sites now route the failure through a new shared helper,
+`recoverFromFactWriteFailure` (`TradeService.ts:315-330`, called from `recordBuy` at `:464-465` and
+`recordSell` at `:938`): it forces an immediate `commitTicker` for the affected ticker (so
+`ensureLegacyFactsExist`'s existing self-heal runs *now*, not whenever the ticker is next touched for an
+unrelated reason) and then rethrows the original error regardless of whether that recovery commit
+succeeded. Per Phase 3's explicit requirement, this is not a retry-and-hope: the caller (`ImportPage`'s
+Confirm flow, Smart Allocate, direct Trade entry) now sees a real, observable failure it can retry or
+surface, instead of a legacy row silently orphaned from its own fact log.
+
+**Phase 3.3 — `shouldCommit`'s all-relevant-facts gate (finding 3, third factor).** The prior entry's third
+finding was narrower than a full re-architecture of `shouldCommit`: a `SellAllocationDecision` fact never
+contributes new corroboration ambiguity of its own (neither `checkTickerMatch` nor `shouldCommit` reads it),
+so gating its commit on the *entire* ticker's verification state was never necessary for that one fact kind.
+`commitEngine.appendAndMaybeCommit` now special-cases `SellAllocationDecision` (`commitEngine.ts:434-450`,
+alongside the pre-existing `Correction`/`Retraction` special cases with the same "must refresh immediately"
+reasoning) to call `commitTicker` unconditionally instead of gating on `shouldCommit`. Concretely this
+matters for `source:"backfill"` Buy/Sell facts — `verificationEngine.ts` already trusts those unconditionally
+regardless of the ticker's net-share match (the exact shape `ledgerProjection.ensureLegacyFactsExist`
+produces when converging a legacy row into the fact log) — so a backfilled, already-trustworthy sell's
+allocation no longer waits on an unrelated ambiguous row on the same ticker before becoming visible in
+Holdings. This is *not* a claim that every possible "stuck ticker" scenario is now bypassable — ordinary
+(non-backfill) Buy/Sell facts are still gated by the ticker-wide `checkTickerMatch` verdict everywhere else,
+by design (JUFO/SKPC rule); only the decision fact's own commit trigger changed.
+
+**Phase 3.4/3.1 — the legacy-vs-canonical disagreement fallback (finding, `canonical-holdings`).**
+`canonicalHoldings.computeCanonicalPositions`'s disagreement branch previously fell back to the legacy
+`Trade` row "until the discrepancy is resolved" — the exact mechanism that let an already-closed position
+keep showing open indefinitely, since nothing ever forced the discrepancy to resolve. It now trusts the
+canonical (fact-replay) side unconditionally on disagreement (`canonicalHoldings.ts`, disagreement branch
+rewritten; module doc comment updated to match) — legacy is a *derived* projection of the same fact log,
+never an independent source of truth, so a disagreement means legacy has drifted, never that the pure
+replay engines are wrong. The "canonical entirely absent" case (no committed `ledgerCache` entry at all —
+a ticker never assigned to the shadow path, or still Needs Review) is unchanged and still falls back to
+legacy, disclosed via `source: "legacy-fallback"` — this fix only closes the *disagreement* case, not the
+*absence* case, which is not the mechanism any finding traced.
+
+**Regression tests added** (Phase 5 — the original reproduced/traced failures, now permanent):
+- `rawTransactionFolds.test.ts`: 7 new tests for `findUnallocatedSellExecutions` (unclaimed/claimed/retracted
+  decision/retracted sell/ticker-correction/multiple-sells/empty).
+- `verificationEngine.test.ts`: 4 new tests for `TickerStatus.unallocatedSellExecutionIds`, including the
+  exact ELKA-shaped reproduction (a ticker `checkTickerMatch` reports matched, with a live unallocated sell
+  underneath it).
+- `importVerification.test.ts`: 2 new tests proving `isTickerFullyResolved` returns `false` while
+  `hasUnallocatedSells` is true even with every session-tracking signal otherwise resolved, and `true` once
+  it clears — the precise regression the ELKA "previously confirmed fully resolved... regressed" pattern
+  needed.
+- `TradeService.test.ts`: 2 new tests (buy-side and sell-side) proving a fact-log write failure now rejects
+  instead of returning success, and that the rejection forces an immediate recovery `commitTicker` call
+  (Mechanism B's silent-catch reproduction, permanently regression-tested).
+- `commitEngine.test.ts`: 1 new test proving a `SellAllocationDecision` fact commits immediately via
+  `appendAndMaybeCommit` even while an unrelated fact on the same ticker is stuck Needs Review (the backfill
+  bypass mechanism above).
+- `canonicalHoldings.test.ts`: rewrote the existing DISAGREES test to assert canonical wins instead of
+  legacy, and added a new partial-closure test (a 100-share buy with a real 40-share allocation, proving
+  canonical's 60-share partial count wins over a stale legacy row still showing 100) and confirmed the
+  existing "canonical absent → legacy-fallback" and "moving a Trade leaves no phantom position" tests still
+  pass unchanged.
+- `ImportPage.brokerExcelClosedPosition.test.tsx`: fixed the pre-existing ACAMD fixture, which had
+  Buy+Sell facts with no backing `SellAllocationDecision` fact — an invalid state per ADR-002 that
+  `findUnallocatedSellExecutions` now correctly flags; added the missing decision fact to the fixture.
+
+Duplicate-imports/duplicate-transaction-detection/commit-replay/stale-projection coverage for the categories
+this task explicitly named was not newly written where it already existed and remained green throughout:
+`duplicateDetection.test.ts`, `duplicateTradeCleanup.test.ts`, `importRecording.test.ts`,
+`commitEngine.reconcileDuplicateAuthority.test.ts`, `crossTransactionIsolation.test.ts` (duplicate
+imports/detection — six-mechanism finding 6, unaffected by this fix, confirmed still passing), and
+`commitEngine.test.ts`'s pre-existing "re-committing after new data arrives fully replaces the cache, never
+leaving stale rows behind" / "committing one ticker never touches another ticker's cached rows" tests
+(commit replay/stale projections).
+
+**Phase 6 — validation, run in full**: `npm run graph:check` — PASS, 0 errors (53 warnings/38 suggestions,
+identical count to the pre-change baseline confirmed via `git stash`, plus one now-resolved suggestion for
+`findUnallocatedSellExecutions`'s new `publicInterfaces` entry, added to `EXECUTION_GRAPH.json`'s
+`fact-store-writes` node). `npm run lint` (`tsc --noEmit` + `depcruise`) — PASS, 0 dependency violations.
+`npm run build` — PASS. Full test suite — 1122 passed, 2 skipped, 2 failed; both failures
+(`ImportPage.brokerExcelLoadRace.test.tsx`, `ImportPage.aggregateStatement.test.tsx`) confirmed
+pre-existing and unaffected by this change via `git stash`/`git stash pop` (identical failures on the clean
+base). `TradeService.ts`/`commitEngine.ts` also had pre-existing mixed CRLF/LF line endings (predating this
+session); normalized to LF (the repo-wide convention — every other file checked is pure LF) since this
+change already touched both files — a content-inert, `git diff -w`-clean normalization, not a functional
+change.
+
+**Phase 7 — verification walkthrough, one entry per traced mechanism:**
+
+1. **Verification/Allocation gap (finding 2 — the ELKA shape).**
+   - *Original behavior*: `checkTickerMatch` could report `matched: true` purely from Buy/Sell net-share
+     arithmetic while a live `SellExecution` fact had no `SellAllocationDecision` pointed at it — Holdings
+     then legitimately showed the full unreduced gross Buy total as open, disagreeing with Import's "fully
+     matched" banner.
+   - *Root cause*: no code anywhere checked Verification's "matched" contract against Allocation's "lots
+     actually closed" contract; they were computed independently.
+   - *Implementation*: `findUnallocatedSellExecutions` (new, `rawTransactionFolds.ts:190`), surfaced on
+     `TickerStatus` and threaded into `ImportPage`'s `isTickerFullyResolved` gate.
+   - *New behavior*: a ticker with a live unallocated sell is never reported "fully resolved" by
+     `isTickerFullyResolved`, regardless of what `checkTickerMatch`/session-tracking say.
+   - *Why it cannot reappear*: allocation-completeness is now read from one function, at both the
+     diagnostic-API layer and the Import UI's own resolution gate; a future caller that needs "is this
+     ticker's lifecycle actually settled" has an existing, tested primitive to call instead of re-deriving
+     net-share-only logic.
+
+2. **Silent `ensureSellFacts`/`ensureBuyFact` catch (finding 3, Mechanism B).**
+   - *Original behavior*: a thrown fact-log write inside `recordBuy`/`recordSell` was logged to the console
+     and swallowed; the caller received a normal successful result with the legacy Trade/TradeAllocation row
+     already durably written but no backing `RawTransaction` fact.
+   - *Root cause*: `ledgerProjection.projectLegacyTicker`'s full delete-and-replace semantics treat the fact
+     log as ground truth on the *next* commit for any reason — a legacy row with no backing fact gets
+     silently reverted/deleted then, with no connection to the original failure.
+   - *Implementation*: `recoverFromFactWriteFailure` (`TradeService.ts:315`) — forces an immediate recovery
+     `commitTicker` (so the existing `ensureLegacyFactsExist` backfill runs right away) and rethrows.
+   - *New behavior*: the failure is observable to the caller (a real rejected promise), and the fact log is
+     given an immediate chance to self-heal instead of drifting until an unrelated future commit reverts it.
+   - *Why it cannot reappear*: "silent success" is structurally impossible now — every fact-log write
+     failure in this path either produces a self-healed fact log or a thrown error the caller must handle;
+     there is no third, silent outcome.
+
+3. **`shouldCommit`'s all-relevant-facts gate blocking an already-correct decision (finding 3, third
+   factor).**
+   - *Original behavior*: a `SellAllocationDecision` fact written through `appendAndMaybeCommit`'s generic
+     dispatch branch waited on `shouldCommit`, which requires *every* relevant fact for the ticker to be
+     non-"Needs Review" — one unrelated ambiguous row indefinitely delayed the decision's own commit.
+   - *Root cause*: the generic branch's gate does not distinguish "a fact that introduces new corroboration
+     ambiguity" (a fresh Buy/Sell execution) from "a fact that only ever makes an already-verified sell's
+     allocation visible" (a decision) — both were gated identically.
+   - *Implementation*: a dedicated `SellAllocationDecision` branch in `appendAndMaybeCommit`
+     (`commitEngine.ts:434`) that always calls `commitTicker`, same shape as the pre-existing
+     `Correction`/`Retraction` special cases.
+   - *New behavior*: a backfilled (unconditionally-trusted) sell's allocation reaches the committed ledger
+     immediately, regardless of an unrelated ambiguous row on the same ticker.
+   - *Why it cannot reappear*: the dispatch is unconditional for this fact kind — there is no gate left to
+     regress.
+
+4. **Legacy-wins-on-disagreement fallback (the `canonical-holdings` finding).**
+   - *Original behavior*: when the canonical (fact-replay) ledger and the legacy `Trade` row disagreed on a
+     ticker's open shares, `computeCanonicalPositions` trusted legacy "until the discrepancy is resolved" —
+     nothing ever forced that resolution, so a stale legacy row could keep a closed/partially-closed
+     position showing open indefinitely.
+   - *Root cause*: legacy is a *derived* projection, not an independent source of truth; trusting it on
+     disagreement inverts which side should win when they diverge.
+   - *Implementation*: the disagreement branch now trusts canonical unconditionally.
+   - *New behavior*: a disagreement resolves immediately, in canonical's favor, every time
+     `computeCanonicalPositions` runs — proven for both the fully-closed and partially-closed cases.
+   - *Why it cannot reappear*: there is no longer a "wait for resolution" state for this branch to fall
+     into; the absence case (no canonical entry at all) is a structurally different branch, unaffected.
+
+**Phase 8 — Final Report.**
+- **Root cause addressed**: the Verification/Allocation structural gap and its two contributing commit-
+  pipeline mechanisms (silent fact-write failure, the decision-commit gate), plus the legacy-wins-on-
+  disagreement fallback in canonical Holdings — all four traced, code-confirmed mechanisms from the prior
+  Root Cause Report entry that produce "closed position shows open" / "Import and Holdings disagree."
+- **Files modified**: `rawTransactionFolds.ts`, `verificationEngine.ts`, `importVerification.ts`,
+  `ImportPage.tsx`, `TradeService.ts`, `commitEngine.ts`, `canonicalHoldings.ts`, plus their co-located
+  test files, `docs/EXECUTION_GRAPH.json` (one new `publicInterfaces` entry).
+- **Execution subgraph affected**: exactly the subgraph the prior entry scoped —
+  `fact-store-writes` → `verification-engine` → `trade-service`/`commit-engine` → `ledger-projection` →
+  `canonical-holdings` → `import-page`; no node outside this subgraph was touched.
+- **Architectural impact**: none — no new layer, no new source of truth, no ownership-boundary bypass. The
+  `ImportPage.tsx` `checkTickerMatch` re-derivation (finding 5) remains a disclosed, pre-existing
+  `ARCHITECTURAL_DEBT.md` §3.2 item, deliberately not consolidated here (out of this task's smallest-change
+  scope; it is call-site-compatible with today's fix since `hasUnallocatedSells` is computed independently
+  of that re-derivation).
+- **Business rules changed**: (1) a ticker is never "fully resolved" in the Import UI while it has a live
+  unallocated sell, regardless of net-share match; (2) a fact-log write failure during a manual Buy/Sell is
+  now a hard failure with an attempted self-heal, never a silent success; (3) a `SellAllocationDecision`
+  fact always commits immediately, independent of the rest of its ticker's verification state; (4) canonical
+  (fact-replay) Holdings state wins over legacy on any disagreement, never the reverse.
+- **Regression tests added**: 16 new tests across 6 files (enumerated above), plus 1 existing test rewritten
+  to match the corrected (intentional) behavior change.
+- **Remaining technical debt** (explicitly not addressed here, per smallest-change scope): the six
+  independent duplicate-detection mechanisms (finding 6) remain uncoordinated — unchanged by this fix, and
+  confirmed unrelated to the specific symptom this fix closes; `ImportPage.tsx`'s `checkTickerMatch`
+  re-derivation (finding 5) remains a live ownership-boundary violation; the "canonical entirely absent"
+  legacy-fallback path (a ticker never reaching the shadow commit path at all) is unchanged and still a
+  potential staleness source, distinct from the disagreement case this fix closes.
+- **Confidence level**: high for the four mechanisms above, each traced to an exact prior-entry finding,
+  each covered by a reproducing regression test, all passing against the real (non-mocked) verification/
+  commit/allocation/holdings engines — not a live-browser reproduction (this sandbox has none), consistent
+  with the prior entry's own disclosed limitation. The `shouldCommit`-gate fix (mechanism 3) is deliberately
+  narrower than "any unrelated Needs Review row can never block a decision" — it specifically closes the
+  `source:"backfill"` case, the one this codebase's own `ensureLegacyFactsExist` actually produces; an
+  ordinary (non-backfill) Buy/Sell pair sharing a ticker with an unresolved row remains gated by
+  `checkTickerMatch`'s ticker-wide net-share arithmetic everywhere else, by design (JUFO/SKPC rule) — this
+  was verified by direct proof (not assumption) during test design: `shouldCommit(ticker)` and "would a
+  fresh `commitTicker` populate ledger events for that ticker's non-backfill rows" are mathematically
+  equivalent under the current architecture, so no test or claim in this entry asserts otherwise.
