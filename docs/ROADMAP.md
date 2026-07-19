@@ -3658,3 +3658,139 @@ change.
   was verified by direct proof (not assumption) during test design: `shouldCommit(ticker)` and "would a
   fresh `commitTicker` populate ledger events for that ticker's non-backfill rows" are mathematically
   equivalent under the current architecture, so no test or claim in this entry asserts otherwise.
+
+### Adversarial review of the previous entry's fix — 4 real regressions found and closed, 1 disclosed as unaddressed
+
+An explicit adversarial-review request against the previous entry's implementation, followed by a
+"prove it end-to-end, don't stop at green" implementation pass. The review's own instruction was to
+break the fix, not defend it — four findings survived code-level proof (one CRITICAL, two HIGH, one
+MEDIUM-HIGH), each traced to an exact mechanism, each closed with a targeted fix and a reproducing
+regression test, then verified against the real, running application (dev server + a scripted Chromium
+session), not just the test suite.
+
+**1. CRITICAL — retry-after-fact-write-failure could create a genuine duplicate transaction.**
+`recordBuy`/`recordSell` (`TradeService.ts`) write the legacy `Trade`/`TradeAllocation` row, debit/credit
+`portfolio.cash`, and write a `TimelineEvent` *before* attempting the fact-log write. The previous entry's
+own fix turned a swallowed fact-write failure into a thrown error — but with nothing rolled back, and
+every UI call site (`TradesPage.tsx`, `SellAllocationForm.tsx`, `ImportPage.tsx`) leaving the form/row
+populated and resubmittable on error. A user-driven retry after a transient failure would silently create
+a second `Trade`/allocation on top of the first, with the fact log providing no protection (there was
+nothing for its own dedup to match against, since the first attempt's fact write is exactly what failed) —
+reproducing the "duplicate transactions" defect class this whole fix line exists to eliminate, and doing
+so *more* easily than before the fix (previously the failure was silent, so nothing prompted a retry).
+Fixed by redesigning the recovery path (`TradeService.ts`'s `attemptRecoveryCommit`/`factIsLive`/
+`sellDecisionIsLive`/`retractIfLive`): after a fact-write failure, attempt the recovery commit as before,
+but now check whether it actually healed the gap. If it did (the common case —
+`ledgerProjection.ensureLegacyFactsExist`'s own backfill usually repairs a transient write failure), return
+normally — no caller-visible error, no reason for anyone to retry. Only when the gap is genuinely
+unrepairable does the function throw, and only after rolling back every durable write the call made
+(`trades.delete`/`portfolios.save` restore/`timeline.delete`, plus `allocations.delete` and
+`trades.saveRemainingShares` restore per line on the sell side) and retracting any orphaned fact that did
+land (the fact log is append-only — "roll back" there means `Retraction`, not delete). A retry after a
+genuinely unrecoverable failure now starts clean instead of piling a duplicate on top of already-durable
+state. 4 new regression tests (`TradeService.test.ts`): self-heal-resolves-normally for both buy and sell,
+and does-NOT-resubmit-a-duplicate-on-retry for both, the latter asserting zero duplication after two
+consecutive failed attempts.
+
+**2. HIGH — `findUnallocatedSellExecutions` couldn't see a real, shipped partial-allocation feature.**
+`lotManager.setSellAllocation` legitimately supports partial allocation of a sell
+(`totalRequested > sell.shares` is rejected, `<` is not — a user can allocate 40 of a 100-share sell via
+the Lot Manager and leave the rest for later). The previous entry's `findUnallocatedSellExecutions`
+(`rawTransactionFolds.ts`) only checked whether *any* live `SellAllocationDecision` referenced a sell —
+never whether the decision(s) actually covered its full share count — so a 40-of-100 Lot-Manager
+allocation was reported as fully resolved, silently reopening the exact Verification/Holdings disagreement
+category (attack surface #9/#10 in the review) the previous fix was built to close, just via a different
+writer. Fixed by summing every live decision's allocated shares per `sellExecutionId` and comparing
+against the sell's own `shares` payload — 2 new regression tests (a partial-decision sell still reported
+unallocated; several decisions summing to the full share count correctly reported resolved).
+
+**3. HIGH — the new unconditional `commitTicker` trigger increased exposure to a destructive cache rebuild.**
+`committedLedger.commitTicker`'s cache write (`commitEngine.ts`'s `writeProjection`) is a full
+delete-and-replace, and — unlike `projectLegacyTicker` right below it — was never gated on `terminal`.
+Retraction/Correction already called it unconditionally (deliberately, to drop a just-retracted fact's
+stale cache entry immediately); the previous entry's fix added `SellAllocationDecision` to that same
+unconditional list. But `checkTickerMatch` verification is binary *per ticker* — an unrelated, still-
+ambiguous new fact on the same ticker flips every non-backfill row's verdict, including a pair that was
+genuinely verified and committed earlier and hasn't itself changed. Any of the unconditional-commit
+triggers firing after such an arrival would silently erase the already-correct, already-committed pair
+from the cache — a real "closed position shows open again" regression with no fact behind that pair ever
+having changed, and now reachable via the common `recordSell` path instead of only the rare
+Retraction/Correction maintenance actions. Fixed by computing, when non-terminal, whether anything was
+*actually retracted* (a previously-cached event whose backing fact is no longer live); if nothing was
+retracted, the shrink is attributable purely to an unrelated fact's ambiguity, and every previously-cached
+row not already covered by the fresh result is preserved in the write. If something *was* retracted, the
+plain overwrite proceeds unchanged (a retraction can legitimately invalidate a still-live sibling's own
+corroboration — verified against the existing `retractRawTransaction` regression test, which requires
+exactly this shrink and continues to pass). 3 new regression tests: the destructive scenario now preserves
+the prior pair and its allocation; the legitimate-retraction companion case still correctly drops the
+sibling; committedLedger read failures during the preservation check fall back to the plain overwrite
+rather than throwing.
+
+**4. MEDIUM-HIGH — canonicalHoldings's "trust canonical" fix assumed an ordering the code doesn't guarantee.**
+`writeProjection` attempts the cache write first; if it throws, the error is caught/logged and
+`projectLegacyTicker` *still proceeds* (deliberately — a transient cache-write failure must never block
+the legacy UI from getting correct data, per that mechanism's own historical fix). This means legacy can,
+in a narrow transient-failure window, end up *more* current than the cache — directly contradicting the
+previous entry's `canonicalHoldings.ts` fix, which trusts canonical unconditionally on disagreement on the
+premise that legacy can only ever be behind. Fixed with one immediate retry of the cache write before
+giving up, narrowing the window to the same "transient Dexie write-contention" class of error the original
+independence fix already named, without reopening that fix by gating legacy projection on the cache
+write's success. 1 new regression test proving the retry succeeds after exactly one transient failure.
+
+**Regression validation of the previous entry's own tests**: none of the previous entry's new tests
+asserted anything about repository state *after* a rejection, or exercised a second call following a
+failure — exactly why the CRITICAL finding went undetected at the time. All were revised as part of this
+fix (the "rejects" tests became "self-heals and resolves normally" tests once the recovery logic no longer
+unconditionally rethrows; new tests were added specifically for the previously-unrepresented retry case).
+
+**Architecture validation**: `npm run graph:check` — PASS, 0 errors, identical warning/suggestion count to
+baseline (no ownership/dependency changes). `npm run lint` (`tsc --noEmit` + `depcruise`) — PASS, 0
+dependency violations. `npm run build` — PASS. Full test suite — 1129 passed, 2 skipped, 2 failed (the
+same two pre-existing flaky tests as every prior entry, confirmed via `git stash` against the unmodified
+base).
+
+**End-to-end validation against the real, running application** (not claimed — actually driven): started
+the Vite dev server and scripted a full Chromium session (temporary `playwright-core` install, this
+session only, never added to `package.json`) through: create portfolio → Record Buy (100 COMI @ 45.50,
+`TradesPage.tsx` → `recordBuy`) → Record Sell (40 shares @ 60.00, routed through the real Lot Manager UI,
+i.e. `lotManager.setSellAllocation`) → Auto Allocate (FIFO) → Save Allocation → verify Holdings/Trades
+agree (60 remaining, 40 allocated, Partial status, cash exactly 97,850 = 100,000 − 4,550 + 2,400,
+unrealized P/L exactly 5,310 = 60 × (134.00 − 45.50)) → **full browser reload** → re-verified every number
+identical (real IndexedDB persistence, not React state) → re-checked the Trades page independently agrees
+with Holdings. Zero console errors and zero page errors captured across the entire run. This is the exact
+partial-Lot-Manager-allocation shape finding 2 above was about, driven live end-to-end with no error and
+fully consistent state.
+
+**Bounded dead-code/TODO audit** (Phase 11 of the review): zero `TODO`/`FIXME`/`HACK`/`WORKAROUND` markers
+repo-wide (not just the touched subgraph). No unsafe `as any`/`as never` casts introduced. Two pre-existing
+"shadow write, non-fatal" `console.error`-only catches remain in `TradeService.ts`
+(`deleteTrade`'s/`consolidateTicker`'s RawTransaction retraction/correction) — each already carries its own
+disclosed justification (a failure there must never turn an already-applied legacy delete/rename into a
+thrown error, the inverse risk profile from the CRITICAL finding above, which was about a *record*, not a
+*delete*, path) and is flagged here as a candidate for a future, separate audit rather than fixed in this
+pass — same class of risk as finding 1, unaddressed, disclosed rather than silently left.
+
+**Not addressed, disclosed rather than silently skipped**: the review's Phase 6 ("search for every
+implementation of remaining/available shares, allocation status, position state; replace with one
+canonical implementation") is only partially satisfied. `findUnallocatedSellExecutions` is now the one
+canonical allocation-completeness check, but the six independent duplicate-detection mechanisms and
+`ImportPage.tsx`'s own `checkTickerMatch` re-derivation (both already named in the Root Cause Report,
+`ARCHITECTURAL_DEBT.md` §3.2) remain unconsolidated — a genuine architecture change with real regression
+risk across a wide surface, explicitly out of this pass's smallest-safe-change scope. Reported, not
+attempted.
+
+- **Files changed this entry**: `TradeService.ts`, `TradeService.test.ts`, `rawTransactionFolds.ts`,
+  `rawTransactionFolds.test.ts`, `commitEngine.ts`, `commitEngine.test.ts`.
+- **Regression tests added**: 10 (4 + 2 + 3 + 1, enumerated above).
+- **Production readiness**: the four findings above are closed and proven, live, against the running app
+  for the specific workflows exercised (manual Buy, Lot-Manager partial Sell, refresh persistence). Not
+  personally verified this session: Import/Excel confirm flow, Smart Allocate, Backfill, Correction/
+  Retraction UI actions, Confirm-All batch import, and concurrent/rapid-click submission — these remain
+  unverified by live testing (covered only by the existing unit/component test suite) and should not be
+  read as proven end-to-end. The six-duplicate-detection-mechanism debt and the `ImportPage.tsx`
+  re-derivation are known, disclosed, unresolved.
+- **Next recommended sprint**: audit the two remaining "shadow write, non-fatal" catches in
+  `deleteTrade`/`consolidateTicker` for the same retry-duplication risk class as finding 1 (lower
+  probability — these are delete/rename operations without recordBuy/recordSell's cash-movement side
+  effects — but not yet proven safe); then decide whether to fund the six-duplicate-detection-mechanism
+  consolidation as its own, properly-scoped sprint.

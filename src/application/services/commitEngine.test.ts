@@ -507,4 +507,105 @@ describe("commitEngine", () => {
     expect(allocations).toHaveLength(1);
     expect(allocations[0]).toMatchObject({ sellEventId: sellEvent.eventId, lotEventId: lot.eventId, shares: 100 });
   });
+
+  // Adversarial-review regression: committedLedger.commitTicker is a full
+  // delete-and-replace and was never gated on `terminal` the way
+  // projectLegacyTicker is — Retraction/Correction/SellAllocationDecision
+  // all call it unconditionally. Verification is binary PER TICKER
+  // (checkTickerMatch nets every live Buy/Sell together), so an unrelated,
+  // still-ambiguous NEW fact arriving later flips every non-backfill row's
+  // verdict on that ticker, including a pair that was genuinely verified and
+  // committed earlier and hasn't itself changed at all. Before this fix, any
+  // of those unconditional-commit triggers firing after such an arrival
+  // would silently wipe the already-correct, already-committed pair from the
+  // cache — a real "closed position shows open again" regression with no
+  // fact behind that pair ever having changed.
+  it("an unconditional commitTicker call never erases a previously-committed, still-live pair (and its allocation) merely because an UNRELATED new fact on the same ticker arrived and is ambiguous", async () => {
+    // A clean, independently-verified, already-committed pair, WITH an
+    // explicit allocation decision closing it (ADR-002).
+    await appendBuy({ shares: 100, executionDate: "2026-02-01" }, "invoice");
+    await appendSell({ shares: 100, executionDate: "2026-02-05" }, "invoice");
+    await commitTicker(repos, PORTFOLIO, "COMI");
+    const beforeEvents = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
+    expect(beforeEvents).toHaveLength(2);
+    const lot = beforeEvents.find((e) => e.type === "LotOpened")!;
+    const sell = beforeEvents.find((e) => e.type === "SellRecorded")!;
+    await appendDecision({ sellExecutionId: sell.eventId, allocations: [{ lotRef: lot.eventId, shares: 100 }] });
+    await commitTicker(repos, PORTFOLIO, "COMI");
+    expect(await committedLedger.getAllocations(PORTFOLIO, "COMI")).toHaveLength(1);
+
+    // A completely unrelated, uncorroborated new Buy arrives later for the
+    // SAME ticker — nothing about the pair above changed or was retracted.
+    await appendBuy({ shares: 50, executionDate: "2026-04-01" });
+    expect(await shouldCommit(repos, PORTFOLIO, "COMI")).toBe(false); // confirms the ticker is now non-terminal
+
+    // Any unconditional-commit trigger (Retraction/Correction/
+    // SellAllocationDecision all share this exact code path) re-running
+    // commitTicker for this ticker while it's non-terminal must not lose
+    // the pair above, or its allocation.
+    await commitTicker(repos, PORTFOLIO, "COMI");
+
+    const after = await committedLedger.getLedgerEvents(PORTFOLIO, "COMI");
+    expect(after.filter((e) => e.type === "LotOpened" && e.shares === 100)).toHaveLength(1);
+    expect(after.filter((e) => e.type === "SellRecorded" && e.shares === 100)).toHaveLength(1);
+    const allocations = await committedLedger.getAllocations(PORTFOLIO, "COMI");
+    expect(allocations.some((a) => a.shares === 100)).toBe(true);
+  });
+
+  // The companion case: preservation must NOT apply when the shrink is
+  // actually caused by a retraction of one half of the previously-committed
+  // pair itself — that's a legitimate invalidation of the sibling's own
+  // corroboration, not an unrelated fact's ambiguity, and the sibling's
+  // event must still disappear immediately (same as the
+  // retractRawTransaction test above, but exercised through a direct
+  // commitTicker call instead of the reactive dispatch).
+  it("still lets a genuinely retracted fact's own sibling event disappear from the cache, even though the preservation logic above exists", async () => {
+    await rawTransactions.append(
+      createRawTransaction({
+        kind: "PositionVerificationCapture",
+        source: "position-verification",
+        portfolioId: PORTFOLIO,
+        ticker: "COMI",
+        payload: { ticker: "COMI", units: 0, capturedAt: "2026-01-31T00:00" },
+      }),
+    );
+    const buy = await appendBuy({ shares: 100 });
+    await appendSell({ shares: 100 });
+    await commitTicker(repos, PORTFOLIO, "COMI");
+    expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toHaveLength(2);
+
+    await retractRawTransaction(repos, buy.id, "test retraction");
+    await commitTicker(repos, PORTFOLIO, "COMI");
+
+    expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toEqual([]);
+  });
+
+  // Adversarial-review regression: a transient committedLedger.commitTicker
+  // failure used to be logged and swallowed outright, leaving the cache
+  // (canonical) stale while projectLegacyTicker still proceeds independently
+  // — the exact window canonicalHoldings.ts's "trust canonical over legacy
+  // on disagreement" fix assumes can't happen. One immediate retry closes
+  // the gap for a single transient failure without reopening the earlier,
+  // deliberate fix that keeps legacy projection independent of the cache
+  // write's outcome (see this function's own doc comment).
+  it("retries once and succeeds when the cache write fails exactly once transiently", async () => {
+    await appendBuy({ shares: 100 }, "invoice");
+    await appendSell({ shares: 100 }, "invoice");
+
+    const realCommitTicker = committedLedger.commitTicker.bind(committedLedger);
+    let failNextCommit = true;
+    committedLedger.commitTicker = async (params) => {
+      if (failNextCommit) {
+        failNextCommit = false;
+        throw new Error("simulated transient Dexie write-contention error");
+      }
+      return realCommitTicker(params);
+    };
+
+    await commitTicker(repos, PORTFOLIO, "COMI");
+
+    // The retry succeeded — the cache reflects the fresh, correct state,
+    // not the pre-commit empty one.
+    expect(await committedLedger.getLedgerEvents(PORTFOLIO, "COMI")).toHaveLength(2);
+  });
 });

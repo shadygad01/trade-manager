@@ -186,19 +186,36 @@ export function findLiveExecutionFact(
  * Neither of those was ever wrong about what it measures — they just don't
  * measure allocation completeness, which only this function does, from the
  * one place that can never drift: the append-only fact log itself.
+ *
+ * "Unallocated" means the live decision(s) pointed at a sell don't yet cover
+ * its own full share count, not merely "at least one decision exists" — the
+ * Lot Manager (lotManager.setSellAllocation) legitimately supports partial
+ * allocation (`totalRequested > sell.shares` is rejected, `<` is not), so a
+ * sell can have a live decision covering only part of itself. Summing every
+ * live decision's allocated shares per `sellExecutionId` (there can
+ * legitimately be more than one live decision for the same sell — e.g. two
+ * separate Lot Manager edits that were never meant to replace each other) is
+ * what this earlier, simpler "any decision at all" check missed.
  */
 export function findUnallocatedSellExecutions(all: RawTransaction[], ticker: string): RawTransaction[] {
   const normalized = normalizeTicker(ticker);
-  const claimedIds = new Set(
-    all
-      .filter((t) => t.kind === "SellAllocationDecision" && !isRetracted(all, t.id))
-      .map((t) => (t.payload as SellAllocationDecisionPayload).sellExecutionId),
-  );
+  const allocatedSharesBySellId = new Map<string, number>();
+  for (const t of all) {
+    if (t.kind !== "SellAllocationDecision" || isRetracted(all, t.id)) continue;
+    const payload = t.payload as SellAllocationDecisionPayload;
+    const sharesInThisDecision = payload.allocations.reduce((sum, a) => sum + a.shares, 0);
+    allocatedSharesBySellId.set(
+      payload.sellExecutionId,
+      (allocatedSharesBySellId.get(payload.sellExecutionId) ?? 0) + sharesInThisDecision,
+    );
+  }
   return all.filter((t) => {
     if (t.kind !== "SellExecution") return false;
     if (isRetracted(all, t.id)) return false;
     const resolvedTicker = resolveCurrentTicker(all, t);
     if (resolvedTicker === undefined || normalizeTicker(resolvedTicker) !== normalized) return false;
-    return !claimedIds.has(t.id);
+    const sellShares = (t.payload as SellExecutionPayload).shares;
+    const allocatedShares = allocatedSharesBySellId.get(t.id) ?? 0;
+    return allocatedShares < sellShares - 1e-6;
   });
 }

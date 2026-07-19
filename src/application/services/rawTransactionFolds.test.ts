@@ -100,4 +100,47 @@ describe("findUnallocatedSellExecutions", () => {
   it("returns an empty array for a ticker with no sells at all", () => {
     expect(findUnallocatedSellExecutions([], "COMI")).toEqual([]);
   });
+
+  // Adversarial-review regression: lotManager.setSellAllocation legitimately
+  // supports PARTIAL allocation of a sell (rejects totalRequested >
+  // sell.shares, not !==) — an earlier version of this function treated "any
+  // live decision exists" as "fully allocated," which silently reported a
+  // sell with 40-of-100 shares allocated via the Lot Manager as resolved,
+  // even though 60 shares of it were still genuinely unaccounted for.
+  it("still reports a sell as unallocated when its only live decision covers FEWER shares than the sell itself (a Lot Manager partial allocation)", () => {
+    const sell = sellFact({ id: "s1", ticker: "COMI", shares: 100 });
+    const partialDecision = {
+      ...createRawTransaction({
+        kind: "SellAllocationDecision",
+        source: "manual",
+        ticker: "COMI",
+        payload: { sellExecutionId: "s1", allocations: [{ lotRef: "buy-1", shares: 40 }] } satisfies SellAllocationDecisionPayload,
+      }),
+      seq: 2,
+    };
+    expect(findUnallocatedSellExecutions([sell, partialDecision], "COMI")).toEqual([sell]);
+  });
+
+  it("reports a sell as fully allocated once several live decisions' shares SUM to its own share count", () => {
+    const sell = sellFact({ id: "s1", ticker: "COMI", shares: 100 });
+    const decisionA = {
+      ...createRawTransaction({
+        kind: "SellAllocationDecision",
+        source: "manual",
+        ticker: "COMI",
+        payload: { sellExecutionId: "s1", allocations: [{ lotRef: "buy-1", shares: 40 }] } satisfies SellAllocationDecisionPayload,
+      }),
+      seq: 2,
+    };
+    const decisionB = {
+      ...createRawTransaction({
+        kind: "SellAllocationDecision",
+        source: "manual",
+        ticker: "COMI",
+        payload: { sellExecutionId: "s1", allocations: [{ lotRef: "buy-2", shares: 60 }] } satisfies SellAllocationDecisionPayload,
+      }),
+      seq: 3,
+    };
+    expect(findUnallocatedSellExecutions([sell, decisionA, decisionB], "COMI")).toEqual([]);
+  });
 });

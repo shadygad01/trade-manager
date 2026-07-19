@@ -293,40 +293,70 @@ export async function recordBuyBatch(
  * already durably saved the corresponding legacy Trade/TradeAllocation row —
  * per this codebase's own architecture (docs/ROADMAP.md's root-cause
  * investigation), that row now has no backing RawTransaction fact, which is a
- * real, structural source of "closed position shows open" drift:
- * ledgerProjection.ensureLegacyFactsExist's own gap-fill already backfills a
- * missing fact FROM an existing legacy row like this one, but only the next
- * time this ticker is committed — nothing previously forced that to happen
- * promptly, and the original failure was silently absorbed either way (a
- * console.error only, the caller still saw a normal successful return).
+ * real, structural source of "closed position shows open" drift.
+ * `ledgerProjection.ensureLegacyFactsExist`'s own gap-fill (commitTicker's
+ * first step) already backfills a missing fact FROM an existing legacy row
+ * like this one — this forces that to happen right now instead of whenever
+ * this ticker next happens to be touched for an unrelated reason.
  *
- * This closes both gaps at once, per the "silent success is prohibited"
- * requirement: (1) forces an immediate commit for this ticker, so
- * ensureLegacyFactsExist's self-heal fires right now instead of whenever this
- * ticker next happens to be touched for an unrelated reason; (2) rethrows the
- * original error regardless of whether the recovery commit succeeded — a
- * fact-log write failure is real signal (e.g. a Dexie contention issue) that
- * must never be silently dropped just because its immediate consequence
- * usually self-heals. The caller (every existing recordBuy/recordSell caller
- * already handles a thrown error from these functions for other reasons —
- * e.g. "Trade not found" — so this adds no new error-handling contract, only
- * a previously-missing failure mode surfacing through the same one).
+ * The recovery commit is checked, not just attempted: if it actually
+ * produced a live backing fact (`isHealed` reports true), the gap this
+ * failure opened is now fully closed and there is nothing left for the
+ * caller to react to — returning normally here (no throw) is deliberate,
+ * not silent-success. A thrown error at this point, with the legacy write
+ * already durable and unrecoverably committed, forces the caller into an
+ * error-recovery UI path (retry, dismiss) that assumes NOTHING happened —
+ * but something did. An adversarial review of an earlier version of this
+ * function (a version that always rethrew, regardless of whether the
+ * recovery commit healed the gap) found this created a *worse* regression
+ * than the one it fixed: a form/row left populated and resubmittable after
+ * a spurious error, submitted again by the user, producing a genuine
+ * duplicate Trade/TradeAllocation/cash-movement/timeline-event — the exact
+ * "duplicate transactions" defect class this whole fix exists to eliminate.
+ *
+ * Only when the gap is genuinely NOT repairable does this throw — and only
+ * after handing the caller a rollback so a retry is actually safe: never a
+ * bare rethrow on top of already-durable legacy state.
  */
-async function recoverFromFactWriteFailure(
-  repos: CommitEngineRepos,
-  portfolioId: string,
-  ticker: string,
-  operation: string,
-  err: unknown,
-): Promise<never> {
+async function attemptRecoveryCommit(repos: CommitEngineRepos, portfolioId: string, ticker: string, operation: string): Promise<void> {
   await commitTicker(repos, portfolioId, normalizeTicker(ticker)).catch((commitErr) => {
     console.error(`Recovery commitTicker after ${operation} failure also failed:`, commitErr);
   });
-  const message = err instanceof Error ? err.message : String(err);
-  throw new Error(
-    `${operation} failed to write its supporting fact-log entry (${message}). The already-recorded trade/allocation may be temporarily out of sync with the fact log; an immediate recovery commit was attempted. Verify this position's state before continuing.`,
-    { cause: err }
+}
+
+/** True once a live (non-retracted) fact with this exact id exists — the shape ensureLegacyFactsExist's backfill produces for a BuyExecution (id === the legacy Trade's own id) or a SellExecution (id === the legacy sellGroupId) it just repaired. */
+async function factIsLive(repos: CommitEngineRepos, factId: string): Promise<boolean> {
+  const all = await repos.rawTransactions.getAll();
+  return all.some((t) => t.id === factId && !isRetracted(all, t.id));
+}
+
+/** True once a live SellAllocationDecision fact references this sellExecutionId — the other half of a Sell's fact-log completeness (see rawTransactionFolds.findUnallocatedSellExecutions). */
+async function sellDecisionIsLive(repos: CommitEngineRepos, sellExecutionId: string): Promise<boolean> {
+  const all = await repos.rawTransactions.getAll();
+  return all.some(
+    (t) => t.kind === "SellAllocationDecision" && !isRetracted(all, t.id) && (t.payload as SellAllocationDecisionPayload).sellExecutionId === sellExecutionId,
   );
+}
+
+/**
+ * Voids whatever fact-log artifact DID land during a failed, now-rolled-back
+ * write — the fact log is append-only (no delete), so "roll back" for it
+ * means Retraction, not deletion. A no-op (via retractRawTransaction's own
+ * idempotent target-lookup) when nothing landed at all, which is the common
+ * case (the whole point of `isHealed` returning false is usually that
+ * NOTHING was written) — but a multi-step writer (ensureSellFacts writes a
+ * SellExecution fact, then a SellAllocationDecision fact) can fail on its
+ * SECOND step with its first step's fact already durable; left alone, that
+ * orphaned SellExecution fact would show up as a phantom "unallocated sell"
+ * in Verification (rawTransactionFolds.findUnallocatedSellExecutions) for a
+ * sell the legacy rollback just erased — a stale-state defect of its own.
+ */
+async function retractIfLive(repos: CommitEngineRepos, factId: string, reason: string, diagnostics?: DiagnosticsRecorder): Promise<void> {
+  if (await factIsLive(repos, factId)) {
+    await retractRawTransaction(repos, factId, reason, diagnostics).catch((retractErr) =>
+      console.error(`Rollback: retracting orphaned fact ${factId} failed:`, retractErr),
+    );
+  }
 }
 
 async function ensureBuyFact(
@@ -443,27 +473,50 @@ export async function recordBuy(
   const updatedPortfolio = { ...portfolio, cash: currentCash.subtract(totalCost).toNumber() };
   await repos.portfolios.save(updatedPortfolio);
 
-  await repos.timeline.save(
-    createTimelineEvent({
-      id: generateId(),
-      portfolioId: input.portfolioId,
-      type: "Buy",
-      timestamp: toTimestamp(input.executionDate, input.executionTime),
-      ticker: trade.ticker,
-      relatedTradeIds: [trade.id],
-      amount: -totalCost.toNumber(),
-      shares: input.shares,
-      notes: input.notes,
-    })
-  );
+  const timelineEvent = createTimelineEvent({
+    id: generateId(),
+    portfolioId: input.portfolioId,
+    type: "Buy",
+    timestamp: toTimestamp(input.executionDate, input.executionTime),
+    ticker: trade.ticker,
+    relatedTradeIds: [trade.id],
+    amount: -totalCost.toNumber(),
+    shares: input.shares,
+    notes: input.notes,
+  });
+  await repos.timeline.save(timelineEvent);
 
   let factSeqCursor: number | undefined;
   let durableTrade = trade;
   if (repos.rawTransactions && repos.committedLedger) {
     const commitRepos = repos as AppRepositories & CommitEngineRepos;
-    const fact = await ensureBuyFact(commitRepos, trade, input, diagnostics).catch((err) =>
-      recoverFromFactWriteFailure(commitRepos, input.portfolioId, trade.ticker, "ensureBuyFact", err)
-    );
+    let fact: { seq: number; factId: string } | undefined;
+    try {
+      fact = await ensureBuyFact(commitRepos, trade, input, diagnostics);
+    } catch (err) {
+      await attemptRecoveryCommit(commitRepos, input.portfolioId, trade.ticker, "ensureBuyFact");
+      if (await factIsLive(commitRepos, trade.id)) {
+        // Self-healed: ensureLegacyFactsExist's gap-fill (commitTicker's own
+        // first step) backfilled the missing fact FROM the Trade row already
+        // saved above. Nothing left broken — proceed as a normal success.
+        const healedFact = await commitRepos.rawTransactions.getById(trade.id);
+        fact = healedFact ? { seq: healedFact.seq, factId: healedFact.id } : undefined;
+      } else {
+        // Genuinely unrepairable: roll back every durable write this call
+        // made so a caller-driven retry starts clean instead of duplicating
+        // a Trade/cash-movement/timeline-event on top of state that already
+        // exists. No fact was ever produced for this trade.id (that's the
+        // definition of "not healed" here), so there's nothing to retract.
+        await repos.trades.delete(trade.id).catch((e) => console.error("Rollback: trades.delete failed", e));
+        await repos.portfolios.save(portfolio).catch((e) => console.error("Rollback: portfolios.save (restore) failed", e));
+        await repos.timeline.delete(timelineEvent.id).catch((e) => console.error("Rollback: timeline.delete failed", e));
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Buy could not be durably recorded (${message}). No changes were made — safe to retry.`,
+          { cause: err },
+        );
+      }
+    }
     factSeqCursor = fact?.seq;
     // Adoption may cause projection to replace the temporary legacy Trade
     // with a canonical event row. Resolve the row that actually survived the
@@ -803,6 +856,11 @@ export async function recordSell(
   const createdAllocations: TradeAllocation[] = [];
   const closedTrades: Trade[] = [];
   const relatedTradeIds: string[] = [];
+  // Index-aligned with createdAllocations/closedTrades — needed to roll back
+  // each line's remainingShares reduction correctly on a fact-write failure
+  // (a fact-backed-alias line never touched saveRemainingShares in the first
+  // place, so rollback must not "restore" it either).
+  const usedFactBackedAlias: boolean[] = [];
   let netProceeds = Money.zero();
   let realizedMicros = 0;
   let fullyClosedCount = 0;
@@ -888,6 +946,7 @@ export async function recordSell(
     createdAllocations.push(allocation);
     closedTrades.push(trade);
     relatedTradeIds.push(trade.id);
+    usedFactBackedAlias.push(usingFactBackedAlias);
 
     const remainingShares = trade.remainingShares - line.shares;
     if (!usingFactBackedAlias) {
@@ -910,32 +969,68 @@ export async function recordSell(
   const isSingleFullClose = input.allocations.length === 1 && fullyClosedCount === 1;
   const totalSharesClosed = createdAllocations.reduce((sum, a) => sum + a.sharesClosed, 0);
 
-  await repos.timeline.save(
-    createTimelineEvent({
-      id: generateId(),
-      portfolioId: input.portfolioId,
-      type: isSingleFullClose ? "Sell" : "PartialSell",
-      timestamp: toTimestamp(input.executionDate, input.executionTime),
-      ticker,
-      relatedTradeIds,
-      relatedAllocationIds: createdAllocations.map((a) => a.id),
-      amount: netProceeds.toNumber(),
-      shares: totalSharesClosed,
-    })
-  );
+  const timelineEvent = createTimelineEvent({
+    id: generateId(),
+    portfolioId: input.portfolioId,
+    type: isSingleFullClose ? "Sell" : "PartialSell",
+    timestamp: toTimestamp(input.executionDate, input.executionTime),
+    ticker,
+    relatedTradeIds,
+    relatedAllocationIds: createdAllocations.map((a) => a.id),
+    amount: netProceeds.toNumber(),
+    shares: totalSharesClosed,
+  });
+  await repos.timeline.save(timelineEvent);
 
   let factSeqCursor: number | undefined;
   if (repos.rawTransactions && repos.committedLedger) {
     const commitRepos = repos as AppRepositories & CommitEngineRepos;
-    factSeqCursor = await ensureSellFacts(
-      commitRepos,
-      input,
-      ticker,
-      sellGroupId,
-      createdAllocations,
-      closedTrades,
-      diagnostics
-    ).catch((err) => recoverFromFactWriteFailure(commitRepos, input.portfolioId, ticker, "ensureSellFacts", err));
+    try {
+      factSeqCursor = await ensureSellFacts(
+        commitRepos,
+        input,
+        ticker,
+        sellGroupId,
+        createdAllocations,
+        closedTrades,
+        diagnostics
+      );
+    } catch (err) {
+      await attemptRecoveryCommit(commitRepos, input.portfolioId, ticker, "ensureSellFacts");
+      const executionHealed = await factIsLive(commitRepos, sellGroupId);
+      const decisionHealed = executionHealed && (await sellDecisionIsLive(commitRepos, sellGroupId));
+      if (executionHealed && decisionHealed) {
+        // Self-healed: ensureLegacyFactsExist's gap-fill backfilled both the
+        // SellExecution and SellAllocationDecision facts FROM the
+        // TradeAllocation rows already saved above. Proceed as success.
+        const healedFact = await commitRepos.rawTransactions.getById(sellGroupId);
+        factSeqCursor = healedFact?.seq;
+      } else {
+        // Genuinely unrepairable (or only partially repaired — e.g. the
+        // SellExecution fact landed but the SellAllocationDecision write
+        // that followed it did not): roll back every durable write this
+        // call made, and void any fact-log artifact that DID land, so a
+        // caller-driven retry starts clean instead of double-allocating a
+        // lot, double-crediting cash, or leaving a phantom "unallocated
+        // sell" for a sell the legacy rollback just erased.
+        await retractIfLive(commitRepos, sellGroupId, "Rolled back: sell could not be durably recorded", diagnostics);
+        for (let i = createdAllocations.length - 1; i >= 0; i--) {
+          await repos.allocations.delete(createdAllocations[i].id).catch((e) => console.error("Rollback: allocations.delete failed", e));
+          if (!usedFactBackedAlias[i]) {
+            await repos.trades.saveRemainingShares(closedTrades[i].id, closedTrades[i].remainingShares).catch((e) =>
+              console.error("Rollback: trades.saveRemainingShares (restore) failed", e),
+            );
+          }
+        }
+        await repos.portfolios.save(portfolio).catch((e) => console.error("Rollback: portfolios.save (restore) failed", e));
+        await repos.timeline.delete(timelineEvent.id).catch((e) => console.error("Rollback: timeline.delete failed", e));
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Sell could not be durably recorded (${message}). No changes were made — safe to retry.`,
+          { cause: err },
+        );
+      }
+    }
   }
 
   if (diagnostics && factSeqCursor !== undefined) {
