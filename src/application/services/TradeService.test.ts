@@ -196,6 +196,94 @@ describe("recordBuy", () => {
       })
     ).rejects.toThrow(/2026-01-01/);
   });
+
+  // Root-cause regression coverage, buy side (docs/ROADMAP.md's
+  // investigation) — symmetric with recordSell's own coverage below:
+  // ensureBuyFact's failure must never be silently absorbed AND must never
+  // surface as a caller-visible error once the recovery commit actually
+  // repaired it — an adversarial review of an earlier version of this fix
+  // found that unconditionally rethrowing after a SUCCESSFUL self-heal
+  // invited a UI-driven retry on top of already-durable legacy state,
+  // producing a genuine duplicate Trade/cash-debit/timeline-event — see the
+  // "does NOT resubmit a duplicate" test below for that exact reproduction.
+  it("transparently self-heals and resolves normally when the recovery commit repairs the missing fact — never a caller-visible error for a fully-recoverable gap", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    const realAppend = repos.rawTransactions.append.bind(repos.rawTransactions);
+    let failNextAppend = true;
+    repos.rawTransactions.append = async (t) => {
+      if (failNextAppend) {
+        failNextAppend = false;
+        throw new Error("simulated Dexie write-contention error");
+      }
+      return realAppend(t);
+    };
+
+    const result = await recordBuy(repos, {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-02-01",
+      executionTime: "10:30",
+    });
+    expect(result.trade.shares).toBe(100);
+
+    // The legacy Trade row is durably saved, exactly once — no duplicate
+    // from a spurious retry, because there was no spurious error to retry.
+    const trades = await repos.trades.getByPortfolio("p1");
+    expect(trades).toHaveLength(1);
+    expect(trades[0].shares).toBe(100);
+
+    // The forced recovery commit's ensureLegacyFactsExist backfilled the
+    // missing BuyExecution fact FROM the legacy Trade row — durably correct
+    // again, not left drifted.
+    const all = await repos.rawTransactions.getAll();
+    const buyFacts = all.filter((t) => t.kind === "BuyExecution" && t.ticker === "COMI");
+    expect(buyFacts).toHaveLength(1);
+  });
+
+  it("does NOT resubmit a duplicate Buy/cash-debit/timeline-event when a caller retries after a genuinely unrecoverable fact-log failure — rolls back cleanly instead", async () => {
+    const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+    // Every append fails — including the recovery commit's own
+    // ensureLegacyFactsExist backfill attempt — simulating a genuinely
+    // unrecoverable fact-log failure (not just one transient contention).
+    repos.rawTransactions.append = async () => {
+      throw new Error("simulated persistent fact-log failure");
+    };
+
+    const input = {
+      portfolioId: "p1",
+      ticker: "COMI",
+      shares: 100,
+      entryPrice: 50,
+      executionDate: "2026-02-01",
+      executionTime: "10:30",
+    };
+
+    await expect(recordBuy(repos, input)).rejects.toThrow(/could not be durably recorded/);
+
+    // Every durable write recordBuy made before the fact-log attempt has
+    // been rolled back — no orphaned Trade, no permanently double-debited
+    // cash, no orphaned timeline event left for a retry to pile on top of.
+    expect(await repos.trades.getByPortfolio("p1")).toHaveLength(0);
+    const portfolio = await repos.portfolios.getById("p1");
+    expect(portfolio?.cash).toBe(10_000);
+    expect(await repos.timeline.getByPortfolio("p1")).toHaveLength(0);
+
+    // A caller-driven retry (the realistic UI shape — the form stays
+    // populated and resubmittable after an error) never accumulates a
+    // second Trade/cash-debit on top of the first, because rollback left
+    // nothing behind for it to pile onto.
+    let secondAttemptRejected = false;
+    try {
+      await recordBuy(repos, input);
+    } catch {
+      secondAttemptRejected = true;
+    }
+    expect(secondAttemptRejected).toBe(true);
+    expect(await repos.trades.getByPortfolio("p1")).toHaveLength(0);
+    expect((await repos.portfolios.getById("p1"))?.cash).toBe(10_000);
+  });
 });
 
 describe("deleteTrade", () => {
@@ -1031,6 +1119,164 @@ describe("recordSell", () => {
         executionTime: "11:00",
       })
     ).rejects.toThrow(/2026-01-01/);
+  });
+
+  // Root-cause regression coverage (docs/ROADMAP.md's investigation):
+  // TradeService.ensureSellFacts is the ONLY place a SellAllocationDecision
+  // fact is ever created going forward. A silently-swallowed failure here —
+  // the exact pre-fix behavior — let recordSell report success while the
+  // fact log never recorded which lot was actually closed, which is
+  // structurally indistinguishable from a sell candidate that was never
+  // allocated at all (see verificationEngine.ts's
+  // findUnallocatedSellExecutions and importVerification.isTickerFullyResolved).
+  describe("fact-log write failure (silent success is prohibited)", () => {
+    it("transparently self-heals and resolves normally when the recovery commit repairs a PARTIALLY closed position's missing facts — never a caller-visible error for a fully-recoverable gap", async () => {
+      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+      const { trade } = await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 100,
+        entryPrice: 50,
+        executionDate: "2026-02-01",
+        executionTime: "10:30",
+      });
+
+      // A broker "My Position" screenshot confirming 60 shares remain after
+      // the 40-share sell below — the ordinary, most common verification
+      // path (checkTickerMatch's verifiedUnits match), sidestepping the
+      // separate closed-position/uncorroborated-round-trip rule (the
+      // JUFO/SKPC fix) this test isn't about.
+      await repos.rawTransactions.append({
+        id: "pv1",
+        kind: "PositionVerificationCapture",
+        source: "position-verification",
+        portfolioId: "p1",
+        ticker: "COMI",
+        payload: { ticker: "COMI", units: 60, capturedAt: "2026-02-10T00:00" },
+      } as never);
+
+      // Simulate exactly one transient fact-log write failure (e.g. a Dexie
+      // write-contention error) on the very next append — ensureSellFacts's
+      // own SellExecution fact write. The recovery commit's OWN backfill
+      // append succeeds normally (failNextAppend only fires once), so this
+      // gap is fully self-healable.
+      const realAppend = repos.rawTransactions.append.bind(repos.rawTransactions);
+      let failNextAppend = true;
+      repos.rawTransactions.append = async (t) => {
+        if (failNextAppend) {
+          failNextAppend = false;
+          throw new Error("simulated Dexie write-contention error");
+        }
+        return realAppend(t);
+      };
+
+      const result = await recordSell(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        allocations: [{ tradeId: trade.id, shares: 40, exitPrice: 60 }],
+        executionDate: "2026-02-05",
+        executionTime: "11:00",
+      });
+      expect(result.allocations).toHaveLength(1);
+
+      // The legacy Trade/TradeAllocation write reflects the sell, exactly
+      // once — no duplicate from a spurious retry, because there was no
+      // spurious error to retry.
+      const updatedTrade = await repos.trades.getById(trade.id);
+      expect(updatedTrade?.remainingShares).toBe(60);
+
+      // The forced recovery commit's own ensureLegacyFactsExist gap-fill
+      // backfilled the missing SellExecution/SellAllocationDecision facts
+      // FROM the legacy TradeAllocation that recordSell already wrote — the
+      // fact log is durably correct again, not left drifted until whatever
+      // next happens to touch this ticker.
+      const all = await repos.rawTransactions.getAll();
+      const sellFacts = all.filter((t) => t.kind === "SellExecution" && t.ticker === "COMI");
+      const decisionFacts = all.filter((t) => t.kind === "SellAllocationDecision");
+      expect(sellFacts).toHaveLength(1);
+      expect(decisionFacts).toHaveLength(1);
+
+      // And the canonical ledger genuinely reflects the PARTIALLY closed
+      // position — not just the legacy table — proving the recovery commit
+      // actually ran commitTicker, not merely appended facts nobody replayed yet.
+      const canonicalAllocations = await repos.committedLedger.getAllocations("p1", "COMI");
+      expect(canonicalAllocations).toHaveLength(1);
+      expect(canonicalAllocations[0].shares).toBe(40);
+      const canonicalEvents = await repos.committedLedger.getLedgerEvents("p1", "COMI");
+      const lot = canonicalEvents.find((e) => e.type === "LotOpened")!;
+      expect(lot.shares).toBe(100); // the lot's original size, unallocated shares are derived by holdingsEngine, not stored here
+    });
+
+    // Adversarial-review regression: an earlier version of this fix always
+    // rethrew after attempting recovery, regardless of whether it healed —
+    // leaving a UI form/row populated and resubmittable on top of an
+    // already-durable partial allocation, so a user-driven retry produced a
+    // SECOND TradeAllocation for the same lot (double-counted realized P&L,
+    // double cash credit) since `line.shares (40) <= trade.remainingShares
+    // (60)` still passes on the second call. This proves rollback instead.
+    it("does NOT resubmit a duplicate allocation/cash-credit/timeline-event when a caller retries after a genuinely unrecoverable fact-log failure — rolls back cleanly instead", async () => {
+      const repos = withMigrationRepos(createFakeRepositories({ portfolios: [seedPortfolio(10_000)] }));
+      const { trade } = await recordBuy(repos, {
+        portfolioId: "p1",
+        ticker: "COMI",
+        shares: 100,
+        entryPrice: 50,
+        executionDate: "2026-02-01",
+        executionTime: "10:30",
+      });
+      await repos.rawTransactions.append({
+        id: "pv1",
+        kind: "PositionVerificationCapture",
+        source: "position-verification",
+        portfolioId: "p1",
+        ticker: "COMI",
+        payload: { ticker: "COMI", units: 60, capturedAt: "2026-02-10T00:00" },
+      } as never);
+
+      const sellInput = {
+        portfolioId: "p1",
+        ticker: "COMI",
+        allocations: [{ tradeId: trade.id, shares: 40, exitPrice: 60 }],
+        executionDate: "2026-02-05",
+        executionTime: "11:00",
+      };
+
+      // Every append from this point fails — including the recovery
+      // commit's own ensureLegacyFactsExist backfill attempt — a genuinely
+      // unrecoverable fact-log failure.
+      repos.rawTransactions.append = async () => {
+        throw new Error("simulated persistent fact-log failure");
+      };
+
+      await expect(recordSell(repos, sellInput)).rejects.toThrow(/could not be durably recorded/);
+
+      // Every durable write recordSell made has been rolled back: the lot's
+      // remainingShares is back to 100, the TradeAllocation is gone, cash is
+      // back to its pre-sell value, and no timeline event remains.
+      const rolledBackTrade = await repos.trades.getById(trade.id);
+      expect(rolledBackTrade?.remainingShares).toBe(100);
+      expect(await repos.allocations.getByPortfolio("p1")).toHaveLength(0);
+      const portfolio = await repos.portfolios.getById("p1");
+      expect(portfolio?.cash).toBe(10_000 - 100 * 50); // only the original buy's cost, no sell proceeds credited
+      const sellTimelineEvents = (await repos.timeline.getByPortfolio("p1")).filter((e) => e.type === "Sell" || e.type === "PartialSell");
+      expect(sellTimelineEvents).toHaveLength(0);
+
+      // A caller-driven retry (the realistic UI shape — SellAllocationForm
+      // stays populated and resubmittable after an error) is accepted again
+      // (60 shares are available, same as before the failed first attempt)
+      // rather than being rejected as an overshoot — and still fails
+      // (append is still broken), still without leaving a second orphaned
+      // allocation behind.
+      let secondAttemptRejected = false;
+      try {
+        await recordSell(repos, sellInput);
+      } catch {
+        secondAttemptRejected = true;
+      }
+      expect(secondAttemptRejected).toBe(true);
+      expect(await repos.allocations.getByPortfolio("p1")).toHaveLength(0);
+      expect((await repos.trades.getById(trade.id))?.remainingShares).toBe(100);
+    });
   });
 });
 

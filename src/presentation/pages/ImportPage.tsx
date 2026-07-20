@@ -30,7 +30,7 @@ import {
   isTickerFullyOfficialBrokerExcelSourced,
   isTickerOfficialBrokerExcelCoveredByCandidates,
 } from "@application/services/reconciliation";
-import { findLiveExecutionFact } from "@application/services/rawTransactionFolds";
+import { findLiveExecutionFact, findUnallocatedSellExecutions } from "@application/services/rawTransactionFolds";
 import { higherAuthority } from "@application/services/evidenceAuthority";
 import { upgradeSellExecutionFact } from "@application/services/provenanceRepair";
 import { runSerialized } from "@application/services/serialize";
@@ -2334,6 +2334,12 @@ export function ImportPage() {
     const map = new Map<string, { resolved: boolean; transactionCount: number }>();
     for (const [ticker, group] of tickerGroups) {
       const transactionKeys = [...group.buys, ...group.sells].map((e) => e.key);
+      // Read from the fact log directly, not from this session's own
+      // addedKeys bookkeeping — a sell row can be tracked "added" the moment
+      // recordSell *returns*, even on a run where its fact-log write
+      // silently failed (see TradeService.ensureSellFacts). This is the same
+      // canonical check verificationEngine.ts's TickerStatus now exposes.
+      const hasUnallocatedSells = findUnallocatedSellExecutions(existingRawTransactions, ticker).length > 0;
       const resolved = isTickerFullyResolved({
         matched: Boolean(tickerMatchStatuses.get(ticker)?.matched),
         transactionKeys,
@@ -2344,11 +2350,12 @@ export function ImportPage() {
         dismissedKeys,
         acceptedKeys,
         rowErrorKeys,
+        hasUnallocatedSells,
       });
       map.set(ticker, { resolved, transactionCount: transactionKeys.length });
     }
     return map;
-  }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, acceptedKeys, rowErrorKeys]);
+  }, [tickerGroups, tickerMatchStatuses, addedKeys, skippedKeys, dismissedKeys, acceptedKeys, rowErrorKeys, existingRawTransactions]);
 
   const activeTickerGroups = useMemo(
     () => tickerGroups.filter(([ticker]) => !tickerResolution.get(ticker)?.resolved),
@@ -3220,6 +3227,12 @@ export function TickerGroupCard({
       wrongTickerHintCount: 0,
       dateMisreadHintCount: 0,
       lastBalancedDate: lastBalanced,
+      // This card only reaches assessTickerCompleteness while genuinely
+      // unmatched (guarded above) — allocation completeness is a separate,
+      // matched-but-unallocated concern (see rawTransactionFolds.findUnallocatedSellExecutions)
+      // that completenessEngine.ts doesn't read, so an empty array here is
+      // accurate, not a shortcut.
+      unallocatedSellExecutionIds: [],
     };
     return assessTickerCompleteness(status);
   }, [matchStatus, group.buys, group.sells, ticker, orphanedOrderEvidence, lastBalanced]);

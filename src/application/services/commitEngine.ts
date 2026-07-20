@@ -333,10 +333,84 @@ export async function commitTicker(
   // not.
   const terminal = [...verdicts.values()].every((v) => v.verdict !== "Needs Review");
   const writeProjection = async () => {
+    let eventsToWrite = events;
+    let allocationsToWrite = allocations;
+    if (!terminal) {
+      // Adversarial-review regression: committedLedger.commitTicker is a
+      // full delete-and-replace, and unlike projectLegacyTicker just below
+      // it was never gated on `terminal` — Retraction/Correction/a
+      // SellAllocationDecision fact all need it to refresh immediately
+      // even while the ticker is non-terminal (dropping a just-retracted
+      // fact's stale cache entry can't wait for the rest of the batch).
+      // But verification is binary PER TICKER (checkTickerMatch nets
+      // every live Buy/Sell together) — an unrelated, still-ambiguous
+      // sibling fact flips EVERY non-backfill row's verdict, including one
+      // that was genuinely Verified and committed in an earlier pass and
+      // hasn't changed at all. Left alone, that unconditional overwrite
+      // would silently erase an already-correct, still-live
+      // LotOpened/SellRecorded/Allocation row from the cache the moment
+      // any OTHER unrelated fact on the same ticker arrived — a real
+      // "closed position shows open again" regression with no fact ever
+      // having changed. Preserve any previously-cached row whose backing
+      // fact(s) are still live (not retracted) and aren't already covered
+      // by this pass's fresh result; a row backed by a fact that's no
+      // longer live (retracted) is correctly NOT preserved — it must
+      // still disappear immediately, same as before this fix.
+      //
+      // This preservation is only sound when NOTHING was actually retracted
+      // — retracting a fact can legitimately invalidate a still-live
+      // SIBLING's own corroboration (e.g. retracting the Buy half of a
+      // closed-position pair correctly leaves the Sell unverified again, and
+      // its event must still disappear immediately — see this file's own
+      // retractRawTransaction regression test). Only when every previously-
+      // cached event's backing fact(s) are STILL live is a shrink purely
+      // attributable to an unrelated fact's ambiguity, never to something
+      // this very commit just invalidated. Reading the previous cache is
+      // itself never fatal — a read failure here just forfeits preservation
+      // for this pass (falls back to the plain fresh overwrite below),
+      // exactly as if the ticker were terminal.
+      try {
+        const [previousEvents, previousAllocations] = await Promise.all([
+          repos.committedLedger.getLedgerEvents(portfolioId, normalizedTicker),
+          repos.committedLedger.getAllocations(portfolioId, normalizedTicker),
+        ]);
+        const liveFactIds = new Set(relevant.map((t) => t.id));
+        const somethingWasRetracted = previousEvents.some((e) => !e.sourceTransactionIds.every((id) => liveFactIds.has(id)));
+        if (!somethingWasRetracted) {
+          const freshEventIds = new Set(events.map((e) => e.eventId));
+          const keptEvents = previousEvents.filter((e) => !freshEventIds.has(e.eventId));
+          eventsToWrite = [...events, ...keptEvents];
+          const survivingEventIds = new Set(eventsToWrite.map((e) => e.eventId));
+          const freshAllocationIds = new Set(allocations.map((a) => a.id));
+          const keptAllocations = previousAllocations.filter(
+            (a) => !freshAllocationIds.has(a.id) && survivingEventIds.has(a.lotEventId) && survivingEventIds.has(a.sellEventId),
+          );
+          allocationsToWrite = [...allocations, ...keptAllocations];
+        }
+      } catch (err) {
+        console.error("Reading the previous committed cache for preservation failed — proceeding with a plain overwrite:", err);
+      }
+    }
+    const cacheWrite = { portfolioId, ticker: normalizedTicker, events: eventsToWrite, allocations: allocationsToWrite };
     try {
-      await repos.committedLedger.commitTicker({ portfolioId, ticker: normalizedTicker, events, allocations });
+      await repos.committedLedger.commitTicker(cacheWrite);
     } catch (err) {
-      console.error("committedLedger.commitTicker failed (cache commit skipped, legacy projection still proceeds):", err);
+      // One immediate retry before giving up. projectLegacyTicker below
+      // deliberately proceeds independently of whether this cache write
+      // succeeds (a transient cache-write failure must never block the
+      // legacy UI from getting correct data — see this function's own doc
+      // comment above), but that independence means a failed cache write
+      // leaves canonicalHoldings.ts's "canonical is always >= as fresh as
+      // legacy" assumption briefly false: legacy would proceed to reflect
+      // this pass's fresh state while the cache still holds the PRIOR
+      // pass's stale one. Retrying narrows that window to the same
+      // "transient Dexie write-contention" class of error the original fix
+      // already named, without reopening it by gating legacy projection on
+      // this write's success.
+      console.error("committedLedger.commitTicker failed, retrying once:", err);
+      await repos.committedLedger.commitTicker(cacheWrite).catch((retryErr) => {
+        console.error("committedLedger.commitTicker failed again (cache commit skipped, legacy projection still proceeds):", retryErr);
+      });
     }
     if (projection && terminal) {
       try {
@@ -430,6 +504,30 @@ export async function appendAndMaybeCommit(
       if (resolvedPortfolioId !== undefined && resolvedTicker !== undefined) {
         await commitTicker(repos, resolvedPortfolioId, resolvedTicker, diagnostics);
       }
+    }
+  } else if (appended.kind === "SellAllocationDecision") {
+    // Root-cause fix (docs/ROADMAP.md's investigation): unlike a fresh
+    // Buy/Sell EXECUTION fact — which can legitimately need to wait for the
+    // rest of its ticker's batch to reach a terminal verdict before
+    // shouldCommit's all-clear gate lets it through — a SellAllocationDecision
+    // can only ever make an ALREADY-verified sell's lot allocation visible;
+    // it never introduces new corroboration ambiguity of its own (neither
+    // checkTickerMatch nor shouldCommit reads SellAllocationDecision facts as
+    // verification input in the first place). This matters concretely for
+    // source:"backfill" Buy/Sell facts (verificationEngine.ts trusts them
+    // unconditionally, bypassing the ticker-wide checkTickerMatch gate
+    // entirely — see ensureLegacyFactsExist, which produces exactly this
+    // shape when converging a legacy Trade/TradeAllocation row into the fact
+    // log): gating the decision's own commit on shouldCommit let an
+    // unrelated, still-"Needs Review" row on the SAME ticker indefinitely
+    // block a just-recorded, already-correct allocation for an
+    // already-trusted backfilled sell from ever reaching the committed
+    // ledger — a real, confirmed source of a fully-allocated sell staying
+    // invisible in Holdings. Same "must refresh immediately, regardless of
+    // the rest of the batch's terminal status" reasoning as
+    // Retraction/Correction above, not a new exception shape.
+    if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
+      await commitTicker(repos, appended.portfolioId, appended.ticker, diagnostics);
     }
   } else if (appended.portfolioId !== undefined && appended.ticker !== undefined) {
     if (await shouldCommit(repos, appended.portfolioId, appended.ticker)) {

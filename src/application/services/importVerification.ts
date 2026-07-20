@@ -366,8 +366,22 @@ export function isTickerFullyResolved(params: {
   dismissedKeys: ReadonlySet<string>;
   acceptedKeys: ReadonlySet<string>;
   rowErrorKeys: ReadonlySet<string>;
+  /**
+   * Whether this ticker's fact log (rawTransactionFolds.findUnallocatedSellExecutions,
+   * surfaced on verificationEngine.ts's TickerStatus.unallocatedSellExecutionIds)
+   * currently has any live SellExecution with no SellAllocationDecision.
+   * Checked independently of `addedKeys`/`transactionKeys` below on purpose:
+   * a sell row can already be tracked as "added" in this session's own
+   * bookkeeping the moment TradeService.recordSell *returns*, even on a run
+   * where its underlying fact-log write silently failed — session tracking
+   * alone was never sufficient proof the allocation actually persisted. A
+   * ticker can never be reported fully resolved while this is true,
+   * regardless of what the session pool believes.
+   */
+  hasUnallocatedSells: boolean;
 }): boolean {
   if (!params.matched || params.transactionKeys.length === 0) return false;
+  if (params.hasUnallocatedSells) return false;
   const transactionsResolved = params.transactionKeys.every(
     (k) => params.addedKeys.has(k) || params.skippedKeys.has(k) || params.dismissedKeys.has(k),
   );

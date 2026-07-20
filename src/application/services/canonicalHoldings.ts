@@ -7,18 +7,33 @@ import type { CommittedLedgerRepository, RawTransactionRepository } from "@domai
 /**
  * The production read cutover, made safe to run today instead of gated
  * behind a one-time manual sign-off: for each ticker, prefer the canonical
- * (RawTransaction -> ledgerCache -> computeHoldings) result, but fall back to
- * the legacy (Trade/TradeAllocation -> computePositions) result whenever the
- * two disagree or the canonical side has nothing yet. This is
- * systemValidation.ts's own comparison logic (`missing-in-new`/
- * `shares-mismatch`/`cost-basis-mismatch`), applied per read instead of as a
- * one-time gate a human has to manually clear first — the exact concrete
- * risk it exists to catch (a ticker whose RawTransaction verification
- * hasn't reached a terminal verdict yet — e.g. under the closed-position fix
- * from this session's first sprint — would otherwise silently vanish from
- * Holdings/Dashboard/PortfolioDetail the moment the UI stopped reading Trade
- * directly) is why this reconciles on every call rather than trusting the
- * canonical side unconditionally.
+ * (RawTransaction -> ledgerCache -> computeHoldings) result. Legacy
+ * (Trade/TradeAllocation -> computePositions) is used ONLY when the
+ * canonical side has nothing yet for this ticker (verification hasn't
+ * reached a terminal verdict, e.g. under the closed-position fix from an
+ * earlier sprint — the exact concrete risk that would otherwise silently
+ * vanish a position from Holdings/Dashboard/PortfolioDetail the moment the
+ * UI stopped reading Trade directly) or when a canonical-only position has
+ * no matching legacy row at all (the disclosed `moveTrade`/`consolidateTicker`
+ * orphaned-fact gap, unrelated to this rule and not fixed here).
+ *
+ * As of the root-cause fix in docs/ROADMAP.md's investigation, canonical is
+ * trusted UNCONDITIONALLY whenever it has real committed data for a ticker —
+ * including when it disagrees with legacy. Legacy is a DERIVED projection of
+ * the same fact log (ledgerProjection.projectLegacyTicker), never an
+ * independent source of truth, so a disagreement means legacy has drifted,
+ * not that canonical might be wrong: the pure, deterministic replay engines
+ * (ledgerEngine.ts/allocationEngine.ts/holdingsEngine.ts) cannot themselves
+ * disagree with a complete fact log. Silently preferring legacy "until the
+ * discrepancy is resolved" (the pre-fix behavior) was itself the mechanism
+ * that let an already-closed position keep showing open indefinitely, since
+ * nothing ever forced the discrepancy to resolve — see
+ * docs/EXECUTION_GRAPH.md's "Parallel-work rules" and the investigation
+ * entry in docs/ROADMAP.md for the full trace. This is what makes
+ * open/partial/closed a single canonical determination
+ * (holdingsEngine.computeHoldings) that Ledger, Allocation, Holdings, and
+ * Portfolio all derive from — not two independently-computed answers with a
+ * silent tie-break.
  *
  * `source: "legacy-fallback"` is not a failure state to hide — it's the
  * honest signal that this ticker's evidence hasn't been independently
@@ -178,10 +193,41 @@ export async function computeCanonicalPositions(
     if (sharesAgree && costBasisAgrees) {
       result.push({ ...legacyPos, source: "canonical" });
     } else {
+      // Root-cause fix (docs/ROADMAP.md's investigation): trust the
+      // fact-replay side over the legacy Trade/TradeAllocation projection
+      // whenever they disagree and the canonical side has real committed
+      // data for this ticker. The two are never independent alternatives —
+      // legacy is a DERIVED projection of the same fact log
+      // (ledgerProjection.projectLegacyTicker), so a disagreement means the
+      // legacy row has drifted from its own source of truth (a missing
+      // SellAllocationDecision fact, a stale cache, a partial write — see
+      // the investigation for the concrete mechanisms this codebase already
+      // has), never the other way around: the pure, deterministic replay
+      // engines (ledgerEngine.ts/allocationEngine.ts/holdingsEngine.ts)
+      // cannot themselves be wrong given a complete fact log. Previously
+      // this branch showed the (possibly stale) legacy numbers "until the
+      // discrepancy is resolved" — which is exactly the mechanism that let
+      // an already-closed position keep showing open indefinitely, since
+      // nothing ever forced the discrepancy to resolve. This is what makes
+      // Ledger/Allocation/Holdings/Portfolio all derive open/closed state
+      // from the one canonical rule (holdingsEngine.computeHoldings) instead
+      // of legacy silently overriding it on any disagreement.
+      //
+      // `openTrades: []` is the same disclosed limitation the adjacent "no
+      // legacy row" branch above already accepts for a canonical-only
+      // position — canonical has no Trade-shaped per-lot detail to offer,
+      // only the ticker-level totals holdingsEngine.computeHoldings computed.
       result.push({
-        ...legacyPos,
-        source: "legacy-fallback",
-        fallbackReason: `The evidence-first ledger computes ${canonical.totalShares} shares / cost basis ${canonical.costBasis.toFixed(2)} for this ticker, which disagrees with the recorded trades (${legacyPos.totalShares} shares / ${legacyPos.costBasis.toFixed(2)}) — showing the recorded trades until the discrepancy is resolved.`,
+        ticker: canonical.ticker,
+        totalShares: canonical.totalShares,
+        costBasis: canonical.costBasis,
+        avgCost: canonical.avgCost,
+        currentPrice: canonical.currentPrice,
+        marketValue: canonical.marketValue,
+        unrealizedPnl: canonical.unrealizedPnl,
+        unrealizedPnlPct: canonical.unrealizedPnlPct,
+        openTrades: [],
+        source: "canonical",
       });
     }
   }

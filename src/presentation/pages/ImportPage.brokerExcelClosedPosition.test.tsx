@@ -135,6 +135,24 @@ describe("ACAMD regression: a fully-closed, fully-Excel-sourced ticker with noth
     state.rawTransactions = [
       { ...createRawTransaction({ id: "rt1", portfolioId: "p1", kind: "BuyExecution", source: "official-broker-excel", ticker: "ACAMD", payload: { ticker: "ACAMD", shares: 3000, price: 0.38, executionDate: "2022-11-02" } }), seq: 1 },
       { ...createRawTransaction({ id: "rt2", portfolioId: "p1", kind: "SellExecution", source: "official-broker-excel", ticker: "ACAMD", payload: { ticker: "ACAMD", shares: 3000, price: 0.5, executionDate: "2022-11-10" } }), seq: 2 },
+      // The lot allocation itself (ADR-002) — without this, the fixture
+      // describes a Trade whose remainingShares reached 0 with no recorded
+      // decision naming which lot the sell closed, which isn't real data any
+      // write path in this codebase can actually produce (see
+      // rawTransactionFolds.findUnallocatedSellExecutions, the canonical
+      // check this fixture must satisfy for the ticker to legitimately
+      // resolve — docs/ROADMAP.md's root-cause investigation).
+      {
+        ...createRawTransaction({
+          id: "rt3",
+          portfolioId: "p1",
+          kind: "SellAllocationDecision",
+          source: "official-broker-excel",
+          ticker: "ACAMD",
+          payload: { sellExecutionId: "rt2", allocations: [{ lotRef: "rt1", shares: 3000 }] },
+        }),
+        seq: 3,
+      },
     ];
   });
   afterAll(() => setTrackingStartDate(originalTrackingStart));

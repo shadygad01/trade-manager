@@ -470,6 +470,7 @@ describe("isTickerFullyResolved", () => {
         dismissedKeys: new Set(),
         acceptedKeys: new Set(),
         rowErrorKeys: new Set(),
+        hasUnallocatedSells: false,
       }),
     ).toBe(false);
   });
@@ -486,6 +487,7 @@ describe("isTickerFullyResolved", () => {
         dismissedKeys: new Set(),
         acceptedKeys: new Set(),
         rowErrorKeys: new Set(),
+        hasUnallocatedSells: false,
       }),
     ).toBe(false);
   });
@@ -502,11 +504,12 @@ describe("isTickerFullyResolved", () => {
         dismissedKeys: new Set(),
         acceptedKeys: new Set(),
         rowErrorKeys: new Set(),
+        hasUnallocatedSells: false,
       }),
     ).toBe(true);
   });
 
-  it("is false while a sell candidate still needs to be allocated", () => {
+  it("is false while a sell candidate still needs to be allocated (session-tracking not yet added)", () => {
     expect(
       isTickerFullyResolved({
         matched: true,
@@ -518,8 +521,51 @@ describe("isTickerFullyResolved", () => {
         dismissedKeys: new Set(),
         acceptedKeys: new Set(),
         rowErrorKeys: new Set(),
+        hasUnallocatedSells: false,
       }),
     ).toBe(false);
+  });
+
+  // Root-cause regression test (docs/ROADMAP.md's investigation): a sell row
+  // can be tracked "added" in this session's own bookkeeping the moment
+  // TradeService.recordSell *returns*, even on a run where its underlying
+  // fact-log write silently failed (see TradeService.ensureSellFacts) — so
+  // session tracking alone was never sufficient proof the allocation
+  // actually persisted. This is the exact gap that let a ticker report
+  // "fully matched" in Import while Holdings still showed the full,
+  // unallocated gross Buy total.
+  it("is false while the fact log has an unallocated sell, even when every row is tracked as added in this session", () => {
+    expect(
+      isTickerFullyResolved({
+        matched: true,
+        transactionKeys: ["buy-1", "sell-1"],
+        dividendKeys: [],
+        verificationKeys: [],
+        addedKeys: new Set(["buy-1", "sell-1"]),
+        skippedKeys: new Set(),
+        dismissedKeys: new Set(),
+        acceptedKeys: new Set(),
+        rowErrorKeys: new Set(),
+        hasUnallocatedSells: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true once the fact log confirms every sell is allocated too, all else being resolved", () => {
+    expect(
+      isTickerFullyResolved({
+        matched: true,
+        transactionKeys: ["buy-1", "sell-1"],
+        dividendKeys: [],
+        verificationKeys: [],
+        addedKeys: new Set(["buy-1", "sell-1"]),
+        skippedKeys: new Set(),
+        dismissedKeys: new Set(),
+        acceptedKeys: new Set(),
+        rowErrorKeys: new Set(),
+        hasUnallocatedSells: false,
+      }),
+    ).toBe(true);
   });
 
   it("counts a skipped exact-duplicate buy and a manually dismissed row as resolved, not just an added one", () => {
@@ -534,6 +580,7 @@ describe("isTickerFullyResolved", () => {
         dismissedKeys: new Set(["buy-2"]),
         acceptedKeys: new Set(),
         rowErrorKeys: new Set(),
+        hasUnallocatedSells: false,
       }),
     ).toBe(true);
   });
@@ -546,6 +593,7 @@ describe("isTickerFullyResolved", () => {
       skippedKeys: new Set<string>(),
       dismissedKeys: new Set<string>(),
       rowErrorKeys: new Set<string>(),
+      hasUnallocatedSells: false,
     };
     expect(
       isTickerFullyResolved({ ...base, dividendKeys: ["div-1"], verificationKeys: [], acceptedKeys: new Set() }),
@@ -567,6 +615,7 @@ describe("isTickerFullyResolved", () => {
         dismissedKeys: new Set(),
         acceptedKeys: new Set(),
         rowErrorKeys: new Set(["buy-1"]),
+        hasUnallocatedSells: false,
       }),
     ).toBe(false);
   });

@@ -63,11 +63,20 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
     expect(comi.totalShares).toBe(100);
   });
 
-  it("a ticker where the canonical ledger DISAGREES with the recorded trades falls back to the recorded trades, with an explanatory reason naming both numbers", async () => {
+  it("a ticker where the canonical ledger DISAGREES with the recorded trades trusts the canonical ledger, not the recorded trades (root-cause fix)", async () => {
     // Isolates the reconciliation logic itself: a real Trade (50 shares) and
     // a directly-injected, already-committed ledgerCache entry that
     // disagrees with it (80 shares) — the shape a genuine divergence between
     // the two systems would take, regardless of how it got there.
+    //
+    // Legacy is a DERIVED projection of the same fact log, never an
+    // independent source of truth — a disagreement means legacy has drifted
+    // (e.g. a silently-failed SellAllocationDecision write, a stale cache),
+    // never that the pure replay engines are wrong. Previously this fell
+    // back to legacy "until the discrepancy is resolved," which is exactly
+    // the mechanism that let an already-closed position keep showing open
+    // indefinitely, since nothing ever forced the discrepancy to resolve
+    // (see docs/ROADMAP.md's root-cause investigation).
     const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Investment", initialCash: 100_000 });
     const base = createFakeRepositories({ portfolios: [portfolio] });
     const rawTransactions = createFakeRawTransactionRepository();
@@ -85,9 +94,37 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
     const positions = await computeCanonicalPositions(repos, "p1", {});
 
     const hrho = positions.find((p) => p.ticker === "HRHO")!;
-    expect(hrho.source).toBe("legacy-fallback");
-    expect(hrho.totalShares).toBe(50); // the recorded trade's own number, never silently replaced
-    expect(hrho.fallbackReason).toContain("disagrees");
+    expect(hrho.source).toBe("canonical");
+    expect(hrho.totalShares).toBe(80); // the canonical (fact-replay) number, trusted over the drifted legacy row
+    expect(hrho.openTrades).toEqual([]); // disclosed limitation: canonical has no Trade-shaped per-lot detail to offer
+  });
+
+  it("a PARTIALLY closed position shows the canonical partial share count, not the stale legacy one — the disagreement fix isn't just open-vs-closed", async () => {
+    // A real Buy of 100 shares with a real 40-share Sell allocated at the
+    // fact level (canonical correctly says 60 open) alongside a legacy Trade
+    // row still showing all 100 as open (e.g. the exact silent-regression
+    // shape docs/ROADMAP.md's investigation traced: a SellAllocationDecision
+    // fact existed and was correctly replayed into the cache, but the legacy
+    // projection never caught up).
+    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Investment", initialCash: 100_000 });
+    const base = createFakeRepositories({ portfolios: [portfolio] });
+    const rawTransactions = createFakeRawTransactionRepository();
+    const committedLedger = createFakeCommittedLedgerRepository();
+    const repos = { ...base, rawTransactions, committedLedger };
+
+    await recordBuy(repos, { portfolioId: "p1", ticker: "ORAS", shares: 100, entryPrice: 10, executionDate: "2026-03-01", executionTime: "09:00" });
+    await committedLedger.commitTicker({
+      portfolioId: "p1",
+      ticker: "ORAS",
+      events: [{ type: "LotOpened", eventId: "ORAS|BUY|2026-03-01|100|10", executionDate: "2026-03-01", ticker: "ORAS", shares: 100, price: 10, sourceTransactionIds: ["x"] }],
+      allocations: [{ id: "a1", sellEventId: "sell-1", lotEventId: "ORAS|BUY|2026-03-01|100|10", shares: 40, price: 12, fees: 0, taxes: 0, executionDate: "2026-03-05" }],
+    });
+
+    const positions = await computeCanonicalPositions(repos, "p1", {});
+
+    const oras = positions.find((p) => p.ticker === "ORAS")!;
+    expect(oras.source).toBe("canonical");
+    expect(oras.totalShares).toBe(60); // 100 - 40 allocated, the canonical partial-close number
   });
 
   it("a ticker the canonical ledger has confidently closed (real committed Buy + a fully-covering Sell allocation) never shows as open, even when a stale legacy Trade row still has shares", async () => {
