@@ -3794,3 +3794,49 @@ attempted.
   probability — these are delete/rename operations without recordBuy/recordSell's cash-movement side
   effects — but not yet proven safe); then decide whether to fund the six-duplicate-detection-mechanism
   consolidation as its own, properly-scoped sprint.
+
+### The two "pre-existing flaky" Import tests, finally root-caused and fixed (not just documented)
+
+Every prior entry in this log that mentioned `ImportPage.brokerExcelLoadRace.test.tsx`/
+`ImportPage.aggregateStatement.test.tsx` treated them as pre-existing, environment-dependent flakiness and
+moved on. PR #139's CI run forced the question by failing 4 times in a row on the exact same pair — this
+entry actually root-caused both instead of retrying past them again.
+
+**`ImportPage.brokerExcelLoadRace.test.tsx`**: two real, independent bugs in the test itself, found by
+direct instrumentation (temporary trace `console.log`s in `ImportPage.tsx`, since deleted — not a
+production change):
+1. The test calls `resolveRawTransactions?.()` immediately after `render()`, assuming
+   `dexie-react-hooks`' `useLiveQuery` invokes its fetcher synchronously within that call. It doesn't —
+   confirmed empirically (`resolveRawTransactions` is `undefined` immediately after `render()`, becomes
+   defined ~200ms later) — so the original call was a silent no-op, permanently stranding the mocked
+   promise pending and `existingRawTransactions` empty for the rest of the test.
+2. The fixture's `state.rawTransactions` had a Buy+Sell pair with no `SellAllocationDecision` fact — the
+   same ADR-002-invalid shape already fixed in the sibling
+   `ImportPage.brokerExcelClosedPosition.test.tsx` fixture two entries ago, just missed in this file at the
+   time.
+   But the actual reason the ticker card never appeared at all (not even in its correct, unresolved form)
+   was architectural, not a test bug: `ImportPage.tsx`'s `reviewDataSettled` gate (`initialDataLoaded`
+   requires `existingRawTransactionsRaw !== undefined` among every other query; the whole ticker-groups
+   section renders only once `reviewDataSettled && tickerGroups.length > 0`) now hides every ticker card —
+   right or wrong — until every query has settled, including the deliberately-held-open rawTransactions
+   one. This is a *later*, stricter, and better fix for the exact bug this test was originally written to
+   catch (a ticker flashing an incorrect badge mid-load) — the test's own premise ("ACAMD should be visible
+   with correct badges while rawTransactions is still loading") describes behavior the app no longer has,
+   by design, documented in `ImportPage.tsx`'s own comment on `reviewDataSettled`. Rewrote the test to
+   assert the current, correct contract instead: no ticker card of any kind renders until the gate
+   releases, and it settles straight to "Fully matched" once it does.
+
+**`ImportPage.aggregateStatement.test.tsx`**: no logic bug — the first `waitFor` (default 1000ms RTL
+timeout, no explicit override) and a bare synchronous `getAllByText` immediately after it both raced
+`reviewDataSettled`'s own gate under a loaded/resource-constrained runner. Wrapped both assertions in an
+explicit 8000ms `waitFor`, matching the timeout this suite's other race-condition tests
+(`ImportPage.multiBuySameTickerRace`/`inFlightDuplicateRace`/`brokerExcelProvenanceUpgrade.test.tsx`)
+already use for the identical reason.
+
+**Verification**: both fixed files run clean 10/10 in immediate repetition (previously 100% reproducible
+failures in this sandbox). Full suite re-run twice back to back: 125/125 files, 1131 passed, 2 skipped, 0
+failed both times — the first genuinely all-green full-suite run this repo has had in this session's entire
+history of entries mentioning these two files.
+
+- **Files changed this entry**: `ImportPage.brokerExcelLoadRace.test.tsx`,
+  `ImportPage.aggregateStatement.test.tsx` (both test-only; no production code changed).

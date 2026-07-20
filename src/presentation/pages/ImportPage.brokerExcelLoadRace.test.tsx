@@ -13,15 +13,23 @@ import { getTrackingStartDate, setTrackingStartDate } from "@domain/value-object
  * A fully-closed, fully-official-broker-excel-sourced ticker with nothing
  * left pending this session (the ACAMD/CLHO shape) depends ENTIRELY on
  * existingRawTransactions to be recognized as broker-excel-verified — if
- * every OTHER query has already resolved but that ONE hasn't yet, the ticker
- * would (before this fix) transiently but visibly read as "closed-position,
- * unmatched" — "Closed — needs corroborating evidence" — purely because its
- * default-empty [] read can never satisfy
- * isTickerFullyOfficialBrokerExcelSourced. This is a real, reproducible
- * instance of the broker-record trust policy being bypassed by a data race,
- * not by wrong decision logic — see docs/ROADMAP.md's "Architectural audit"
- * entry. Reproduced here by holding rawTransactions.getAll()'s promise open
- * while every other query resolves immediately.
+ * every OTHER query resolved but that ONE hadn't yet, the ticker used to
+ * transiently but visibly read as "closed-position, unmatched" — "Closed —
+ * needs corroborating evidence" — purely because its default-empty [] read
+ * could never satisfy isTickerFullyOfficialBrokerExcelSourced. See
+ * docs/ROADMAP.md's "Architectural audit" entry for the original finding.
+ *
+ * The fix that shipped for this is `reviewDataSettled`
+ * (ImportPage.tsx: `initialDataLoaded` requires
+ * `existingRawTransactionsRaw !== undefined` among every other query, and the
+ * entire ticker-groups section is gated on `reviewDataSettled &&
+ * tickerGroups.length > 0`) — stricter than "show correct data immediately":
+ * nothing renders AT ALL until every one of those queries, including
+ * rawTransactions, has settled. This test still holds rawTransactions'
+ * query open while every other query resolves immediately, to prove the
+ * gate actually works: no ticker card of any kind — right or wrong — may
+ * appear until it's released, and the ticker settles to "Fully matched"
+ * immediately once it is.
  */
 const state = vi.hoisted(() => ({
   portfolios: [] as Portfolio[],
@@ -143,25 +151,64 @@ describe("ImportPage load-order race: a fully-closed, fully-Excel-sourced ticker
     state.rawTransactions = [
       { ...createRawTransaction({ id: "rt1", portfolioId: "p1", kind: "BuyExecution", source: "official-broker-excel", ticker: "ACAMD", payload: { ticker: "ACAMD", shares: 3000, price: 0.38, executionDate: "2022-11-02" } }), seq: 1 },
       { ...createRawTransaction({ id: "rt2", portfolioId: "p1", kind: "SellExecution", source: "official-broker-excel", ticker: "ACAMD", payload: { ticker: "ACAMD", shares: 3000, price: 0.5, executionDate: "2022-11-10" } }), seq: 2 },
+      // The lot allocation itself (ADR-002: allocation is always an explicit
+      // fact, never inferred from net-share arithmetic alone) — without this,
+      // rawTransactionFolds.findUnallocatedSellExecutions correctly reports
+      // rt2 as still-unallocated, and the ticker can never reach "Fully
+      // matched" regardless of how the load race below resolves. Buy+Sell
+      // facts with no backing decision is an invalid, unrealistic fixture
+      // shape per this app's own data model (see the sibling
+      // ImportPage.brokerExcelClosedPosition.test.tsx fixture, fixed the
+      // same way).
+      {
+        ...createRawTransaction({
+          id: "rt3",
+          portfolioId: "p1",
+          kind: "SellAllocationDecision",
+          source: "official-broker-excel",
+          ticker: "ACAMD",
+          payload: { sellExecutionId: "rt2", allocations: [{ lotRef: "rt1", shares: 3000 }] },
+        }),
+        seq: 3,
+      },
     ];
   });
   afterAll(() => setTrackingStartDate(originalTrackingStart));
 
-  it("never shows 'Closed — needs corroborating evidence' or 'Needs broker screenshot' while rawTransactions is still loading, and settles to Fully matched once it resolves", async () => {
+  it("shows no ticker card at all — right or wrong — until every query including rawTransactions settles, then settles directly to Fully matched", async () => {
     render(<ImportPage />);
 
+    // dexie-react-hooks' useLiveQuery doesn't invoke its fetcher
+    // synchronously within render() — it schedules the first run a tick (or
+    // several) later, so `resolveRawTransactions` isn't assigned the instant
+    // render() returns. Wait for the real fetcher to actually run and
+    // capture it before ever trying to call it — calling it too early is a
+    // silent no-op that leaves the held-open promise pending forever.
+    await waitFor(() => expect(resolveRawTransactions).toBeDefined(), { timeout: 8000 });
+
     // The other five queries have already resolved (they're plain
-    // Promise.resolve()s); rawTransactions has not. This is the exact
-    // window the bug lived in.
-    await waitFor(() => expect(screen.getByText("ACAMD")).toBeInTheDocument());
+    // Promise.resolve()s); rawTransactions has not — reviewDataSettled's own
+    // `initialDataLoaded` check requires it too, so the entire ticker
+    // section (gated on `reviewDataSettled && tickerGroups.length > 0`)
+    // must stay hidden through this whole window. No stale/incorrect badge
+    // to assert against — nothing renders at all, which is the actual
+    // current fix for the load-order race this test exists to guard.
+    expect(screen.queryByText("ACAMD")).toBeNull();
     expect(screen.queryByText("Closed — needs corroborating evidence")).toBeNull();
     expect(screen.queryByText(/Closes this gap/)).toBeNull();
     expect(screen.queryByText("Needs broker screenshot")).toBeNull();
 
     resolveRawTransactions?.();
 
-    await screen.findByText(/Fully matched \(1\)/);
+    // ImportPage's own initial render does substantial synchronous work
+    // (many useMemo passes over a large component tree) — under a loaded/
+    // resource-constrained runner this can take noticeably longer than RTL's
+    // 1000ms default `waitFor` timeout, same reasoning as this file's
+    // sibling race-condition tests (ImportPage.multiBuySameTickerRace/
+    // inFlightDuplicateRace/brokerExcelProvenanceUpgrade.test.tsx), which
+    // already use an explicit longer timeout for exactly this reason.
+    await screen.findByText(/Fully matched \(1\)/, {}, { timeout: 8000 });
     expect(screen.queryByText("Closed — needs corroborating evidence")).toBeNull();
     expect(screen.queryByText("Needs broker screenshot")).toBeNull();
-  });
+  }, 15000);
 });

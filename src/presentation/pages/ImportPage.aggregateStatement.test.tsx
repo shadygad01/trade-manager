@@ -156,15 +156,26 @@ describe("Statement Aggregate Reconciliation, end to end", () => {
   it("confirms a Statement row (8,000) against two same-day Orders executions (5,000 + 3,000) with no broker screenshot, without treating the Statement row as a third trade", async () => {
     render(<ImportPage />);
 
-    // The "Confirmed by Statement" badges render as soon as the aggregate
-    // match is found (independent of the ledger data useLiveQuery still
-    // loading) — but the ticker only flips off "Needs broker screenshot"
-    // once the Statement row is actually auto-skipped, which is gated on
-    // that same ledger data (initialDataLoaded) resolving one tick later.
-    await waitFor(() => expect(screen.queryByText("Needs broker screenshot")).toBeNull());
+    // The whole ticker-groups section (ImportPage.tsx's `reviewDataSettled`
+    // gate) stays hidden until every useLiveQuery — including the ledger
+    // data this aggregate match itself doesn't strictly need — has settled,
+    // so neither "Needs broker screenshot" going away nor the "Confirmed by
+    // Statement" badges appearing is guaranteed by the time the FIRST one is
+    // observed; both become true together on the render `reviewDataSettled`
+    // flips on. ImportPage's own initial render does substantial synchronous
+    // work (many useMemo passes over a large component tree), which can
+    // exceed RTL's 1000ms default `waitFor` timeout under a loaded/resource-
+    // constrained runner — same reasoning as this suite's other race-
+    // condition tests (e.g. ImportPage.brokerExcelLoadRace.test.tsx), which
+    // use an explicit longer timeout for exactly this reason.
+    await waitFor(() => expect(screen.queryByText("Needs broker screenshot")).toBeNull(), { timeout: 8000 });
     expect(screen.queryByText("Mismatch")).toBeNull();
 
-    const badges = screen.getAllByText("Confirmed by Statement");
+    const badges = await waitFor(() => {
+      const found = screen.getAllByText("Confirmed by Statement");
+      expect(found).toHaveLength(2);
+      return found;
+    }, { timeout: 8000 });
     expect(badges).toHaveLength(2);
 
     // The Statement row itself never renders as its own candidate row (it
@@ -175,5 +186,5 @@ describe("Statement Aggregate Reconciliation, end to end", () => {
     expect(screen.getByText("5,000 sh")).toBeInTheDocument();
     expect(screen.getByText("3,000 sh")).toBeInTheDocument();
     expect(screen.queryByText("8,000 sh")).toBeNull();
-  });
+  }, 15000);
 });
