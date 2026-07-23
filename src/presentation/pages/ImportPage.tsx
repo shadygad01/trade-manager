@@ -1346,89 +1346,7 @@ export function ImportPage() {
     for (const entry of officialSells) {
       commitLock.acquire(entry.key);
       try {
-        const currentAllocations = await repos.allocations.getAll();
-        const duplicate = findDuplicateSellMatch(entry.candidate, currentAllocations);
-        if (duplicate && (duplicate.matchType === "exact" || pricesWithinOcrNoise(duplicate.matchedPrice, entry.candidate.price))) {
-          batchState.skippedKeys.push(entry.key);
-          continue;
-        }
-
-        const alreadyAllocatedShares = alreadyAllocatedSharesForSell(entry.candidate, currentAllocations);
-        const sharesToAllocate = entry.candidate.shares - alreadyAllocatedShares;
-        if (sharesToAllocate <= 0) {
-          batchState.skippedKeys.push(entry.key);
-          continue;
-        }
-
-        const openLots = (await repos.trades.getByPortfolio(portfolioId))
-          .filter(
-            (trade) =>
-              normalizeTicker(trade.ticker) === ticker &&
-              trade.remainingShares > 0 &&
-              isLotEligibleForSell(trade, entry.candidate),
-          )
-          .sort(
-            (a, b) =>
-              a.executionDate.localeCompare(b.executionDate) ||
-              a.executionTime.localeCompare(b.executionTime),
-          );
-
-        let remainingToSell = sharesToAllocate;
-        const lines: { tradeId: string; shares: number }[] = [];
-        for (const lot of openLots) {
-          if (remainingToSell <= 0) break;
-          const shares = Math.min(lot.remainingShares, remainingToSell);
-          if (shares <= 0) continue;
-          lines.push({ tradeId: lot.id, shares });
-          remainingToSell -= shares;
-        }
-        if (remainingToSell > 0) {
-          throw new Error(
-            `Official broker sell cannot be allocated: need ${sharesToAllocate} remaining shares, only ${sharesToAllocate - remainingToSell} eligible open shares for ${ticker}.`,
-          );
-        }
-
-        const totalShares = entry.candidate.shares;
-        const result = await recordSell(
-          repos,
-          {
-            portfolioId,
-            ticker,
-            allocations: lines.map((line) => ({
-              tradeId: line.tradeId,
-              shares: line.shares,
-              exitPrice: entry.candidate.price,
-              fees: ((entry.candidate.fees ?? 0) / totalShares) * line.shares,
-              taxes: ((entry.candidate.taxes ?? 0) / totalShares) * line.shares,
-            })),
-            executionDate: entry.candidate.date,
-            executionTime: entry.candidate.time ?? "00:00",
-            transactionNumber: entry.candidate.transactionNumber,
-            source: entry.candidate.source,
-            deferCommit: true,
-          },
-          diagnostics,
-        );
-        batchState.addedKeys.push(entry.key);
-        batchState.addedAllocationIds[entry.key] = result.allocations.map((allocation) => allocation.id);
-      } catch (e) {
-        // One sell candidate lacking enough eligible open lots (e.g. its
-        // buy side fell outside the tracking window, or was itself an
-        // unreconstructable "invest by EGP amount" order — see
-        // ThndrOrdersWorkbookParser's own skippedValueOrders warning) must
-        // never abort every OTHER sell in this same official-broker-excel
-        // batch: this used to be an uncaught throw here, which stopped this
-        // `for` loop dead — silently skipping every sell queued after the
-        // failing one and skipping the commitTicker() rebuild below
-        // entirely, so this ticker's already-recorded buys sat with zero
-        // sells applied, showing as a fully open position in Holdings
-        // despite the broker's own export proving it closed. Surfaced as a
-        // normal row error instead (same as every other Import row failure)
-        // so the specific unresolvable sell stays visible for the user to
-        // investigate, while every other sell — for this ticker and, via
-        // confirmAndDistributeAll's own matching per-ticker isolation,
-        // every other ticker — still gets allocated.
-        setRowError(entry.key, e);
+        await commitOfficialBrokerSell(entry, ticker, portfolioId, batchState);
       } finally {
         commitLock.release(entry.key);
       }
@@ -1445,6 +1363,102 @@ export function ImportPage() {
       addedTradeIds: { ...prev.addedTradeIds, ...batchState.addedTradeIds },
       addedAllocationIds: { ...prev.addedAllocationIds, ...batchState.addedAllocationIds },
     }));
+  }
+
+  /**
+   * Allocates one native-Thndr-workbook sell against this ticker's open
+   * lots in execution-date FIFO order, same policy as Smart Allocate — see
+   * commitTickerGroupLocked's own call site for why this only ever runs
+   * after that function's buy-side transaction has already committed
+   * (`repos.trades.getByPortfolio` here must see this batch's own just-
+   * written buys as eligible open lots).
+   */
+  async function commitOfficialBrokerSell(entry: CandidateEntry, ticker: string, portfolioId: string, batch: ConfirmBatchState) {
+    try {
+      const currentAllocations = await repos.allocations.getAll();
+      const duplicate = findDuplicateSellMatch(entry.candidate, currentAllocations);
+      if (duplicate && (duplicate.matchType === "exact" || pricesWithinOcrNoise(duplicate.matchedPrice, entry.candidate.price))) {
+        batch.skippedKeys.push(entry.key);
+        return;
+      }
+
+      const alreadyAllocatedShares = alreadyAllocatedSharesForSell(entry.candidate, currentAllocations);
+      const sharesToAllocate = entry.candidate.shares - alreadyAllocatedShares;
+      if (sharesToAllocate <= 0) {
+        batch.skippedKeys.push(entry.key);
+        return;
+      }
+
+      const openLots = (await repos.trades.getByPortfolio(portfolioId))
+        .filter(
+          (trade) =>
+            normalizeTicker(trade.ticker) === ticker &&
+            trade.remainingShares > 0 &&
+            isLotEligibleForSell(trade, entry.candidate),
+        )
+        .sort(
+          (a, b) =>
+            a.executionDate.localeCompare(b.executionDate) ||
+            a.executionTime.localeCompare(b.executionTime),
+        );
+
+      let remainingToSell = sharesToAllocate;
+      const lines: { tradeId: string; shares: number }[] = [];
+      for (const lot of openLots) {
+        if (remainingToSell <= 0) break;
+        const shares = Math.min(lot.remainingShares, remainingToSell);
+        if (shares <= 0) continue;
+        lines.push({ tradeId: lot.id, shares });
+        remainingToSell -= shares;
+      }
+      if (remainingToSell > 0) {
+        throw new Error(
+          `Official broker sell cannot be allocated: need ${sharesToAllocate} remaining shares, only ${sharesToAllocate - remainingToSell} eligible open shares for ${ticker}.`,
+        );
+      }
+
+      const totalShares = entry.candidate.shares;
+      const result = await recordSell(
+        repos,
+        {
+          portfolioId,
+          ticker,
+          allocations: lines.map((line) => ({
+            tradeId: line.tradeId,
+            shares: line.shares,
+            exitPrice: entry.candidate.price,
+            fees: ((entry.candidate.fees ?? 0) / totalShares) * line.shares,
+            taxes: ((entry.candidate.taxes ?? 0) / totalShares) * line.shares,
+          })),
+          executionDate: entry.candidate.date,
+          executionTime: entry.candidate.time ?? "00:00",
+          transactionNumber: entry.candidate.transactionNumber,
+          source: entry.candidate.source,
+          deferCommit: true,
+        },
+        diagnostics,
+      );
+      batch.addedKeys.push(entry.key);
+      batch.addedAllocationIds[entry.key] = result.allocations.map((allocation) => allocation.id);
+    } catch (e) {
+      // One sell candidate lacking enough eligible open lots (e.g. its
+      // buy side fell outside the tracking window, or was itself an
+      // unreconstructable "invest by EGP amount" order — see
+      // ThndrOrdersWorkbookParser's own skippedValueOrders warning) must
+      // never abort every OTHER sell in this same official-broker-excel
+      // batch: this used to be an uncaught throw here, which stopped this
+      // `for` loop dead — silently skipping every sell queued after the
+      // failing one and skipping the commitTicker() rebuild below
+      // entirely, so this ticker's already-recorded buys sat with zero
+      // sells applied, showing as a fully open position in Holdings
+      // despite the broker's own export proving it closed. Surfaced as a
+      // normal row error instead (same as every other Import row failure)
+      // so the specific unresolvable sell stays visible for the user to
+      // investigate, while every other sell — for this ticker and, via
+      // confirmAndDistributeAll's own matching per-ticker isolation,
+      // every other ticker — still gets allocated.
+      setRowError(entry.key, e);
+    }
   }
 
   /**
