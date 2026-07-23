@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { UploadCloud, FileText, ShieldCheck, CheckCircle2, Loader2, RotateCcw, Trash2, Eraser, ChevronDown } from "lucide-react";
+import { ShieldCheck, Loader2, RotateCcw, Trash2, Eraser, ChevronDown } from "lucide-react";
 import { repos, diagnostics, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
 import { recordBuy, recordBuyBatch, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
@@ -68,6 +68,7 @@ import { useImportQueries } from "@presentation/hooks/useImportQueries";
 import { useCommitLock } from "@presentation/hooks/useCommitLock";
 import { useCommitQueue } from "@presentation/hooks/useCommitQueue";
 import { TickerGroupCard } from "@presentation/components/TickerGroupCard";
+import { ImportUploadPanel } from "@presentation/components/ImportUploadPanel";
 export { CandidateRow } from "@presentation/components/CandidateRow";
 export { AutoCommitRow } from "@presentation/components/AutoCommitRow";
 export { TickerGroupCard } from "@presentation/components/TickerGroupCard";
@@ -2436,96 +2437,23 @@ export function ImportPage() {
         />
       ) : null}
 
-      <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-        <h3 className="mb-3 text-sm font-semibold text-slate-200">{t("importPage.step1Title")}</h3>
-
-        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
-          <label htmlFor="import-start-year" className="font-medium text-slate-300">
-            {t("importPage.startDateLabel")}
-          </label>
-          <select
-            id="import-start-year"
-            value={trackingStartDate.slice(0, 4)}
-            onChange={(e) => trackingStartDateStore.set(`${e.target.value}-01-01`)}
-            className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-sm text-slate-100"
-          >
-            {startYearOptions.map((y) => (
-              <option key={y} value={y}>
-                {y}
-              </option>
-            ))}
-          </select>
-          <span>{t("importPage.startDateHint", { date: trackingStartDate })}</span>
-        </div>
-
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragOver(true);
-          }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragOver(false);
-            const dropped = Array.from(e.dataTransfer.files ?? []);
-            if (dropped.length > 0) void processFiles(dropped);
-          }}
-          className={`flex flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
-            dragOver ? "border-cyan-400 bg-cyan-500/5" : "border-slate-800 bg-slate-950/40"
-          }`}
-        >
-          <UploadCloud size={28} className="text-slate-500" />
-          <p className="text-sm font-medium text-slate-200">{t("importPage.dropzoneText")}</p>
-          <p className="text-xs text-slate-500">{t("importPage.or")}</p>
-          <label className="cursor-pointer rounded-md bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400">
-            {t("importPage.chooseFiles")}
-            <input
-              type="file"
-              multiple
-              accept="image/*,application/pdf,text/csv,.csv,.xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              className="hidden"
-              onChange={(e) => {
-                const chosen = Array.from(e.target.files ?? []);
-                if (chosen.length > 0) void processFiles(chosen);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          {queueProgress ? (
-            <div className="mt-1 flex items-center gap-2 text-sm text-slate-300">
-              <Loader2 size={14} className="animate-spin" />
-              <FileText size={14} /> {t("importPage.processingProgress", { index: queueProgress.index, total: queueProgress.total, fileName: queueProgress.fileName })}
-            </div>
-          ) : null}
-          {stage === "error" ? <p className="text-sm text-rose-400">{errorMessage}</p> : null}
-        </div>
-
-        {recentFileResults.length > 0 && stage !== "reading" ? (
-          <div className="mt-3 space-y-1.5">
-            {recentFileResults.map((r, i) => (
-              <div key={i} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">
-                <span className="font-medium text-slate-300">{r.fileName}</span>
-                {r.duplicate ? (
-                  <span className="ms-2 text-cyan-400">{t("importPage.duplicateFileSkipped")}</span>
-                ) : r.warnings.length > 0 ? (
-                  <ul className="mt-1 list-inside list-disc space-y-0.5 text-amber-300/80">
-                    {r.warnings.map((w, wi) => (
-                      <li key={wi}>{w}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <span className="ms-2 text-emerald-400">{t("importPage.extractedSuccessfully")}</span>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : null}
-
-        <p className="mt-3 flex items-center gap-2 text-sm text-slate-300">
-          {totalPending > 0 || pendingOrderEvidences.length > 0 ? <CheckCircle2 size={15} className="text-emerald-400" /> : null}
-          {t("importPage.extractedSummary", { n: totalPending, orderRows: pendingOrderEvidences.length, files: filesProcessed })}
-        </p>
-      </div>
+      <ImportUploadPanel
+        trackingStartDate={trackingStartDate}
+        startYearOptions={startYearOptions}
+        onStartYearChange={(year) => trackingStartDateStore.set(`${year}-01-01`)}
+        dragOver={dragOver}
+        onDragOver={() => setDragOver(true)}
+        onDragLeave={() => setDragOver(false)}
+        onDropFiles={(files) => void processFiles(files)}
+        onChooseFiles={(files) => void processFiles(files)}
+        queueProgress={queueProgress}
+        stage={stage}
+        errorMessage={errorMessage}
+        recentFileResults={recentFileResults}
+        totalPending={totalPending}
+        pendingOrderEvidenceCount={pendingOrderEvidences.length}
+        filesProcessed={filesProcessed}
+      />
 
       {reviewDataSettled && tickerGroups.length > 0 ? (
         <div className="mt-4 space-y-4">
