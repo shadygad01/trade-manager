@@ -40,6 +40,7 @@ git diff --check
 - `dividendDuplicateDetection.ts` — split out of `duplicateDetection.ts`: `dividendContentKey`, `buildExistingDividendKeys`, `isDividendAlreadyRecorded`, `suggestDuplicateDividendIdsToDelete`. `duplicateDetection.ts` re-exports all four. Own `dividendDuplicateDetection.test.ts`.
 - `wrongTickerHints.ts` — split out of `duplicateDetection.ts`: `findWrongTickerCandidateKeys`, `findDateMisreadDuplicateHints`, and their private `wrongTickerConfidenceRank`/`datesLikelyOcrMisread` helpers. `duplicateDetection.ts` re-exports both. Own `wrongTickerHints.test.ts`.
 - `officialBrokerRepair.ts` — split out of `commitEngine.ts`: `findOfficialBrokerDuplicateIds`, `retractOfficialBrokerDuplicates`, `convergeOfficialBrokerAuthority`, `repairOfficialBrokerSellAllocations`, and their private `executionOrder`/`buyKey`/`sellKey`/`lotWasOpenBeforeSell` helpers. Imports `CommitEngineRepos`/`resolveCurrentPortfolioId` back from `commitEngine.ts` (a deliberate two-way type/function import, safe since neither module calls the other at top level — see that commit's message for the full reasoning). `commitEngine.ts` re-exports `convergeOfficialBrokerAuthority`/`repairOfficialBrokerSellAllocations`.
+- `duplicateAuthorityReconciliation.ts` — split out of `commitEngine.ts`: `reconcileDuplicateAuthority` (~207 lines), called from exactly one place inside `commitTicker` (right after `ensureLegacyFactsExist`, inside its existing non-fatal try/catch, untouched). Same two-way type-only import pattern as `officialBrokerRepair.ts`. This move also fixed a pre-existing misplaced-comment bug — the function's large doc comment (twin-lot guard, canonicalKey convergence, authorityRank tie-breaking) had been sitting above `executionOrder`'s old position in `commitEngine.ts`, not above `reconcileDuplicateAuthority` itself; it now sits directly above the function it actually describes.
 
 For all four of the above: pure move + re-export, zero logic change, each verified against the full suite plus the specific test files that exercise that code path.
 
@@ -72,7 +73,7 @@ Several older files (`ImportPage.test.tsx`, `duplicateDetection.ts`/`.test.ts`, 
 
 ## Latest checkpoint
 
-All of the above passed, as of commit `be76a95`:
+All of the above passed, as of commit `f7f7455` — **locked**; the session stopped here deliberately rather than continuing further into `commitTicker`/`appendAndMaybeCommit` itself:
 
 - TypeScript
 - Project lint
@@ -80,6 +81,9 @@ All of the above passed, as of commit `be76a95`:
 - Full Vitest suite: 131 test files, 1119 tests passed, 2 skipped (same pre-existing skips as always — see below)
 - Production Vite build
 - `git diff --check`
+- Additionally verified beyond the standard gate: the production build was served with `vite preview` and both the HTML shell and the main JS/CSS bundles loaded with HTTP 200 (confirms the circular imports introduced by the `officialBrokerRepair.ts`/`duplicateAuthorityReconciliation.ts` splits resolve correctly in the actual bundler output, not just under `tsc`/Vitest).
+
+Also added this session: `duplicateAuthorityReconciliation.ts` (split out of `commitEngine.ts`, see below).
 
 Known existing test output includes non-fatal `canonicalHoldings` fallback warnings and the intentionally unapproved determinism golden warning (`determinism.golden.json is NOT approved`). Pre-existing, do not "fix" as part of this refactor.
 
@@ -97,8 +101,8 @@ Known existing test output includes non-fatal `canonicalHoldings` fallback warni
 The presentation-layer extraction (goal 1 and most of goal 4) is essentially complete for `ImportPage`/`TickerGroupCard`. Straightforward file-splitting of pure/stateless application-layer functions is well underway. What's left is the genuinely hard core:
 
 1. **`processBatch()` inside `commitTickerGroupLocked` (ImportPage.tsx, goal 2).** The buy loop → `recordBuyBatch` → dividend loop → verification loop → `assignPortfolio` sweep sequence. The doc comments explain a real, reproduced duplicate-Trade bug caused by running the portfolio-assignment sweep in the wrong position relative to the other three loops (it reactively re-triggers `commitEngine`'s own commit path). Untouched. Any decomposition here must preserve this exact ordering.
-2. **`commitTicker`/`appendAndMaybeCommit`/`shouldCommit`/`assignPortfolio`/`assignPortfolioToFact`/`retractRawTransaction` (commitEngine.ts, goal 3).** The reactive commit-trigger core. `reconcileDuplicateAuthority` (896–1111, ~215 lines) is a large, still-untouched candidate for its own file split — it's self-contained (only called from `commitTicker`, right after `ensureLegacyFactsExist`) and has extensive "twin lot" documentation of its own (currently sitting, misplaced, right before where `executionOrder` used to be — see the `officialBrokerRepair.ts` split commit message). Splitting it out would be a similar-shaped, similar-risk move to the `officialBrokerRepair.ts` extraction just done.
-3. **`TradeService.ts` (1341 lines), `ThndrParser.ts` (1110 lines).** Not yet touched at all this session. Unknown internal risk profile — read them before assuming they're as decomposable as `duplicateDetection.ts` was.
+2. **`commitTicker`/`appendAndMaybeCommit`/`shouldCommit`/`assignPortfolio`/`assignPortfolioToFact`/`retractRawTransaction` (commitEngine.ts, goal 3).** The reactive commit-trigger core itself — now down to ~330 lines after both splits, but this remaining core is the highest-risk part of the whole codebase and was deliberately left alone. `commitEngine.ts` now consists of: this reactive core, plus two-way type-only imports from `officialBrokerRepair.ts` and `duplicateAuthorityReconciliation.ts`, plus `renameRawTransactionsTicker` (small, standalone, easy future split if wanted).
+3. **`TradeService.ts` (1341 lines), `ThndrParser.ts` (1110 lines).** Not yet touched at all this session. Unknown internal risk profile — read them before assuming they're as decomposable as `duplicateDetection.ts`/`commitEngine.ts` were.
 4. **`ImportPage.tsx`'s other ~20 handler functions** (`processFiles`, `confirmAndDistributeAll`, `renameTickerGroup`, `addBuyCandidate`, `allocateOrPendSell`, `smartAllocateSell`, etc.) — not reviewed for extraction this session beyond `commitOfficialBrokerSell`.
 5. **Other large presentation pages (goal 4).** `PortfolioDetailPage.tsx` (974 lines), `TradesPage.tsx` (745 lines) — smaller, not part of this session's scope.
 6. **Splitting other oversized tests (goal 5).** The other `ImportPage.*.test.tsx` suffixed files weren't reviewed for size.
@@ -106,9 +110,10 @@ The presentation-layer extraction (goal 1 and most of goal 4) is essentially com
 
 ## Recommended next step
 
-Two reasonable options, in order of increasing risk:
+This session stopped here deliberately — commit `f7f7455` is a clean, fully-validated checkpoint, and going further into `commitTicker`/`appendAndMaybeCommit` itself is a materially different risk tier from everything done so far (those two both directly participate in the documented re-entrant-commit race, unlike everything split out this session, which was called BY them but never called back into them). Before touching either:
 
-- **Lower risk:** split `reconcileDuplicateAuthority` out of `commitEngine.ts` into its own file (e.g. `duplicateAuthorityReconciliation.ts`), the same shape as the `officialBrokerRepair.ts` split — it's self-contained, already has its own doc comment (currently misplaced above `executionOrder`'s old position — move that comment down to sit above `reconcileDuplicateAuthority` as part of this split, since after the last split it now sits directly above nothing in particular).
-- **Higher risk, higher value:** read `processBatch()` (`commitTickerGroupLocked`, ImportPage.tsx) and `commitTicker` (commitEngine.ts) in full, end to end, together, and write out — in a scratch file, not committed — every documented ordering invariant between them before touching either. Only then consider whether any sub-step can be named/extracted without changing that ordering.
+1. Read `commitTicker` (commitEngine.ts) and `processBatch()`/`commitTickerGroupLocked` (ImportPage.tsx) in full, end to end, together.
+2. Write out — in a scratch file, not committed — every documented ordering invariant between them (there are at least three distinct ones across the two files' comments).
+3. Only then consider whether any sub-step can be named/extracted without changing that ordering — and validate with the full gate plus every `ImportPage.brokerExcel*`/`ImportPage.*Duplicate*`/`crossTransactionIsolation` test file explicitly, not just the aggregate pass/fail count.
 
-Do not attempt option 2 without doing the reading first. A mechanical extraction here is exactly the failure mode the existing comments were written to prevent someone from repeating.
+A mechanical extraction here is exactly the failure mode the existing comments were written to prevent someone from repeating. If less risk is wanted instead, `TradeService.ts`/`ThndrParser.ts` are unreviewed and might turn out to have the same easily-separable-pure-function shape `duplicateDetection.ts` did — read them first rather than assuming either way.
