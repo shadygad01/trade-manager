@@ -17,3 +17,13 @@ export function isLotEligibleForSell(
 export function hasSharesToReconcile(pendingRowCount: number, existingRemainingShares: number): boolean {
   return pendingRowCount > 0 || Math.abs(existingRemainingShares) >= 1e-6;
 }
+
+/** A candidate row is still pending review once it's been neither added, skipped, nor dismissed. */
+export function selectStillPendingCandidates<T extends { key: string }>(
+  entries: T[],
+  addedKeys: Set<string>,
+  skippedKeys: Set<string>,
+  dismissedKeys: Set<string>,
+): T[] {
+  return entries.filter((e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key));
+}

@@ -4,6 +4,7 @@ import { diagnostics } from "@presentation/lib/data";
 import type { TickerMatchStatus } from "@application/services/importVerification";
 import { MAX_RECONCILE_ROWS, type ReconcileSuggestion } from "@application/services/mismatchResolver";
 import { findLastBalancedDate } from "@application/services/netShareTimeline";
+import { selectStillPendingCandidates } from "@application/services/importReviewRules";
 import { buildTickerConstraintReport } from "@application/services/constraintValidation";
 import { assessTickerCompleteness, type TickerCompletenessReport } from "@application/services/completenessEngine";
 import type { TickerStatus } from "@application/services/verificationEngine";
@@ -178,8 +179,11 @@ export function TickerGroupCard({
   // How many rows the mismatch subset-solver could actually consider — the
   // "no combination explains it" wording is only honest at or below the
   // solver's exhaustive-search cap (see MAX_RECONCILE_ROWS).
-  const stillPendingCount = [...group.buys, ...group.sells].filter(
-    (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+  const stillPendingCount = selectStillPendingCandidates(
+    [...group.buys, ...group.sells],
+    addedKeys,
+    skippedKeys,
+    dismissedKeys,
   ).length;
   const highlightUnmatchedByOrders =
     tickerHasFulfilledOrders && (matchStatus?.reason === "mismatch" || matchStatus?.reason === "no-verification");
@@ -192,8 +196,11 @@ export function TickerGroupCard({
    */
   const lastBalanced = useMemo(() => {
     if (matchStatus?.matched) return undefined;
-    const stillPendingRows = [...group.buys, ...group.sells].filter(
-      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    const stillPendingRows = selectStillPendingCandidates(
+      [...group.buys, ...group.sells],
+      addedKeys,
+      skippedKeys,
+      dismissedKeys,
     );
     return findLastBalancedDate({
       rows: stillPendingRows.map((e) => ({ key: e.key, side: e.candidate.side, shares: e.candidate.shares, date: e.candidate.date })),
@@ -238,8 +245,11 @@ export function TickerGroupCard({
    */
   const constraintReport = useMemo(() => {
     if (!matchStatus || group.buys.length + group.sells.length === 0) return undefined;
-    const stillPendingRows = [...group.buys, ...group.sells].filter(
-      (e) => !addedKeys.has(e.key) && !skippedKeys.has(e.key) && !dismissedKeys.has(e.key),
+    const stillPendingRows = selectStillPendingCandidates(
+      [...group.buys, ...group.sells],
+      addedKeys,
+      skippedKeys,
+      dismissedKeys,
     );
     return buildTickerConstraintReport(
       ticker,
