@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { ShieldCheck, Loader2, RotateCcw, Eraser } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { repos, diagnostics, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
 import { recordBuy, recordBuyBatch, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
@@ -70,6 +70,7 @@ import { useCommitQueue } from "@presentation/hooks/useCommitQueue";
 import { TickerGroupCard } from "@presentation/components/TickerGroupCard";
 import { ImportUploadPanel } from "@presentation/components/ImportUploadPanel";
 import { CompletedTickersPanel } from "@presentation/components/CompletedTickersPanel";
+import { ImportReviewSummaryBar } from "@presentation/components/ImportReviewSummaryBar";
 export { CandidateRow } from "@presentation/components/CandidateRow";
 export { AutoCommitRow } from "@presentation/components/AutoCommitRow";
 export { TickerGroupCard } from "@presentation/components/TickerGroupCard";
@@ -2462,48 +2463,17 @@ export function ImportPage() {
 
       {reviewDataSettled && tickerGroups.length > 0 ? (
         <div className="mt-4 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <div>
-              <h3 className="text-sm font-semibold text-slate-200">{t("importPage.step2Title")}</h3>
-              <p className="mt-1 text-xs text-slate-400">
-                {activeTickerGroups.length === 0
-                  ? t("importPage.allDoneStatus")
-                  : allTickersMatched
-                    ? t("importPage.allMatchedStatus")
-                    : matchedTickerCount > 0
-                      ? t("importPage.someMatchedStatus", { matched: matchedTickerCount, total: activeTickerGroups.length })
-                      : t("importPage.noneMatchedStatus", { unmatched: unmatchedTickerCount, total: activeTickerGroups.length })}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {pendingDuplicateCandidateKeys.length > 0 ? (
-                <button
-                  onClick={clearPendingDuplicateCandidates}
-                  className="flex items-center gap-1.5 rounded-md border border-rose-500/40 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10"
-                >
-                  <Eraser size={14} />
-                  {t("importPage.clearSuspectedDuplicates", { n: pendingDuplicateCandidateKeys.length })}
-                </button>
-              ) : null}
-              {activeTickerGroups.length > 0 ? (
-                <button
-                  onClick={() => void confirmAndDistributeAll()}
-                  disabled={matchedTickerCount === 0 || distributing || !initialDataLoaded}
-                  title={
-                    matchedTickerCount === 0
-                      ? t("importPage.noTickerVerified")
-                      : allTickersMatched
-                        ? undefined
-                        : t("importPage.confirmSubsetTitle", { matched: matchedTickerCount, total: activeTickerGroups.length })
-                  }
-                  className="flex items-center gap-1.5 rounded-md bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:hover:bg-slate-700"
-                >
-                  {distributing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-                  {allTickersMatched ? t("importPage.confirmDistributeAll") : t("importPage.confirmAllVerified", { n: matchedTickerCount })}
-                </button>
-              ) : null}
-            </div>
-          </div>
+          <ImportReviewSummaryBar
+            activeTickerCount={activeTickerGroups.length}
+            allTickersMatched={allTickersMatched}
+            matchedTickerCount={matchedTickerCount}
+            unmatchedTickerCount={unmatchedTickerCount}
+            pendingDuplicateCandidateCount={pendingDuplicateCandidateKeys.length}
+            onClearSuspectedDuplicates={clearPendingDuplicateCandidates}
+            distributing={distributing}
+            confirmDisabled={matchedTickerCount === 0 || distributing || !initialDataLoaded}
+            onConfirmAndDistributeAll={() => void confirmAndDistributeAll()}
+          />
 
           <CompletedTickersPanel
             groups={completedTickerGroups}
