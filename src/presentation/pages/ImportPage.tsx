@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { ShieldCheck, Loader2, RotateCcw, Trash2, Eraser, ChevronDown } from "lucide-react";
+import { ShieldCheck, Loader2, RotateCcw, Eraser } from "lucide-react";
 import { repos, diagnostics, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
 import { recordBuy, recordBuyBatch, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
@@ -69,6 +69,7 @@ import { useCommitLock } from "@presentation/hooks/useCommitLock";
 import { useCommitQueue } from "@presentation/hooks/useCommitQueue";
 import { TickerGroupCard } from "@presentation/components/TickerGroupCard";
 import { ImportUploadPanel } from "@presentation/components/ImportUploadPanel";
+import { CompletedTickersPanel } from "@presentation/components/CompletedTickersPanel";
 export { CandidateRow } from "@presentation/components/CandidateRow";
 export { AutoCommitRow } from "@presentation/components/AutoCommitRow";
 export { TickerGroupCard } from "@presentation/components/TickerGroupCard";
@@ -2210,6 +2211,10 @@ export function ImportPage() {
     () => tickerGroups.filter(([ticker]) => tickerResolution.get(ticker)?.resolved),
     [tickerGroups, tickerResolution],
   );
+  const completedTickerTransactionCounts = useMemo(
+    () => new Map([...tickerResolution.entries()].map(([ticker, r]) => [ticker, r.transactionCount])),
+    [tickerResolution],
+  );
 
   const unmatchedTickerCount = activeTickerGroups.filter(([ticker]) => !tickerMatchStatuses.get(ticker)?.matched).length;
   const matchedTickerCount = activeTickerGroups.length - unmatchedTickerCount;
@@ -2500,43 +2505,13 @@ export function ImportPage() {
             </div>
           </div>
 
-          {completedTickerGroups.length > 0 ? (
-            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
-              <button
-                onClick={() => setCompletedExpanded((v) => !v)}
-                className="flex w-full items-center justify-between gap-2 text-start"
-              >
-                <span className="flex items-center gap-2 text-sm font-medium text-emerald-300">
-                  <ShieldCheck size={15} />
-                  {t("importPage.completedSectionTitle", { n: completedTickerGroups.length })}
-                </span>
-                <ChevronDown
-                  size={16}
-                  className={`shrink-0 text-emerald-400 transition-transform ${completedExpanded ? "rotate-180" : ""}`}
-                />
-              </button>
-              {completedExpanded ? (
-                <ul className="mt-3 space-y-1.5 text-sm text-emerald-200/90">
-                  {completedTickerGroups.map(([ticker, group]) => {
-                    const companyName = group.buys[0]?.candidate.companyName ?? group.sells[0]?.candidate.companyName ?? "";
-                    const count = tickerResolution.get(ticker)?.transactionCount ?? 0;
-                    return (
-                      <li key={ticker} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-emerald-500/10 px-3 py-1.5">
-                        <span>{t("importPage.completedTickerEntry", { ticker, company: companyName, count })}</span>
-                        <button
-                          onClick={() => void resetTickerData(ticker)}
-                          title={t("importPage.resetTickerTitle", { ticker })}
-                          className="flex shrink-0 items-center gap-1 rounded-md border border-rose-500/40 px-2 py-0.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
-                        >
-                          <Trash2 size={12} /> {t("importPage.resetTicker")}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
+          <CompletedTickersPanel
+            groups={completedTickerGroups}
+            expanded={completedExpanded}
+            onToggleExpanded={() => setCompletedExpanded((v) => !v)}
+            transactionCounts={completedTickerTransactionCounts}
+            onResetTicker={(ticker) => void resetTickerData(ticker)}
+          />
 
           <div className="performance-list contents">
           {activeTickerGroups.map(([ticker, group]) => {
