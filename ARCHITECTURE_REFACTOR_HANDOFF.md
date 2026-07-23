@@ -68,6 +68,10 @@ Do not combine these into a large `useImportCommit` hook.
   - Merge/known-symbol suggestions, portfolio hints, ticker errors.
 - `TickerResolutionBanners.tsx`
   - No-verification, mismatch, placeholder replacement, reconciliation, and ambiguous-portfolio banners.
+- `TickerBuyRows.tsx`
+  - Buy row-list rendering; composes `AutoCommitRow` per still-visible entry.
+- `TickerSellRows.tsx`
+  - Sell row-list rendering; composes `CandidateRow` per still-visible entry.
 
 The parent still owns all calculations, state transitions, eligibility decisions, solver limits, and mutations. Extracted components receive already-derived values and callbacks.
 
@@ -80,16 +84,16 @@ The parent still owns all calculations, state transitions, eligibility decisions
 
 ## Latest checkpoint
 
-The latest fully validated iteration extracted `AutoCommitRow` and passed:
+The latest fully validated iteration extracted `TickerBuyRows` and `TickerSellRows` from `TickerGroupCard` and passed:
 
 - TypeScript
 - Project lint
 - Dependency Cruiser with zero violations
-- Full Vitest suite
+- Full Vitest suite (127 files, 1110 passed, 2 skipped — same pre-existing skips as before)
 - Production Vite build
-- `git diff --check` before this handoff document was added
+- `git diff --check`
 
-`AutoCommitRow` was extracted into `src/presentation/components/AutoCommitRow.tsx` while preserving the compatibility re-export from `ImportPage.tsx`. TypeScript, project lint, Dependency Cruiser, full Vitest, the production build, and `git diff --check` all passed afterward.
+`TickerGroupCard`'s buy `.map()` block (rendering `AutoCommitRow`) and sell `.map()` block (rendering `CandidateRow`) moved into `src/presentation/components/TickerBuyRows.tsx` and `src/presentation/components/TickerSellRows.tsx` respectively. Both are presentation-only: they receive `group.buys`/`group.sells`, the same key sets, hint maps, and the `duplicateMatch`/`onAllocateSell`/`onSmartAllocate`/`onDiscardPending`/`onDeleteAutoAdded` callbacks `TickerGroupCard` already had, and render the identical JSX that used to live inline. No duplicate matching, eligibility, reconciliation, allocation, or mutation logic moved — it's all still computed in `TickerGroupCard`/`ImportPage` and passed down as already-derived props. The direct `CandidateRow`/`AutoCommitRow` imports in `ImportPage.tsx` were removed since nothing in that file references them directly anymore; the compatibility re-exports (`export { CandidateRow } ...` / `export { AutoCommitRow } ...`) are untouched and still resolve from their own component modules.
 
 Run `git diff --check` once more after reading this file.
 
@@ -107,9 +111,7 @@ Known existing test output includes non-fatal `canonicalHoldings` fallback warni
 
 ## Recommended next step
 
-Continue thinning `TickerGroupCard` by extracting its buy/sell row-list rendering into one or two presentation-only components with explicit props. Keep duplicate matching, disabled-state decisions, reconciliation highlights, smart allocation, and all action ownership in the parent.
-
-After the remaining display sections are removed, extract `TickerGroupCard` itself from `ImportPage.tsx`, then move its derived-state calculations into small pure helpers/hooks by concern. Only then continue to commit execution/coordination and the service decomposition phases.
+The buy/sell row lists are now extracted. `TickerGroupCard` (still defined inside `ImportPage.tsx`) is the next candidate: extract it into its own component file (e.g. `src/presentation/components/TickerGroupCard.tsx`), keeping its existing prop surface unchanged — it already receives fully-derived data and callbacks from `ImportPage`, so this should be a pure move, not a rewrite. After that, look at moving `TickerGroupCard`'s own derived-state `useMemo`s (`lastBalanced`, `duplicateFlaggedNet`, `constraintReport`, `completenessReport`, etc.) into small pure helpers by concern, one at a time. Only then continue to commit execution/coordination and the service decomposition phases (`TradeService`, `commitEngine`, `duplicateDetection`, `ThndrParser`).
 
 ## Prompt for Claude
 
