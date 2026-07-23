@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
-import { useLiveQuery } from "dexie-react-hooks";
-import { UploadCloud, FileText, ShieldCheck, ShieldAlert, CheckCircle2, Loader2, RotateCcw, CircleDollarSign, History, Pencil, Trash2, XCircle, Eraser, ChevronDown } from "lucide-react";
+import { UploadCloud, FileText, ShieldCheck, CheckCircle2, Loader2, RotateCcw, Trash2, Eraser, ChevronDown } from "lucide-react";
 import { repos, diagnostics, getImportOrchestrator, purgeTickerData } from "@presentation/lib/data";
 import { recordBuy, recordBuyBatch, recordSell, deleteTrade, renameTickerEverywhere } from "@application/services/TradeService";
 import { recordDividend } from "@application/services/PortfolioService";
@@ -23,8 +22,9 @@ import {
   findDateMisreadDuplicateHints,
   findOfficialBrokerExcelReuploadDuplicateKeys,
   alreadyAllocatedSharesForSell,
-  parseTimeToMinutes,
 } from "@application/services/duplicateDetection";
+import { hasSharesToReconcile, isLotEligibleForSell } from "@application/services/importReviewRules";
+export { hasSharesToReconcile, isLotEligibleForSell } from "@application/services/importReviewRules";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
 import {
   isTickerFullyOfficialBrokerExcelSourced,
@@ -33,7 +33,6 @@ import {
 import { findLiveExecutionFact } from "@application/services/rawTransactionFolds";
 import { higherAuthority } from "@application/services/evidenceAuthority";
 import { upgradeSellExecutionFact } from "@application/services/provenanceRepair";
-import { runSerialized } from "@application/services/serialize";
 import {
   orderEvidenceContentKey,
   findOrderConfirmedKeys,
@@ -42,7 +41,7 @@ import {
 } from "@application/services/orderEvidence";
 import { suggestRemovalsToReconcile, MAX_RECONCILE_ROWS, type ReconcileSuggestion } from "@application/services/mismatchResolver";
 import { findLastBalancedDate } from "@application/services/netShareTimeline";
-import { buildTickerConstraintReport, type TickerConstraintReport } from "@application/services/constraintValidation";
+import { buildTickerConstraintReport } from "@application/services/constraintValidation";
 import { assessTickerCompleteness, type TickerCompletenessReport } from "@application/services/completenessEngine";
 import type { TickerStatus } from "@application/services/verificationEngine";
 import { Money } from "@domain/value-objects/Money";
@@ -67,43 +66,23 @@ import { PageHeader } from "@presentation/components/PageHeader";
 import { Modal } from "@presentation/components/Modal";
 import { EmptyState } from "@presentation/components/EmptyState";
 import { SellAllocationForm } from "@presentation/components/SellAllocationForm";
-import { formatDate, formatMoney, formatShares } from "@presentation/lib/format";
-import { STATUS } from "@presentation/lib/chartColors";
-import { useT, type TFunction } from "@presentation/i18n/translations";
-
-const CONFIDENCE_COLOR: Record<"high" | "medium" | "low", string> = {
-  high: STATUS.good,
-  medium: STATUS.warning,
-  low: STATUS.critical,
-};
-
-function confidenceLabel(t: TFunction, confidence: "high" | "medium" | "low"): string {
-  if (confidence === "high") return t("importPage.confidenceHigh");
-  if (confidence === "medium") return t("importPage.confidenceMedium");
-  return t("importPage.confidenceLow");
-}
+import { formatShares } from "@presentation/lib/format";
+import { useT } from "@presentation/i18n/translations";
+import { useImportQueries } from "@presentation/hooks/useImportQueries";
+import { useCommitLock } from "@presentation/hooks/useCommitLock";
+import { useCommitQueue } from "@presentation/hooks/useCommitQueue";
+import { CandidateRow } from "@presentation/components/CandidateRow";
+import { ConstraintReportPanel, RecoveryPlanPanel } from "@presentation/components/ImportReviewPanels";
+import { TickerEvidenceRows } from "@presentation/components/TickerEvidenceRows";
+import { RecordedTradesPanel } from "@presentation/components/RecordedTradesPanel";
+import { TickerGroupHeader } from "@presentation/components/TickerGroupHeader";
+import { TickerSuggestionBanners } from "@presentation/components/TickerSuggestionBanners";
+import { TickerResolutionBanners } from "@presentation/components/TickerResolutionBanners";
+import { AutoCommitRow } from "@presentation/components/AutoCommitRow";
+export { CandidateRow } from "@presentation/components/CandidateRow";
+export { AutoCommitRow } from "@presentation/components/AutoCommitRow";
 
 type Stage = "idle" | "reading" | "error";
-
-/**
- * A sell can only close a lot that already existed when the sell happened.
- * Keep an unknown same-day time eligible: it is not evidence that the buy
- * happened later, whereas a known later time is decisive.
- */
-export function isLotEligibleForSell(
-  lot: Pick<Trade, "executionDate" | "executionTime">,
-  sell: Pick<ParsedTradeCandidate, "date" | "time">,
-): boolean {
-  if (lot.executionDate !== sell.date) return lot.executionDate < sell.date;
-  const lotMinutes = parseTimeToMinutes(lot.executionTime);
-  const sellMinutes = sell.time ? parseTimeToMinutes(sell.time) : undefined;
-  return lotMinutes === undefined || sellMinutes === undefined || lotMinutes <= sellMinutes;
-}
-
-/** Whether the verification gate has any real inventory left to evaluate. */
-export function hasSharesToReconcile(pendingRowCount: number, existingRemainingShares: number): boolean {
-  return pendingRowCount > 0 || Math.abs(existingRemainingShares) >= 1e-6;
-}
 
 /**
  * Position-verification and dividend candidates carry no per-transaction
@@ -147,18 +126,6 @@ function retractRawTransactionKeys(keys: Iterable<string>) {
   }
 }
 
-/**
- * Guards the batch commit against a genuine race: two triggers (e.g. a
- * duplicate Confirm click, or a rename firing while a commit is already in
- * flight) could otherwise both see the same entry as "not yet added" and
- * call recordBuy/recordDividend/acceptVerification on it twice, since the
- * check-then-act happens across an await. Module-level (not React state,
- * which only updates asynchronously) so the guard is synchronous: an entry
- * is marked in-flight before its first await and cleared in a finally,
- * regardless of how many times commitTickerGroup gets invoked concurrently.
- */
-const inFlightKeys = new Set<string>();
-
 interface ConfirmBatchState {
   addedKeys: string[];
   acceptedKeys: string[];
@@ -191,6 +158,8 @@ function emptyConfirmBatchState(): ConfirmBatchState {
  */
 export function ImportPage() {
   const t = useT();
+  const commitLock = useCommitLock();
+  const commitQueue = useCommitQueue();
   const trackingStartDate = useTrackingStartDate();
   const [dragOver, setDragOver] = useState(false);
   const [stage, setStage] = useState<Stage>("idle");
@@ -247,143 +216,41 @@ export function ImportPage() {
   const skippedKeys = useMemo(() => new Set(session.skippedKeys), [session.skippedKeys]);
   const dismissedKeys = useMemo(() => new Set(session.dismissedKeys), [session.dismissedKeys]);
 
-  const pendingTickerKey = useMemo(
-    () =>
-      [
-        ...new Set([
-          ...pendingCandidates.map((entry) => normalizeTicker(entry.candidate.ticker)),
-          ...pendingVerifications.map((entry) => normalizeTicker(entry.verification.ticker)),
-          ...pendingDividends
-            .map((entry) => entry.dividend.ticker)
-            .filter((ticker): ticker is string => Boolean(ticker))
-            .map(normalizeTicker),
-          ...pendingOrderEvidences.map((entry) => normalizeTicker(entry.evidence.ticker)),
-        ]),
-      ]
-        .sort()
-        .join("|"),
-    [pendingCandidates, pendingVerifications, pendingDividends, pendingOrderEvidences],
+  const queries = useImportQueries(
+    { pendingCandidates, pendingVerifications, pendingDividends, pendingOrderEvidences },
+    distributing,
   );
-  const pendingTickers = useMemo(() => (pendingTickerKey ? pendingTickerKey.split("|") : []), [pendingTickerKey]);
+  if (queries.error) throw queries.error;
+  const {
+    pendingTickerKey,
+    portfolios,
+    existingTrades,
+    existingAllocations,
+    existingRawTransactions,
+    rawTransactionsLoaded,
+    existingVerifications,
+    existingTimeline,
+    officialUploadCandidatesByTicker,
+  } = queries;
 
-  // During a confirmation job the durable write is already isolated and the
-  // final projection is intentionally published once. Returning the last
-  // snapshot here removes Dexie's reactive re-query/re-render loop while the
-  // job is active; toggling `distributing` back to false performs one fresh
-  // read for the settled result.
-  const portfoliosSnapshot = useRef<Awaited<ReturnType<typeof repos.portfolios.getAll>>>([]);
-  const tradesSnapshot = useRef<Awaited<ReturnType<typeof repos.trades.getAll>>>([]);
-  const allocationsSnapshot = useRef<Awaited<ReturnType<typeof repos.allocations.getAll>>>([]);
-  const rawSnapshot = useRef<Awaited<ReturnType<typeof repos.rawTransactions.getAll>>>([]);
-  const verificationsSnapshot = useRef<Awaited<ReturnType<typeof repos.verifications.getAll>>>([]);
-  const timelineSnapshot = useRef<Awaited<ReturnType<typeof repos.timeline.getAll>>>([]);
-
-  const portfoliosRaw = useLiveQuery(async () => {
-    if (distributing) return portfoliosSnapshot.current;
-    const rows = await repos.portfolios.getAll();
-    portfoliosSnapshot.current = rows;
-    return rows;
-  }, [distributing]);
-  const portfolios = portfoliosRaw ?? [];
-
-  // Every duplicate/reconciliation decision is ticker-scoped. Loading the
-  // entire historical ledger on every Dexie invalidation made a large Excel
-  // upload progressively slower as more rows were appended. Query only the
-  // tickers currently in the review pool; adapters without the targeted
-  // method retain the old getAll fallback for compatibility.
-  const queryByTickers = <T extends { ticker?: string }>(
-    repository: { getAll: () => Promise<T[]>; getByTicker?: (ticker: string) => Promise<T[]> },
-  ) =>
-    pendingTickers.length === 0
-      ? Promise.resolve([] as T[])
-      : repository.getByTicker
-        ? Promise.all(pendingTickers.map((ticker) => repository.getByTicker!(ticker))).then((rows) => rows.flat())
-        : repository.getAll();
-
-  const existingTradesRaw = useLiveQuery(async () => {
-    if (distributing) return tradesSnapshot.current;
-    const rows = await queryByTickers(repos.trades);
-    tradesSnapshot.current = rows;
-    return rows;
-  }, [pendingTickerKey, distributing]);
-  const existingTrades = existingTradesRaw ?? [];
-  const existingAllocationsRaw = useLiveQuery(async () => {
-    if (distributing) return allocationsSnapshot.current;
-    const rows = await queryByTickers(repos.allocations);
-    allocationsSnapshot.current = rows;
-    return rows;
-  }, [pendingTickerKey, distributing]);
-  const existingAllocations = existingAllocationsRaw ?? [];
   // The legacy Trade/TradeAllocation entities carry no provenance field at
   // all — this is the only way to know a ticker's ALREADY-COMMITTED history
   // (as opposed to this batch's still-pending candidates) came entirely from
   // the official broker Excel export (see tickerMatchStatuses below, and
   // reconciliation.ts's own doc comment on isTickerFullyOfficialBrokerExcelSourced).
-  const existingRawTransactionsRaw = useLiveQuery(
-    async () => {
-      if (distributing) return rawSnapshot.current;
-      const rows = await queryByTickers(repos.rawTransactions);
-      const controls = await repos.rawTransactions.getControlFacts?.();
-      // Retraction/assignment facts intentionally have no ticker of their
-      // own. Reading the append-only sequence token keeps this targeted query
-      // reactive when such a fact changes the selected ticker's folded view,
-      // without falling back to a full raw-transaction table scan.
-      await repos.rawTransactions.getRevision?.();
-      if (!controls || controls.length === 0) {
-        rawSnapshot.current = rows;
-        return rows;
-      }
-      const seen = new Set(rows.map((row) => row.id));
-      const combined = [...rows, ...controls.filter((control) => !seen.has(control.id))];
-      rawSnapshot.current = combined;
-      return combined;
-    },
-    [pendingTickerKey, distributing],
-  );
-  const existingRawTransactions = existingRawTransactionsRaw ?? [];
   // Uploads are durable evidence, unlike the localStorage review session.
   // Keep official broker-workbook candidates available after a page reload or
   // after every pending row has been dismissed/committed.
-  const officialUploadsRaw = useLiveQuery(
-    async () => (pendingTickers.length === 0 ? [] : repos.uploads.getAll()),
-    [pendingTickerKey],
-  );
-  const officialUploadCandidatesByTicker = useMemo(() => {
-    const byTicker = new Map<string, ParsedTradeCandidate[]>();
-    for (const upload of officialUploadsRaw ?? []) {
-      const candidates = upload.candidates.filter((candidate) => candidate.source === "official-broker-excel");
-      for (const candidate of candidates) {
-        const normalized = normalizeTicker(candidate.ticker);
-        const existing = byTicker.get(normalized) ?? [];
-        existing.push(candidate);
-        byTicker.set(normalized, existing);
-      }
-    }
-    return byTicker;
-  }, [officialUploadsRaw]);
   // Ground truth for the verification gate below — a broker "My Position"
   // screenshot accepted in an earlier session still counts as this ticker's
   // reference even if this batch re-extracts more buys/sells for it.
-  const existingVerificationsRaw = useLiveQuery(async () => {
-    if (distributing) return verificationsSnapshot.current;
-    const rows = await queryByTickers(repos.verifications);
-    verificationsSnapshot.current = rows;
-    return rows;
-  }, [pendingTickerKey, distributing]);
-  const existingVerifications = existingVerificationsRaw ?? [];
   // A dividend already recorded in an earlier import session is otherwise
   // invisible to the in-session dedup below (seenDividendKeys), which only
   // ever sees the current batch's pending pool — the same broker statement
   // re-uploaded weeks later (its dividend history overlapping what's already
   // recorded) would silently double-count real cash. Global like existingTrades:
   // a real dividend payment happened once regardless of which portfolio it's filed under.
-  const existingTimelineRaw = useLiveQuery(async () => {
-    if (distributing) return timelineSnapshot.current;
-    const rows = await repos.timeline.getAll();
-    timelineSnapshot.current = rows;
-    return rows;
-  }, [distributing]);
-  const existingDividendKeys = useMemo(() => buildExistingDividendKeys(existingTimelineRaw ?? []), [existingTimelineRaw]);
+  const existingDividendKeys = useMemo(() => buildExistingDividendKeys(existingTimeline), [existingTimeline]);
 
   /**
    * useLiveQuery returns undefined until its first read resolves, then an
@@ -408,13 +275,7 @@ export function ImportPage() {
    * policy being bypassed — not by wrong decision logic, but by feeding the
    * (correct) decision logic transiently-incomplete data. See docs/ROADMAP.md.
    */
-  const initialDataLoaded =
-    portfoliosRaw !== undefined &&
-    existingTradesRaw !== undefined &&
-    existingAllocationsRaw !== undefined &&
-    existingVerificationsRaw !== undefined &&
-    existingTimelineRaw !== undefined &&
-    existingRawTransactionsRaw !== undefined;
+  const initialDataLoaded = queries.ready;
 
   /**
    * A persisted import session is available synchronously, while the durable
@@ -477,7 +338,7 @@ export function ImportPage() {
    * briefly-empty trades/allocations read can't mislabel (or fail to label)
    * a row off stale data.
    *
-   * `inFlightKeys` exclusion closes a real, reproduced race: commitTickerGroup's
+   * The commit-lock exclusion closes a real, reproduced race: commitTickerGroup's
    * own addBuyCandidate saves the Trade (repos.trades.save) several awaits
    * BEFORE it ever updates addedKeys — a window in which this effect's own
    * existingTrades dependency (a live Dexie query) can already see the
@@ -497,7 +358,7 @@ export function ImportPage() {
    *
    * `sellCandidate?.key` closes the identical race for the OTHER commit path
    * this file has — SellAllocationForm's submission, which isn't covered by
-   * `inFlightKeys` at all (that Set is only touched by commitTickerGroup's
+   * the batch commit lock at all (it is acquired by commitTickerGroup's
    * own three loops). recordSell saves each TradeAllocation, several awaits
    * before its own fact is ensured, exactly like recordBuy — the sell
    * candidate's key stays excluded for the whole time its modal is open,
@@ -514,7 +375,7 @@ export function ImportPage() {
           !state.addedKeys.includes(e.key) &&
           !state.skippedKeys.includes(e.key) &&
           !state.dismissedKeys.includes(e.key) &&
-          !inFlightKeys.has(e.key) &&
+          !commitLock.isLocked(e.key) &&
           e.key !== sellCandidate?.key,
       )
       .map((e) => ({ e, m: duplicateMatch(e.candidate, undefined, ownAllocs[e.key]) }))
@@ -639,7 +500,7 @@ export function ImportPage() {
    * themselves are never skipped — they commit normally and are surfaced as
    * "Confirmed by Statement" via aggregateConfirmedKeys below.
    *
-   * Same `inFlightKeys` exclusion as the exact-duplicate effect above, and
+   * Same commit-lock exclusion as the exact-duplicate effect above, and
    * for the same reason — a key mid-commit must never be retracted out from
    * under the commit that's still in flight on it.
    */
@@ -647,7 +508,7 @@ export function ImportPage() {
     if (!initialDataLoaded || distributing) return;
     const state = importSession.getState();
     const stillPending = state.pendingCandidates.filter(
-      (e) => !state.addedKeys.includes(e.key) && !state.skippedKeys.includes(e.key) && !state.dismissedKeys.includes(e.key) && !inFlightKeys.has(e.key),
+      (e) => !state.addedKeys.includes(e.key) && !state.skippedKeys.includes(e.key) && !state.dismissedKeys.includes(e.key) && !commitLock.isLocked(e.key),
     );
     const crossSourceVerified = findCrossSourceVerifiedKeys(stillPending);
     const aggregateMatches = findAggregateStatementMatches(stillPending, crossSourceVerified);
@@ -743,7 +604,7 @@ export function ImportPage() {
     // matters: any subsequent commitTickerGroup/smartAllocateSell/
     // SellAllocationForm call for this ticker shares the identical key and
     // will correctly queue behind this sweep instead of racing it.
-    void runSerialized(`${portfolioId}|${normalizeTicker(ticker)}`, () => assignPortfolio(repos, ticker, portfolioId, diagnostics)).catch((err) => {
+    void commitQueue.run(portfolioId, ticker, () => assignPortfolio(repos, ticker, portfolioId, diagnostics)).catch((err) => {
       console.error("assignPortfolio failed (shadow write, non-fatal):", err);
     });
   }
@@ -1127,7 +988,7 @@ export function ImportPage() {
     // as an apparent "duplicate" of the allocation its own commit just
     // created — the identical race already fixed for commitTickerGroup and
     // SellAllocationForm, just never extended to this newer button.
-    inFlightKeys.add(entry.key);
+    commitLock.acquire(entry.key);
     try {
       const portfolioId = portfolioForTicker(ticker);
       const normalizedTicker = normalizeTicker(ticker);
@@ -1137,7 +998,7 @@ export function ImportPage() {
       // ticker in quick succession lets a later call read open lots before
       // an earlier one's commit has finished reducing them, misreporting a
       // real position as "not enough open shares."
-      await runSerialized(`${portfolioId}|${normalizedTicker}`, async () => {
+      await commitQueue.run(portfolioId, normalizedTicker, async () => {
         const allTrades = await repos.trades.getByPortfolio(portfolioId);
         const openLots = allTrades
           .filter((t) => normalizeTicker(t.ticker) === normalizedTicker && t.remainingShares > 0 && isLotEligibleForSell(t, entry.candidate))
@@ -1191,7 +1052,7 @@ export function ImportPage() {
     } catch (e) {
       setRowError(entry.key, e);
     } finally {
-      inFlightKeys.delete(entry.key);
+      commitLock.release(entry.key);
     }
   }
 
@@ -1285,7 +1146,7 @@ export function ImportPage() {
     // allocation row replaces the real one, and ensureLegacyFactsExist's own
     // gap-backfill (racing the same window) can mint an extra decision for a
     // sell whose real one hasn't landed yet.
-    return runSerialized(`${portfolioId}|${normalizedTicker}`, () => commitTickerGroupLocked(ticker, portfolioId));
+    return commitQueue.run(portfolioId, normalizedTicker, () => commitTickerGroupLocked(ticker, portfolioId));
   }
 
   async function commitTickerGroupLocked(ticker: string, portfolioId: string): Promise<void> {
@@ -1302,7 +1163,7 @@ export function ImportPage() {
         !state.addedKeys.includes(e.key) &&
         !state.skippedKeys.includes(e.key) &&
         !state.dismissedKeys.includes(e.key) &&
-        !inFlightKeys.has(e.key),
+        !commitLock.isLocked(e.key),
     );
     const normalBuys: CandidateEntry[] = [];
     // `existingTrades` is a snapshot from before this confirmation starts.
@@ -1313,7 +1174,7 @@ export function ImportPage() {
     // broker transaction number keeps genuinely separate fills distinct.
     const seenBuyExecutionKeys = new Set<string>();
     for (const entry of buys) {
-      inFlightKeys.add(entry.key);
+      commitLock.acquire(entry.key);
       try {
         const candidate = entry.candidate;
         const batchIdentity = candidate.transactionNumber
@@ -1341,7 +1202,7 @@ export function ImportPage() {
           normalBuys.push(entry);
         }
       } finally {
-        if (!normalBuys.some((candidate) => candidate.key === entry.key)) inFlightKeys.delete(entry.key);
+        if (!normalBuys.some((candidate) => candidate.key === entry.key)) commitLock.release(entry.key);
       }
     }
 
@@ -1376,31 +1237,31 @@ export function ImportPage() {
           batchState.addedTradeIds[entry.key] = result.trade.id;
         });
       } finally {
-        normalBuys.forEach((entry) => inFlightKeys.delete(entry.key));
+        normalBuys.forEach((entry) => commitLock.release(entry.key));
       }
     }
 
     const dividends = state.pendingDividends.filter(
-      (e) => normalizeTicker(e.dividend.ticker) === ticker && !state.addedKeys.includes(e.key) && !inFlightKeys.has(e.key),
+      (e) => normalizeTicker(e.dividend.ticker) === ticker && !state.addedKeys.includes(e.key) && !commitLock.isLocked(e.key),
     );
     for (const entry of dividends) {
-      inFlightKeys.add(entry.key);
+      commitLock.acquire(entry.key);
       try {
         await addDividend(entry, ticker, batchState);
       } finally {
-        inFlightKeys.delete(entry.key);
+        commitLock.release(entry.key);
       }
     }
 
     const verifications = state.pendingVerifications.filter(
-      (e) => normalizeTicker(e.verification.ticker) === ticker && !state.acceptedKeys.includes(e.key) && !inFlightKeys.has(e.key),
+      (e) => normalizeTicker(e.verification.ticker) === ticker && !state.acceptedKeys.includes(e.key) && !commitLock.isLocked(e.key),
     );
     for (const entry of verifications) {
-      inFlightKeys.add(entry.key);
+      commitLock.acquire(entry.key);
       try {
         await acceptVerification(entry, ticker, batchState);
       } finally {
-        inFlightKeys.delete(entry.key);
+        commitLock.release(entry.key);
       }
     }
 
@@ -1481,7 +1342,7 @@ export function ImportPage() {
           !state.addedKeys.includes(e.key) &&
           !state.skippedKeys.includes(e.key) &&
           !state.dismissedKeys.includes(e.key) &&
-          !inFlightKeys.has(e.key),
+          !commitLock.isLocked(e.key),
       )
       .sort(
         (a, b) =>
@@ -1490,7 +1351,7 @@ export function ImportPage() {
       );
 
     for (const entry of officialSells) {
-      inFlightKeys.add(entry.key);
+      commitLock.acquire(entry.key);
       try {
         const currentAllocations = await repos.allocations.getAll();
         const duplicate = findDuplicateSellMatch(entry.candidate, currentAllocations);
@@ -1576,7 +1437,7 @@ export function ImportPage() {
         // every other ticker — still gets allocated.
         setRowError(entry.key, e);
       } finally {
-        inFlightKeys.delete(entry.key);
+        commitLock.release(entry.key);
       }
     }
 
@@ -2211,11 +2072,11 @@ export function ImportPage() {
       // "closed-position"/"no-verification" — a real, reproducible instance
       // of the trust policy being bypassed by a data race, not by wrong
       // decision logic (see docs/ROADMAP.md). Leaving this ticker OUT of the
-      // map entirely (MatchBadge renders a neutral "checking…" state for an
+      // map entirely (ImportMatchBadge renders a neutral "checking…" state for an
       // absent entry, never "needs a screenshot") is strictly narrower than
       // gating the whole page: a ticker with real pending rows this batch
       // never depends on this query at all and is unaffected.
-      if (remainingBuysAndSells.length === 0 && existingRawTransactionsRaw === undefined) continue;
+      if (remainingBuysAndSells.length === 0 && !rawTransactionsLoaded) continue;
       const allPendingFromInvoice =
         remainingBuysAndSells.length > 0 && remainingBuysAndSells.every((e) => e.candidate.source === "invoice");
       // While rows are still pending, only trust THIS batch's own sourcing —
@@ -2308,7 +2169,7 @@ export function ImportPage() {
     existingTradesByTicker,
     existingVerificationsByTicker,
     existingRawTransactions,
-    existingRawTransactionsRaw,
+    rawTransactionsLoaded,
     session.discardedCandidates,
     officialUploadCandidatesByTicker,
     crossVerifiedKeys,
@@ -2855,106 +2716,6 @@ export function ImportPage() {
     </div>
   );
 }
-
-function confidenceText(t: TFunction, confidence: "high" | "medium" | "low"): string {
-  if (confidence === "high") return t("importPage.constraintConfidenceHigh");
-  if (confidence === "medium") return t("importPage.constraintConfidenceMedium");
-  return t("importPage.constraintConfidenceLow");
-}
-
-/**
- * Facts first, contradiction second, diagnosis only ever after that — see
- * constraintValidation.ts. Purely additive/read-only: renders whatever
- * checkTickerMatch + the existing diagnosis signals already produced,
- * changes nothing about the banners/badges above and below it.
- */
-function ConstraintReportPanel({ report, t }: { report: TickerConstraintReport; t: TFunction }) {
-  const { facts, contradictions, diagnosis } = report;
-  return (
-    <details className="border-b border-slate-800 px-4 py-2 text-xs text-slate-400">
-      <summary className="cursor-pointer select-none font-medium text-slate-300">
-        {t("importPage.constraintReportTitle")}
-        {report.satisfied ? (
-          <span className="ms-2 text-emerald-400">{t("importPage.constraintSatisfied")}</span>
-        ) : (
-          <span className="ms-2 text-rose-400">{t("importPage.constraintContradictionTitle")}</span>
-        )}
-      </summary>
-      <div className="mt-2 space-y-1.5">
-        <p>
-          {t("importPage.constraintFactsLine", {
-            opening: formatShares(facts.openingShares),
-            buy: formatShares(facts.buyShares),
-            sell: formatShares(facts.sellShares),
-            calculated: formatShares(facts.calculatedRemaining),
-            holdingsSuffix:
-              facts.holdingsRemaining !== undefined
-                ? t("importPage.constraintFactsHoldingsSuffix", { holdings: formatShares(facts.holdingsRemaining) })
-                : "",
-          })}
-        </p>
-        {facts.closed ? <p className="text-slate-500">{t("importPage.constraintClosedPositionNote")}</p> : null}
-        {contradictions.map((c, i) => (
-          <p key={i} className="text-rose-300">
-            {t("importPage.constraintContradictionLine", {
-              expected: formatShares(c.expected),
-              calculated: formatShares(c.calculated),
-              difference: formatShares(c.difference),
-            })}
-          </p>
-        ))}
-        {diagnosis.length > 0 ? (
-          <div className="mt-1.5 border-t border-slate-800 pt-1.5">
-            <p className="font-medium text-slate-300">{t("importPage.constraintDiagnosisTitle")}</p>
-            <ul className="mt-1 list-disc ps-4">
-              {diagnosis.map((d, i) => (
-                <li key={i}>
-                  {d.explanation} — {t("importPage.constraintDiagnosisConfidence", { confidence: confidenceText(t, d.confidence) })}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-      </div>
-    </details>
-  );
-}
-
-const EVIDENCE_DOCUMENT_LABEL_KEY: Record<string, string> = {
-  "Orders History": "importPage.evidenceOrdersHistory",
-  "Broker Statement": "importPage.evidenceBrokerStatement",
-  Invoice: "importPage.evidenceInvoice",
-  Transactions: "importPage.evidenceTransactions",
-  "My Position": "importPage.evidenceMyPosition",
-};
-
-/**
- * Surfaces completenessEngine's minimal-document recommendation instead of a
- * bare "needs a screenshot" block — names exactly which document closes the
- * gap and why, per the Evidence Resolution business rule "request only the
- * smallest missing document, never ask the user to re-upload everything."
- * Manual "I confirm this is complete" is deliberately NOT offered here as an
- * equal alternative — it's the last resort once no further evidence can
- * reasonably be requested, not a shortcut around requesting it.
- */
-function RecoveryPlanPanel({ report, t }: { report: TickerCompletenessReport; t: TFunction }) {
-  const plan = report.recoveryPlan;
-  if (!plan) return null;
-  return (
-    <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2.5 text-xs text-amber-200">
-      <p className="font-medium">
-        {t("importPage.recoveryPlanTitle", { document: t(EVIDENCE_DOCUMENT_LABEL_KEY[plan.bestEvidence] ?? plan.bestEvidence) })}
-      </p>
-      <p className="mt-1 text-amber-200/80">{plan.rationale}</p>
-      {plan.alternativeEvidence ? (
-        <p className="mt-1 text-amber-200/60">
-          {t("importPage.recoveryPlanAlternative", { document: t(EVIDENCE_DOCUMENT_LABEL_KEY[plan.alternativeEvidence] ?? plan.alternativeEvidence) })}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
 export function TickerGroupCard({
   ticker,
   group,
@@ -3229,150 +2990,49 @@ export function TickerGroupCard({
     setRenaming(false);
   }
 
+  function cancelRename() {
+    setDraftTicker(ticker);
+    setRenaming(false);
+  }
+
+  function beginRename() {
+    setDraftTicker(ticker);
+    setRenaming(true);
+  }
+
   return (
     <div
       className="rounded-xl border border-slate-800 bg-slate-900/60"
       style={{ contentVisibility: "auto", containIntrinsicSize: "0 520px" }}
     >
-      {mergeSuggestion ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-amber-500/5 px-4 py-2.5 text-xs text-amber-300">
-          <span>
-            {t("importPage.mergeSuggestionText", { ticker: mergeSuggestion })}
-          </span>
-          <button
-            onClick={() => onRenameTicker(mergeSuggestion)}
-            className="rounded-md border border-amber-400/40 px-2.5 py-1 font-medium text-amber-300 hover:bg-amber-500/10"
-          >
-            {t("importPage.mergeInto", { ticker: mergeSuggestion })}
-          </button>
-        </div>
-      ) : null}
-      {!mergeSuggestion && knownTickerSuggestion ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-cyan-500/5 px-4 py-2.5 text-xs text-cyan-300">
-          <span>
-            {t("importPage.knownTickerSuggestionText", { ticker, realTicker: knownTickerSuggestion })}
-          </span>
-          <button
-            onClick={() => onRenameTicker(knownTickerSuggestion)}
-            className="rounded-md border border-cyan-400/40 px-2.5 py-1 font-medium text-cyan-300 hover:bg-cyan-500/10"
-          >
-            {t("importPage.renameToTicker", { ticker: knownTickerSuggestion })}
-          </button>
-        </div>
-      ) : null}
-      {existingPortfolioHint ? (
-        <div className="border-b border-slate-800 bg-slate-950/40 px-4 py-2 text-xs text-slate-400">
-          {existingPortfolioHint.multiple
-            ? t("importPage.existingPortfolioHintMultiple", { ticker, names: existingPortfolioHint.names.join(", ") })
-            : t("importPage.existingPortfolioHintSingle", { ticker, name: existingPortfolioHint.names[0] })}
-        </div>
-      ) : null}
-      {rowErrors[ticker] ? (
-        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-400">{rowErrors[ticker]}</div>
-      ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
-        {renaming ? (
-          <div className="flex items-center gap-1.5">
-            <input
-              autoFocus
-              value={draftTicker}
-              onChange={(e) => setDraftTicker(e.target.value.toUpperCase())}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") confirmRename();
-                if (e.key === "Escape") {
-                  setDraftTicker(ticker);
-                  setRenaming(false);
-                }
-              }}
-              className="w-24 rounded border border-cyan-500/50 bg-slate-800 px-2 py-1 text-sm font-semibold text-slate-100"
-            />
-            <button
-              onClick={confirmRename}
-              className="rounded-md bg-cyan-500 px-2 py-1 text-xs font-medium text-slate-950 hover:bg-cyan-400"
-            >
-              {t("importPage.save")}
-            </button>
-            <button
-              onClick={() => {
-                setDraftTicker(ticker);
-                setRenaming(false);
-              }}
-              className="rounded-md px-2 py-1 text-xs text-slate-400 hover:bg-slate-800"
-            >
-              {t("importPage.cancel")}
-            </button>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                setDraftTicker(ticker);
-                setRenaming(true);
-              }}
-              title={t("importPage.renameTitle")}
-              className="flex items-center gap-1.5 text-sm font-semibold text-slate-100 hover:text-cyan-400"
-            >
-              {ticker}
-              <Pencil size={12} className="text-slate-500" />
-            </button>
-            {!matchStatus?.matched ? (
-              <button
-                onClick={onRestoreTicker}
-                title={t("importPage.restoreTickerRows", { ticker })}
-                className="rounded p-0.5 text-slate-500 hover:text-amber-400 hover:bg-amber-500/10"
-              >
-                <RotateCcw size={12} />
-              </button>
-            ) : null}
-            {onResetTicker ? (
-              <button
-                onClick={onResetTicker}
-                title={t("importPage.resetTickerTitle", { ticker })}
-                className="rounded p-0.5 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
-              >
-                <Trash2 size={12} />
-              </button>
-            ) : null}
-          </div>
-        )}
-        <div className="flex items-center gap-3">
-          <MatchBadge status={matchStatus} />
-          <label className="flex items-center gap-2 text-xs text-slate-400">
-            {t("importPage.portfolioLabel")}
-            <select
-              value={portfolioId}
-              onChange={(e) => onPortfolioChange(e.target.value)}
-              className={`rounded border px-2 py-1 text-xs ${
-                portfolioResolved
-                  ? "border-slate-700 bg-slate-800 text-slate-100"
-                  : "border-cyan-500/50 bg-slate-800 text-cyan-300"
-              }`}
-            >
-              {!portfolioResolved ? (
-                <option value="" disabled>
-                  {t("importPage.selectPortfolioPlaceholder")}
-                </option>
-              ) : null}
-              {portfolios.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {matched && portfolioResolved && hasCommittable ? (
-            <button
-              onClick={onConfirmTicker}
-              disabled={distributing}
-              title={t("importPage.confirmTickerTitle", { ticker })}
-              className="flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-            >
-              {distributing ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
-              {t("importPage.confirmTickerButton", { ticker })}
-            </button>
-          ) : null}
-        </div>
-      </div>
+      <TickerSuggestionBanners
+        ticker={ticker}
+        mergeSuggestion={mergeSuggestion}
+        knownTickerSuggestion={knownTickerSuggestion}
+        existingPortfolioHint={existingPortfolioHint}
+        error={rowErrors[ticker]}
+        onRenameTicker={onRenameTicker}
+      />
+      <TickerGroupHeader
+        ticker={ticker}
+        renaming={renaming}
+        draftTicker={draftTicker}
+        portfolios={portfolios}
+        portfolioId={portfolioId}
+        portfolioResolved={portfolioResolved}
+        matchStatus={matchStatus}
+        canConfirm={matched && portfolioResolved && hasCommittable}
+        distributing={distributing}
+        canReset={Boolean(onResetTicker)}
+        onDraftTickerChange={setDraftTicker}
+        onBeginRename={beginRename}
+        onConfirmRename={confirmRename}
+        onCancelRename={cancelRename}
+        onRestoreTicker={onRestoreTicker}
+        onResetTicker={onResetTicker}
+        onPortfolioChange={onPortfolioChange}
+        onConfirmTicker={onConfirmTicker}
+      />
       {constraintReport ? <ConstraintReportPanel report={constraintReport} t={t} /> : null}
       {completenessReport?.recoveryPlan ? <RecoveryPlanPanel report={completenessReport} t={t} /> : null}
       {matchStatus?.reason === "matched" && (matchStatus.existingRemainingShares ?? 0) > 0 ? (
@@ -3389,198 +3049,37 @@ export function TickerGroupCard({
           {t("importPage.orphanedEvidenceBanner", { n: orphanedOrderEvidence.length })}
         </div>
       ) : null}
-      {matchStatus?.reason === "no-verification" && matchStatus.netShares < -1e-6 ? (
-        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          {t("importPage.missingBuyHistoryBanner", {
-            ticker,
-            pendingSellShares: formatShares(pendingSellShares),
-            existing: formatShares(matchStatus.existingRemainingShares ?? 0),
-            pendingBuy: formatShares(pendingBuyShares),
-            available: formatShares((matchStatus.existingRemainingShares ?? 0) + pendingBuyShares),
-            short: formatShares(-matchStatus.netShares),
-          })}
-        </div>
-      ) : matchStatus?.reason === "no-verification" ? (
-        <div className="border-b border-slate-800 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
-          <p>
-            {t("importPage.needsScreenshotBanner", {
-              ticker,
-              netShares: formatShares(matchStatus.netShares),
-              suffix: tickerHasFulfilledOrders
-                ? t("importPage.needsScreenshotSuffixHasOrders")
-                : t("importPage.needsScreenshotSuffixNoOrders"),
-            })}
-          </p>
-          {Math.abs(matchStatus.existingRemainingShares ?? 0) > 1e-6 ? (
-            <p className="mt-1.5">
-              {t("importPage.netBreakdownHint", {
-                existing: formatShares(matchStatus.existingRemainingShares ?? 0),
-                pendingBuy: formatShares(pendingBuyShares),
-                pendingSell: formatShares(pendingSellShares),
-                net: formatShares(matchStatus.netShares),
-              })}
-            </p>
-          ) : null}
-          {matchStatus.discrepancySide ? (
-            <p className="mt-1.5 font-medium">
-              {"⚠ "}
-              {matchStatus.discrepancySide === "buy" && pendingBuyShares < 1e-6
-                ? t("importPage.discrepancySideLedgerBuy", { ticker, net: formatShares(matchStatus.netShares) })
-                : matchStatus.discrepancySide === "buy"
-                  ? t("importPage.discrepancySideBuy")
-                  : t("importPage.discrepancySideSell")}
-            </p>
-          ) : null}
-          {Math.abs(duplicateFlaggedNet) > 1e-6 ? (
-            <p className="mt-1.5 text-cyan-300">
-              {Math.abs(netAfterDiscardingDuplicates) < 1e-6
-                ? t("importPage.duplicateDiscardHintZero", { dupNet: formatShares(duplicateFlaggedNet) })
-                : t("importPage.duplicateDiscardHint", {
-                    dupNet: formatShares(duplicateFlaggedNet),
-                    after: formatShares(netAfterDiscardingDuplicates),
-                  })}
-            </p>
-          ) : null}
-          {lastBalanced ? (
-            <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
-          ) : null}
-        </div>
-      ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded && placeholderReplacement ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
-          <span>
-            {t("importPage.placeholderReplaceBanner", { ticker, verified: formatShares(matchStatus.verifiedUnits!) })}
-          </span>
-          <button
-            onClick={onReplacePlaceholder}
-            disabled={replacingPlaceholder}
-            className="shrink-0 rounded-md border border-cyan-400/40 px-2.5 py-1 font-medium text-cyan-300 hover:bg-cyan-500/10 disabled:opacity-50"
-          >
-            {replacingPlaceholder ? t("importPage.replacing") : t("importPage.replacePlaceholder")}
-          </button>
-        </div>
-      ) : matchStatus?.reason === "mismatch" && matchStatus.alreadyFullyRecorded ? (
-        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span>
-              {t("importPage.alreadyFullyRecordedBanner", { ticker, extra: formatShares(matchStatus.netShares - matchStatus.verifiedUnits!) })}
-            </span>
-            <button
-              onClick={onDiscardAllPending}
-              className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
-            >
-              {t("importPage.discardAllPendingFor", { ticker })}
-            </button>
-          </div>
-          {lastBalanced ? (
-            <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
-          ) : null}
-        </div>
-      ) : matchStatus?.reason === "mismatch" && reconcileSuggestion ? (
-        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span>
-              {t("importPage.mismatchReconcileBanner", {
-                existingSuffix: (matchStatus.existingRemainingShares ?? 0) > 0 ? t("importPage.existingLedgerSuffix", { existing: formatShares(matchStatus.existingRemainingShares!) }) : "",
-                netShares: formatShares(matchStatus.netShares),
-                verified: formatShares(matchStatus.verifiedUnits ?? 0),
-                removeCount: reconcileSuggestion.keysToRemove.length,
-                avgCostSuffix: reconcileSuggestion.rankedByAvgCost ? t("importPage.rankedByAvgCostSuffix") : "",
-                alternativesSuffix: t("importPage.alternativesSuffix", { n: reconcileSuggestion.alternatives }),
-              })}
-            </span>
-            <button
-              onClick={() => onDiscardPendingKeys?.(reconcileSuggestion.keysToRemove)}
-              className="shrink-0 rounded-md border border-rose-400/40 px-2.5 py-1 font-medium text-rose-300 hover:bg-rose-500/10"
-            >
-              {t("importPage.removeSuggestedRows", { n: reconcileSuggestion.keysToRemove.length })}
-            </button>
-          </div>
-          {lastBalanced ? (
-            <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
-          ) : null}
-        </div>
-      ) : matchStatus?.reason === "mismatch" ? (
-        <div className="border-b border-slate-800 bg-rose-500/5 px-4 py-2 text-xs text-rose-300">
-          <p>
-            {t("importPage.mismatchGenericBanner", {
-              existingSuffix: (matchStatus.existingRemainingShares ?? 0) > 0 ? t("importPage.existingLedgerSuffix", { existing: formatShares(matchStatus.existingRemainingShares!) }) : "",
-              netShares: formatShares(matchStatus.netShares),
-              verified: formatShares(matchStatus.verifiedUnits ?? 0),
-            })}
-          </p>
-          {matchStatus.discrepancySide ? (
-            <p className="mt-1.5 font-medium">
-              {"⚠ "}
-              {matchStatus.discrepancySide === "buy"
-                ? t("importPage.discrepancySideBuy")
-                : t("importPage.discrepancySideSell")}
-            </p>
-          ) : null}
-          {matchStatus.verifiedUnits !== undefined ? (
-            <p className="mt-1.5 text-cyan-300">
-              {t(
-                // The strong "no combination of removable rows explains it" claim
-                // is only true when the solver actually searched exhaustively —
-                // it skips batches above MAX_RECONCILE_ROWS, so those get the
-                // softer wording instead of a false assertion.
-                stillPendingCount <= MAX_RECONCILE_ROWS
-                  ? "importPage.mismatchGapHint"
-                  : "importPage.mismatchGapHintLarge",
-                {
-                  gap: formatShares(Math.abs(matchStatus.netShares - matchStatus.verifiedUnits)),
-                  direction:
-                    matchStatus.netShares > matchStatus.verifiedUnits
-                      ? t("importPage.mismatchGapTooMany")
-                      : t("importPage.mismatchGapTooFew"),
-                },
-              )}
-            </p>
-          ) : null}
-          {lastBalanced ? (
-            <p className="mt-1.5 text-cyan-300">{t("importPage.lastBalancedHint", { date: formatDate(lastBalanced.date) })}</p>
-          ) : null}
-        </div>
-      ) : !portfolioResolved ? (
-        <div className="border-b border-slate-800 bg-cyan-500/5 px-4 py-2 text-xs text-cyan-300">
-          {t("importPage.newTickerAmbiguousBanner")}
-        </div>
-      ) : null}
-
+      <TickerResolutionBanners
+        ticker={ticker}
+        matchStatus={matchStatus}
+        pendingBuyShares={pendingBuyShares}
+        pendingSellShares={pendingSellShares}
+        hasFulfilledOrders={tickerHasFulfilledOrders}
+        duplicateFlaggedNet={duplicateFlaggedNet}
+        netAfterDiscardingDuplicates={netAfterDiscardingDuplicates}
+        lastBalancedDate={lastBalanced?.date}
+        placeholderReplacement={placeholderReplacement}
+        replacingPlaceholder={replacingPlaceholder}
+        reconcileSuggestion={reconcileSuggestion}
+        reconcileSearchExhaustive={stillPendingCount <= MAX_RECONCILE_ROWS}
+        portfolioResolved={portfolioResolved}
+        onReplacePlaceholder={onReplacePlaceholder}
+        onDiscardAllPending={onDiscardAllPending}
+        onDiscardPendingKeys={onDiscardPendingKeys}
+      />
       {!matched && (existingTradesForTicker?.length ?? 0) > 0 ? (
-        <div className="border-b border-slate-800 bg-slate-950/40 px-4 py-2 text-xs">
-          <p className="text-slate-400">{t("importPage.existingTradesPanelTitle", { n: existingTradesForTicker!.length })}</p>
-          <ul className="mt-1.5 space-y-1">
-            {existingTradesForTicker!.map((tr) => {
-              const deletable = tr.remainingShares === tr.shares;
-              return (
-                <li key={tr.id} className="flex items-center justify-between gap-2 rounded px-1 py-0.5 text-slate-400">
-                  <span className="tabular-nums">
-                    {formatShares(tr.shares)} sh @ {formatMoney(tr.entryPrice)} · {formatDate(tr.executionDate)}
-                  </span>
-                  {deletable ? (
-                    <button
-                      onClick={() => onDeleteExistingTrade?.(tr.id)}
-                      title={t("importPage.deleteTradeTitle")}
-                      className="shrink-0 rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  ) : (
-                    <span title={t("importPage.cannotDeleteHasSells")} className="shrink-0 text-slate-700">
-                      <Trash2 size={12} />
-                    </span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-          {(() => {
-            const failedId = existingTradesForTicker!.find((tr) => rowErrors[tr.id])?.id;
-            return failedId ? <p className="mt-1 text-rose-400">{rowErrors[failedId]}</p> : null;
-          })()}
-        </div>
+        <RecordedTradesPanel
+          trades={existingTradesForTicker!.map((trade) => ({
+            id: trade.id,
+            shares: trade.shares,
+            entryPrice: trade.entryPrice,
+            executionDate: trade.executionDate,
+            deletable: trade.remainingShares === trade.shares,
+          }))}
+          rowErrors={rowErrors}
+          onDelete={onDeleteExistingTrade}
+        />
       ) : null}
-
       <div className="divide-y divide-slate-800">
         {group.buys.filter((entry) => !skippedKeys.has(entry.key)).map((entry) => {
           const match = duplicateMatch(entry.candidate, addedTradeIds[entry.key]);
@@ -3657,703 +3156,20 @@ export function TickerGroupCard({
             </div>
           ) : null;
         })()}
-        {group.verifications.map((entry) => (
-          <div key={entry.key} className="px-4 py-2.5 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="flex items-center gap-2 text-slate-300">
-                <ShieldCheck size={14} className="text-cyan-400" />
-                {t("importPage.brokerPositionCheck", {
-                  units: formatShares(entry.verification.units),
-                  avgCostSuffix: entry.verification.avgCost !== undefined ? t("importPage.avgCostSuffix", { avgCost: formatMoney(entry.verification.avgCost) }) : "",
-                })}
-              </span>
-              {acceptedKeys.has(entry.key) ? (
-                <span className="flex items-center gap-1 text-xs text-emerald-400">
-                  <CheckCircle2 size={14} /> {t("importPage.accepted")}
-                </span>
-              ) : !matched ? (
-                <span className="text-xs text-amber-300">{t("importPage.blockedNeedsVerification")}</span>
-              ) : !portfolioResolved ? (
-                <span className="text-xs text-slate-500">{t("importPage.waitingForPortfolio")}</span>
-              ) : distributing ? (
-                <span className="flex items-center gap-1 text-xs text-slate-500">
-                  <Loader2 size={13} className="animate-spin" /> {t("importPage.accepting")}
-                </span>
-              ) : (
-                <span className="text-xs text-slate-500">{t("importPage.readyClickConfirm")}</span>
-              )}
-            </div>
-            {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
-          </div>
-        ))}
-        {group.dividends.map((entry) => (
-          <div key={entry.key} className="px-4 py-2.5 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="flex items-center gap-2 text-slate-300">
-                <CircleDollarSign size={14} className="text-emerald-400" />
-                {t("importPage.dividendRow", { amount: formatMoney(entry.dividend.amount), date: formatDate(entry.dividend.date) })}
-              </span>
-              {addedKeys.has(entry.key) ? (
-                <span className="flex items-center gap-1 text-xs text-emerald-400">
-                  <CheckCircle2 size={14} /> {t("importPage.added")}
-                </span>
-              ) : !matched ? (
-                <span className="text-xs text-amber-300">{t("importPage.blockedNeedsVerification")}</span>
-              ) : !portfolioResolved ? (
-                <span className="text-xs text-slate-500">{t("importPage.waitingForPortfolio")}</span>
-              ) : distributing ? (
-                <span className="flex items-center gap-1 text-xs text-slate-500">
-                  <Loader2 size={13} className="animate-spin" /> {t("importPage.adding")}
-                </span>
-              ) : (
-                <span className="text-xs text-slate-500">{t("importPage.readyClickConfirm")}</span>
-              )}
-            </div>
-            {rowErrors[entry.key] ? <p className="mt-1.5 text-xs text-rose-400">{rowErrors[entry.key]}</p> : null}
-          </div>
-        ))}
-        {/* Cancelled orders are pure noise during manual review — a struck-through
-            BUY/SELL line still reads like a transaction at a glance and invites
-            recording something that never executed. They stay in the session data
-            (nothing here commits), but only fulfilled orders render. */}
-        {orderEvidences.filter((entry) => entry.evidence.status === "fulfilled").map((entry) => (
-          <div key={entry.key} className="px-4 py-2 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="flex items-center gap-2 text-xs text-slate-400">
-                <History size={13} className={entry.evidence.status === "fulfilled" ? "text-cyan-400" : "text-slate-600"} />
-                {entry.evidence.date
-                  ? t("importPage.transactionsHistoryRow", {
-                      side: entry.evidence.side,
-                      date: formatDate(entry.evidence.date),
-                      total: formatMoney(entry.evidence.totalValue),
-                    })
-                  : t("importPage.ordersHistoryRow", {
-                      side: entry.evidence.side,
-                      shares: formatShares(entry.evidence.shares ?? 0),
-                      price: formatMoney(entry.evidence.price ?? 0),
-                      orderType: entry.evidence.orderType ?? "",
-                      total: formatMoney(entry.evidence.totalValue),
-                    })}
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                    entry.evidence.status === "fulfilled" ? "bg-emerald-500/10 text-emerald-400" : "bg-slate-700/40 text-slate-400 line-through"
-                  }`}
-                >
-                  {entry.evidence.status === "fulfilled" ? t("importPage.fulfilled") : t("importPage.cancelled")}
-                </span>
-              </span>
-              <button
-                onClick={() => onDiscardOrderEvidence?.(entry)}
-                title={t("importPage.discardOrderEvidenceTitle")}
-                className="rounded p-1 text-slate-600 hover:bg-rose-500/10 hover:text-rose-400"
-              >
-                <Trash2 size={12} />
-              </button>
-            </div>
-          </div>
-        ))}
+        <TickerEvidenceRows
+          verifications={group.verifications}
+          dividends={group.dividends}
+          orderEvidences={orderEvidences}
+          acceptedKeys={acceptedKeys}
+          addedKeys={addedKeys}
+          rowErrors={rowErrors}
+          matched={matched}
+          portfolioResolved={portfolioResolved}
+          distributing={distributing}
+          onDiscardOrderEvidence={onDiscardOrderEvidence}
+          t={t}
+        />
       </div>
-    </div>
-  );
-}
-
-/** The verification-gate badge on a ticker card's header — the visual anchor for the whole two-phase workflow. */
-function MatchBadge({ status }: { status: TickerMatchStatus | undefined }) {
-  const t = useT();
-  if (!status) {
-    // An absent entry means tickerMatchStatuses deliberately withheld a
-    // verdict for this ticker — today, only because it has nothing pending
-    // this session and existingRawTransactions (needed to check whether its
-    // committed history is fully official-broker-excel-sourced) hasn't
-    // finished loading yet. Rendering "Needs broker screenshot" here (the
-    // old behavior) would flash exactly that wrong, trust-policy-bypassing
-    // verdict for a ticker whose real answer is "already verified" the
-    // instant the data resolves — a neutral, no-verdict-yet state is the
-    // only honest thing to show while it's genuinely unknown.
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-slate-700/40 px-2 py-0.5 text-[11px] font-medium text-slate-400">
-        <Loader2 size={11} className="animate-spin" /> {t("importPage.matchChecking")}
-      </span>
-    );
-  }
-  if (status.reason === "no-verification") {
-    // netShares < 0 means this batch's Sell(s) already exceed what's on the
-    // ledger (existing remaining shares + this batch's pending buys) — no
-    // broker "My Position" screenshot can ever resolve that, since the
-    // position is already sold out. The real fix is finding the missing Buy
-    // history, not waiting on a screenshot that will never exist.
-    if (status.netShares < -1e-6) {
-      return (
-        <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-400">
-          <ShieldAlert size={11} /> {t("importPage.matchMissingBuyHistory")}
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
-        <ShieldAlert size={11} /> {t("importPage.matchNeedsScreenshot")}
-      </span>
-    );
-  }
-  if (status.reason === "mismatch") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-400">
-        <ShieldAlert size={11} /> {t("importPage.matchMismatch")}
-      </span>
-    );
-  }
-  if (status.reason === "closed-position") {
-    // matched=true here means an independent source (invoice/cross/orders
-    // history) already corroborated the closed round-trip; matched=false
-    // means the net-zero arithmetic alone was all that was on offer — never
-    // trusted by itself (see importVerification.ts's closed-position fix,
-    // the JUFO/SKPC bug class). The unmatched case gets the same amber
-    // "needs evidence" treatment as no-verification, plus a
-    // RecoveryPlanPanel naming exactly what to upload next.
-    if (!status.matched) {
-      return (
-        <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
-          <ShieldAlert size={11} /> {t("importPage.matchClosedNeedsEvidence")}
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> {t("importPage.matchSoldOut")}
-      </span>
-    );
-  }
-  if (status.reason === "invoice-verified") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> {t("importPage.matchInvoiceVerified")}
-      </span>
-    );
-  }
-  if (status.reason === "broker-excel-verified") {
-    // secondaryMismatch is deliberately never a blocking/downgrading state —
-    // the Excel-sourced batch stays "Verified" (the emerald badge below)
-    // regardless; a disagreeing screenshot is only ever an additional,
-    // informational note alongside it, for the user to look at when
-    // convenient, never a gate on anything.
-    return (
-      <span className="inline-flex flex-wrap items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-          <ShieldCheck size={11} /> {t("importPage.matchBrokerExcelVerified")}
-        </span>
-        {status.secondaryMismatch && (
-          <span
-            className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
-            title={t("importPage.matchSecondaryMismatchTooltip")}
-          >
-            <ShieldAlert size={11} /> {t("importPage.matchSecondaryMismatch")}
-          </span>
-        )}
-      </span>
-    );
-  }
-  if (status.reason === "cross-verified") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> {t("importPage.matchCrossVerified")}
-      </span>
-    );
-  }
-  if (status.reason === "orders-verified") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-        <ShieldCheck size={11} /> {t("importPage.matchOrdersVerified")}
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-      <ShieldCheck size={11} /> {t("importPage.matchVerified")}
-    </span>
-  );
-}
-
-/**
- * Buy rows commit as a batch once the user clicks "Confirm — Distribute to
- * Portfolios" (see ImportPage's confirmAndDistributeAll) — this only ever
- * shows status, never an action button. A "low" confidence row (an
- * unmapped-ticker guess, the tier most likely to be flat-out wrong) gets a
- * visually distinct amber-tinted treatment instead of the confirmation
- * checkbox this used to require, since there's no click left to gate — the
- * warning styling plus a one-click delete afterward is the replacement
- * safety net.
- */
-export function AutoCommitRow({
-  entry,
-  match,
-  added,
-  skipped,
-  dismissed,
-  portfolioResolved,
-  matched,
-  distributing,
-  error,
-  suspectedDuplicate = false,
-  suggestedRemoval = false,
-  wrongTickerHint,
-  dateMisreadHint,
-  crossSourceVerified = false,
-  aggregateConfirmed = false,
-  aggregateMatchDetail,
-  orderConfirmed = false,
-  noMatchingOrder = false,
-  onDelete,
-  onDiscardPending,
-}: {
-  entry: CandidateEntry;
-  match: { matchType: "exact" | "possible"; matchedId: string } | undefined;
-  added: boolean;
-  skipped: boolean;
-  dismissed: boolean;
-  portfolioResolved: boolean;
-  /** Whether this row's ticker has reconciled against a broker position screenshot yet — nothing commits until it does. */
-  matched: boolean;
-  /** True while confirmAndDistributeAll is actively committing this row's batch. */
-  distributing: boolean;
-  error?: string;
-  /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
-  suspectedDuplicate?: boolean;
-  /** True when the mismatch auto-reconcile solver picked this row for removal (see suggestRemovalsToReconcile) — highlights the row the banner's one-click fix would discard. */
-  suggestedRemoval?: boolean;
-  /** The ticker this row most likely belongs to, when it looks like a phantom wrong-ticker read of another ticker's transaction (see findWrongTickerCandidateKeys). */
-  wrongTickerHint?: string;
-  /** The ledger date this row's date was most likely misread from (see findDateMisreadDuplicateHints) — advisory only, never auto-discards. */
-  dateMisreadHint?: string;
-  /** True when this exact transaction was read from two different document types (statement + invoice, statement + orders screenshot, …) — the dual-source verification rule (see findCrossSourceVerifiedKeys). */
-  crossSourceVerified?: boolean;
-  /** True when this row is part of an execution group a Statement row's aggregate quantity confirmed (see findAggregateStatementMatches) — the Statement row itself never renders as a separate candidate once matched, so this row carries the confirmation instead. */
-  aggregateConfirmed?: boolean;
-  /** Formatted breakdown ("BUY 5,000 sh + BUY 3,000 sh") of the execution group this row belongs to — the aggregateConfirmed badge's tooltip detail. */
-  aggregateMatchDetail?: string;
-  /** True when a fulfilled order on the broker's Orders timeline screenshot corroborates this exact row (see findOrderConfirmedKeys). */
-  orderConfirmed?: boolean;
-  /** True on a mismatch when this ticker's Orders history was uploaded and no fulfilled order matches this row — the likely extra/wrong row behind the mismatch. */
-  noMatchingOrder?: boolean;
-  onDelete: () => void;
-  /**
-   * Discards this row from the pending pool outright — available on every
-   * still-pending row, not just ones auto-flagged as a suspected duplicate.
-   * A Mismatch banner's cause isn't always machine-detectable (see
-   * checkTickerMatch's alreadyFullyRecorded and the sibling/existing-trade
-   * duplicate checks — none catch every shape), so the user can manually
-   * try removing whichever row they judge to be the wrong/extra one and see
-   * if the ticker's total then reconciles against its broker screenshot.
-   */
-  onDiscardPending?: () => void;
-}) {
-  const t = useT();
-  const c = entry.candidate;
-  const isLowConfidence = c.confidence === "low";
-  const stillPending = !added && !skipped && !dismissed;
-  const canDiscard = suspectedDuplicate && stillPending;
-  const flaggedForRemoval = stillPending && (suggestedRemoval || wrongTickerHint !== undefined);
-  return (
-    <div
-      className={`px-4 py-2.5 text-sm ${canDiscard || flaggedForRemoval ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-400">
-            {c.side}
-          </span>
-          <span className="tabular-nums text-slate-300">{formatShares(c.shares)} sh</span>
-          <span className="tabular-nums text-slate-300">@ {formatMoney(c.price)}</span>
-          <span className="text-slate-400">{formatDate(c.date)}</span>
-          {isLowConfidence ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
-              <ShieldAlert size={11} /> {t("importPage.lowConfidenceGuess")}
-            </span>
-          ) : c.confidence ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CONFIDENCE_COLOR[c.confidence] }} />
-              {confidenceLabel(t, c.confidence)}
-            </span>
-          ) : null}
-          {match ? (
-            <span
-              title={
-                match.matchType === "exact"
-                  ? t("importPage.exactMatchTitle")
-                  : t("importPage.possibleMatchTitle")
-              }
-              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                match.matchType === "exact" ? "bg-rose-500/10 text-rose-400" : "bg-amber-500/10 text-amber-400"
-              }`}
-            >
-              <ShieldAlert size={11} /> {match.matchType === "exact" ? t("importPage.duplicate") : t("importPage.possibleDuplicate")}
-            </span>
-          ) : null}
-          {canDiscard && !match ? (
-            <span
-              title={t("importPage.suspectedDuplicateTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
-            >
-              <ShieldAlert size={11} /> {t("importPage.suspectedDuplicate")}
-            </span>
-          ) : null}
-          {stillPending && wrongTickerHint ? (
-            <span
-              title={t("importPage.likelyOthersTransactionTitle", { ticker: wrongTickerHint })}
-              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
-            >
-              <ShieldAlert size={11} /> {t("importPage.likelyOthersTransaction", { ticker: wrongTickerHint })}
-            </span>
-          ) : null}
-          {stillPending && dateMisreadHint ? (
-            <span
-              title={t("importPage.dateMisreadHintTitle", { date: formatDate(dateMisreadHint) })}
-              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
-            >
-              <ShieldAlert size={11} /> {t("importPage.dateMisreadHint", { date: formatDate(dateMisreadHint) })}
-            </span>
-          ) : null}
-          {stillPending && suggestedRemoval ? (
-            <span
-              title={t("importPage.suggestedRemovalTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
-            >
-              <ShieldAlert size={11} /> {t("importPage.suggestedRemoval")}
-            </span>
-          ) : null}
-          {crossSourceVerified ? (
-            <span
-              title={t("importPage.crossSourceVerifiedTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
-            >
-              <ShieldCheck size={11} /> {t("importPage.twoDocumentsAgree")}
-            </span>
-          ) : null}
-          {aggregateConfirmed ? (
-            <span
-              title={
-                aggregateMatchDetail
-                  ? t("importPage.aggregateConfirmedTitleDetail", { detail: aggregateMatchDetail })
-                  : t("importPage.aggregateConfirmedTitle")
-              }
-              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
-            >
-              <ShieldCheck size={11} /> {t("importPage.aggregateConfirmed")}
-            </span>
-          ) : null}
-          {orderConfirmed ? (
-            <span
-              title={t("importPage.orderConfirmedTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
-            >
-              <History size={11} /> {t("importPage.matchesOrdersHistory")}
-            </span>
-          ) : stillPending && noMatchingOrder ? (
-            <span
-              title={t("importPage.noMatchingOrderTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
-            >
-              <History size={11} /> {t("importPage.noMatchingOrder")}
-            </span>
-          ) : null}
-        </div>
-        {skipped ? (
-          <span className="flex items-center gap-1 text-xs text-slate-500">
-            <XCircle size={14} /> {t("importPage.skippedDuplicate")}
-          </span>
-        ) : dismissed ? (
-          <span className="text-xs text-slate-600">{t("importPage.removed")}</span>
-        ) : added ? (
-          <span className="flex items-center gap-2 text-xs text-emerald-400">
-            <span className="flex items-center gap-1">
-              <CheckCircle2 size={14} /> {t("importPage.added")}
-            </span>
-            {isLowConfidence ? (
-              <button
-                onClick={onDelete}
-                title={t("importPage.deleteTradeTitle")}
-                className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400"
-              >
-                <Trash2 size={12} />
-              </button>
-            ) : null}
-          </span>
-        ) : canDiscard ? (
-          <button
-            onClick={onDiscardPending}
-            title={t("importPage.discardDuplicateTitle")}
-            className="flex items-center gap-1 rounded-md border border-rose-500/40 px-2 py-1 text-xs font-medium text-rose-300 hover:bg-rose-500/10"
-          >
-            <Trash2 size={12} /> {t("importPage.discard")}
-          </button>
-        ) : (
-          <span className="flex items-center gap-1.5">
-            {!matched ? (
-              <span className="text-xs text-amber-300">{t("importPage.blockedNeedsVerification")}</span>
-            ) : !portfolioResolved ? (
-              <span className="text-xs text-slate-500">{t("importPage.waitingForPortfolio")}</span>
-            ) : distributing ? (
-              <span className="flex items-center gap-1 text-xs text-slate-500">
-                <Loader2 size={13} className="animate-spin" /> {t("importPage.adding")}
-              </span>
-            ) : (
-              <span className="text-xs text-slate-500">{t("importPage.readyClickConfirm")}</span>
-            )}
-            <button
-              onClick={onDiscardPending}
-              disabled={distributing}
-              title={t("importPage.discardGenericTitle")}
-              className="rounded p-1 text-slate-500 hover:bg-rose-500/10 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Trash2 size={12} />
-            </button>
-          </span>
-        )}
-      </div>
-      {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
-    </div>
-  );
-}
-
-/**
- * Sell is the one row type Import never batch-commits (see ImportPage's
- * commitTickerGroup doc comment) — which lot(s) it closes is an explicit
- * financial decision (ADR-002), so "Allocate Sell" always opens the
- * allocation modal for the user to review and submit. Because that modal
- * is itself the review step, a low-confidence sell doesn't need a separate
- * confirmation gate the way a batch-committed buy did — it's flagged with
- * the same amber styling, but the button stays clickable either way. It's
- * still gated on the ticker's verification-match status, though: `disabled`
- * blocks the click (with `disabledReason` as its tooltip) until this
- * ticker's share count reconciles against a broker position screenshot.
- */
-export function CandidateRow({
-  entry,
-  match,
-  added,
-  skipped = false,
-  actionLabel,
-  actionClassName,
-  onAction,
-  smartActionLabel,
-  onSmartAction,
-  disabled = false,
-  disabledReason,
-  suspectedDuplicate = false,
-  suggestedRemoval = false,
-  wrongTickerHint,
-  dateMisreadHint,
-  crossSourceVerified = false,
-  aggregateConfirmed = false,
-  aggregateMatchDetail,
-  orderConfirmed = false,
-  noMatchingOrder = false,
-  error,
-  onDiscardPending,
-}: {
-  entry: CandidateEntry;
-  match: { matchType: "exact" | "possible"; matchedId: string } | undefined;
-  added: boolean;
-  /** True when this row was auto-resolved as an exact duplicate of an already-recorded transaction (see the exact-duplicate-sell auto-skip effect) — replaces the action button with a "Skipped — duplicate" state so nothing invites a double-count. */
-  skipped?: boolean;
-  actionLabel: string;
-  actionClassName: string;
-  onAction: () => void;
-  /** Label/handler for the optional "Smart Allocate" action, shown immediately before the main action button — see ImportPage's smartAllocateSell. Omitted entirely (no button rendered) when the row has no smart-allocate handler. */
-  smartActionLabel?: string;
-  onSmartAction?: () => Promise<void>;
-  disabled?: boolean;
-  disabledReason?: string;
-  /** Flags a still-pending row as a suggested duplicate — of a sibling still pending in this batch, or of a trade already committed to the ledger (see ImportPage's pendingDuplicateCandidateKeys). Drives the "Discard" action regardless of which; the badge itself is only shown when `match` isn't already showing its own duplicate pill for the same row. */
-  suspectedDuplicate?: boolean;
-  /** True when the mismatch auto-reconcile solver picked this row for removal (see suggestRemovalsToReconcile and AutoCommitRow's twin prop). */
-  suggestedRemoval?: boolean;
-  /** The ticker this row most likely belongs to, when it looks like a phantom wrong-ticker read (see findWrongTickerCandidateKeys and AutoCommitRow's twin prop). */
-  wrongTickerHint?: string;
-  /** The ledger date this row's date was most likely misread from (see findDateMisreadDuplicateHints and AutoCommitRow's twin prop). */
-  dateMisreadHint?: string;
-  /** True when this exact transaction was read from two different document types (see AutoCommitRow's twin prop). */
-  crossSourceVerified?: boolean;
-  /** True when this row is part of an execution group a Statement row's aggregate quantity confirmed (see AutoCommitRow's twin prop). */
-  aggregateConfirmed?: boolean;
-  /** Formatted breakdown of the execution group this row belongs to (see AutoCommitRow's twin prop). */
-  aggregateMatchDetail?: string;
-  /** True when a fulfilled order on the broker's Orders timeline screenshot corroborates this exact row (see AutoCommitRow's twin prop). */
-  orderConfirmed?: boolean;
-  /** True on a mismatch when this ticker's Orders history was uploaded and no fulfilled order matches this row (see AutoCommitRow's twin prop). */
-  noMatchingOrder?: boolean;
-  /** Set when onAction/onSmartAction threw (see ImportPage's rowErrors/setRowError) — previously silently swallowed for a Sell row (unlike AutoCommitRow's own twin prop), which made a failing Smart Allocate/Allocate Sell click look like a no-op with zero feedback. */
-  error?: string;
-  /** Discards this row from the pending pool outright — available on every still-pending row, not just ones auto-flagged as a suspected duplicate (see AutoCommitRow's onDiscardPending). */
-  onDiscardPending?: () => void;
-}) {
-  const t = useT();
-  const c = entry.candidate;
-  const isLowConfidence = c.confidence === "low";
-  const canDiscard = suspectedDuplicate && !added && !skipped;
-  const flaggedForRemoval = !added && !skipped && (suggestedRemoval || wrongTickerHint !== undefined);
-  const [smartAllocating, setSmartAllocating] = useState(false);
-  async function handleSmartAction() {
-    if (!onSmartAction) return;
-    setSmartAllocating(true);
-    try {
-      await onSmartAction();
-    } finally {
-      setSmartAllocating(false);
-    }
-  }
-  return (
-    <div
-      className={`px-4 py-2.5 text-sm ${canDiscard || flaggedForRemoval ? "bg-rose-500/5" : isLowConfidence ? "bg-amber-500/[0.04]" : ""}`}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <span
-            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-              c.side === "BUY" ? "bg-emerald-500/10 text-emerald-400" : "bg-rose-500/10 text-rose-400"
-            }`}
-          >
-            {c.side}
-          </span>
-          <span className="tabular-nums text-slate-300">{formatShares(c.shares)} sh</span>
-          <span className="tabular-nums text-slate-300">@ {formatMoney(c.price)}</span>
-          <span className="text-slate-400">{formatDate(c.date)}</span>
-          {isLowConfidence ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300">
-              <ShieldAlert size={11} /> {t("importPage.lowConfidenceGuess")}
-            </span>
-          ) : c.confidence ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-slate-400">
-              <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CONFIDENCE_COLOR[c.confidence] }} />
-              {confidenceLabel(t, c.confidence)}
-            </span>
-          ) : null}
-          {match ? (
-            <span
-              title={
-                match.matchType === "exact"
-                  ? t("importPage.exactMatchTitle")
-                  : t("importPage.possibleMatchTitle")
-              }
-              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                match.matchType === "exact" ? "bg-rose-500/10 text-rose-400" : "bg-amber-500/10 text-amber-400"
-              }`}
-            >
-              <ShieldAlert size={11} /> {match.matchType === "exact" ? t("importPage.duplicate") : t("importPage.possibleDuplicate")}
-            </span>
-          ) : null}
-          {canDiscard && !match ? (
-            <span
-              title={t("importPage.suspectedDuplicateTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
-            >
-              <ShieldAlert size={11} /> {t("importPage.suspectedDuplicate")}
-            </span>
-          ) : null}
-          {!added && wrongTickerHint ? (
-            <span
-              title={t("importPage.likelyOthersTransactionTitle", { ticker: wrongTickerHint })}
-              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
-            >
-              <ShieldAlert size={11} /> {t("importPage.likelyOthersTransaction", { ticker: wrongTickerHint })}
-            </span>
-          ) : null}
-          {!added && dateMisreadHint ? (
-            <span
-              title={t("importPage.dateMisreadHintTitle", { date: formatDate(dateMisreadHint) })}
-              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
-            >
-              <ShieldAlert size={11} /> {t("importPage.dateMisreadHint", { date: formatDate(dateMisreadHint) })}
-            </span>
-          ) : null}
-          {!added && suggestedRemoval ? (
-            <span
-              title={t("importPage.suggestedRemovalTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-rose-500/10 px-2 py-0.5 text-[11px] font-medium text-rose-300"
-            >
-              <ShieldAlert size={11} /> {t("importPage.suggestedRemoval")}
-            </span>
-          ) : null}
-          {crossSourceVerified ? (
-            <span
-              title={t("importPage.crossSourceVerifiedTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
-            >
-              <ShieldCheck size={11} /> {t("importPage.twoDocumentsAgree")}
-            </span>
-          ) : null}
-          {aggregateConfirmed ? (
-            <span
-              title={
-                aggregateMatchDetail
-                  ? t("importPage.aggregateConfirmedTitleDetail", { detail: aggregateMatchDetail })
-                  : t("importPage.aggregateConfirmedTitle")
-              }
-              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
-            >
-              <ShieldCheck size={11} /> {t("importPage.aggregateConfirmed")}
-            </span>
-          ) : null}
-          {orderConfirmed ? (
-            <span
-              title={t("importPage.orderConfirmedTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-cyan-500/10 px-2 py-0.5 text-[11px] font-medium text-cyan-300"
-            >
-              <History size={11} /> {t("importPage.matchesOrdersHistory")}
-            </span>
-          ) : !added && noMatchingOrder ? (
-            <span
-              title={t("importPage.noMatchingOrderTitle")}
-              className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-300"
-            >
-              <History size={11} /> {t("importPage.noMatchingOrder")}
-            </span>
-          ) : null}
-        </div>
-        {added ? (
-          <span className="flex items-center gap-1 text-xs text-emerald-400">
-            <CheckCircle2 size={14} /> {t("importPage.added")}
-          </span>
-        ) : skipped ? (
-          <span className="flex items-center gap-1 text-xs text-slate-400">
-            <CheckCircle2 size={14} /> {t("importPage.skippedDuplicate")}
-          </span>
-        ) : (
-          <span className="flex items-center gap-1.5">
-            <button
-              onClick={onDiscardPending}
-              title={
-                canDiscard
-                  ? t("importPage.discardDuplicateTitle")
-                  : t("importPage.discardGenericTitle")
-              }
-              className={`rounded p-1 hover:bg-rose-500/10 ${canDiscard ? "text-rose-300" : "text-slate-500 hover:text-rose-400"}`}
-            >
-              <Trash2 size={13} />
-            </button>
-            {onSmartAction ? (
-              <button
-                onClick={() => void handleSmartAction()}
-                disabled={disabled || smartAllocating}
-                title={disabled ? disabledReason : undefined}
-                className="rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-slate-950 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-              >
-                {smartAllocating ? <Loader2 size={13} className="animate-spin" /> : (smartActionLabel ?? t("importPage.smartAllocate"))}
-              </button>
-            ) : null}
-            <button
-              onClick={onAction}
-              disabled={disabled}
-              title={disabled ? disabledReason : undefined}
-              className={`rounded-md px-3 py-1 text-xs font-medium text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 ${
-                disabled ? "" : actionClassName
-              }`}
-            >
-              {actionLabel}
-            </button>
-          </span>
-        )}
-      </div>
-      {error ? <p className="mt-1.5 text-xs text-rose-400">{error}</p> : null}
     </div>
   );
 }

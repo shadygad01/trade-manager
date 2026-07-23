@@ -150,10 +150,10 @@ describe("ImportPage load-order race: a fully-closed, fully-Excel-sourced ticker
   it("never shows 'Closed — needs corroborating evidence' or 'Needs broker screenshot' while rawTransactions is still loading, and settles to Fully matched once it resolves", async () => {
     render(<ImportPage />);
 
-    // The other five queries have already resolved (they're plain
-    // Promise.resolve()s); rawTransactions has not. This is the exact
-    // window the bug lived in.
-    await waitFor(() => expect(screen.getByText("ACAMD")).toBeInTheDocument());
+    // The other five queries have already resolved; rawTransactions has not.
+    // The review stays hidden until every status input is authoritative.
+    await waitFor(() => expect(resolveRawTransactions).toBeDefined());
+    expect(screen.queryByText("ACAMD")).toBeNull();
     expect(screen.queryByText("Closed — needs corroborating evidence")).toBeNull();
     expect(screen.queryByText(/Closes this gap/)).toBeNull();
     expect(screen.queryByText("Needs broker screenshot")).toBeNull();

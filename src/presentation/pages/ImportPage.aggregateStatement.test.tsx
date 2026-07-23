@@ -161,7 +161,8 @@ describe("Statement Aggregate Reconciliation, end to end", () => {
     // loading) — but the ticker only flips off "Needs broker screenshot"
     // once the Statement row is actually auto-skipped, which is gated on
     // that same ledger data (initialDataLoaded) resolving one tick later.
-    await waitFor(() => expect(screen.queryByText("Needs broker screenshot")).toBeNull());
+    await waitFor(() => expect(screen.getAllByText("Confirmed by Statement")).toHaveLength(2));
+    expect(screen.queryByText("Needs broker screenshot")).toBeNull();
     expect(screen.queryByText("Mismatch")).toBeNull();
 
     const badges = screen.getAllByText("Confirmed by Statement");
