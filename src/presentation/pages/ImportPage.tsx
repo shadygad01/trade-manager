@@ -71,14 +71,14 @@ import { useT } from "@presentation/i18n/translations";
 import { useImportQueries } from "@presentation/hooks/useImportQueries";
 import { useCommitLock } from "@presentation/hooks/useCommitLock";
 import { useCommitQueue } from "@presentation/hooks/useCommitQueue";
-import { CandidateRow } from "@presentation/components/CandidateRow";
 import { ConstraintReportPanel, RecoveryPlanPanel } from "@presentation/components/ImportReviewPanels";
 import { TickerEvidenceRows } from "@presentation/components/TickerEvidenceRows";
 import { RecordedTradesPanel } from "@presentation/components/RecordedTradesPanel";
 import { TickerGroupHeader } from "@presentation/components/TickerGroupHeader";
 import { TickerSuggestionBanners } from "@presentation/components/TickerSuggestionBanners";
 import { TickerResolutionBanners } from "@presentation/components/TickerResolutionBanners";
-import { AutoCommitRow } from "@presentation/components/AutoCommitRow";
+import { TickerBuyRows } from "@presentation/components/TickerBuyRows";
+import { TickerSellRows } from "@presentation/components/TickerSellRows";
 export { CandidateRow } from "@presentation/components/CandidateRow";
 export { AutoCommitRow } from "@presentation/components/AutoCommitRow";
 
@@ -3081,72 +3081,51 @@ export function TickerGroupCard({
         />
       ) : null}
       <div className="divide-y divide-slate-800">
-        {group.buys.filter((entry) => !skippedKeys.has(entry.key)).map((entry) => {
-          const match = duplicateMatch(entry.candidate, addedTradeIds[entry.key]);
-          return (
-            <AutoCommitRow
-              key={entry.key}
-              entry={entry}
-              match={match}
-              added={addedKeys.has(entry.key)}
-              skipped={skippedKeys.has(entry.key)}
-              dismissed={dismissedKeys.has(entry.key)}
-              portfolioResolved={portfolioResolved}
-              matched={matched}
-              distributing={distributing}
-              error={rowErrors[entry.key]}
-              suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
-              suggestedRemoval={reconcileSuggestion?.keysToRemove.includes(entry.key) ?? false}
-              wrongTickerHint={wrongTickerHints?.get(entry.key)}
-              dateMisreadHint={dateMisreadHints?.get(entry.key)}
-              crossSourceVerified={crossVerifiedKeys?.has(entry.key) ?? false}
-              aggregateConfirmed={aggregateConfirmedKeys?.has(entry.key) ?? false}
-              aggregateMatchDetail={aggregateGroupDetailByKey?.get(entry.key)}
-              orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
-              noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
-              onDelete={() => onDeleteAutoAdded(entry)}
-              onDiscardPending={() => onDiscardPending(entry)}
-            />
-          );
-        })}
-        {group.sells.filter((entry) => !skippedKeys.has(entry.key)).map((entry) => {
-          const match = duplicateMatch(entry.candidate, undefined, addedAllocationIds?.[entry.key]);
-          const added = addedKeys.has(entry.key);
-          const disabled = !matched || !portfolioResolved;
-          return (
-            <CandidateRow
-              key={entry.key}
-              entry={entry}
-              match={match}
-              added={added}
-              skipped={skippedKeys.has(entry.key)}
-              actionLabel={match ? t("importPage.allocateAnyway") : t("importPage.allocateSell")}
-              actionClassName="bg-rose-500 hover:bg-rose-400"
-              onAction={() => onAllocateSell(entry)}
-              smartActionLabel={t("importPage.smartAllocate")}
-              onSmartAction={onSmartAllocate ? () => onSmartAllocate(entry) : undefined}
-              disabled={disabled}
-              disabledReason={
-                !matched
-                  ? t("importPage.verifyTickerFirst")
-                  : !portfolioResolved
-                    ? t("importPage.pickPortfolioFirst")
-                    : undefined
-              }
-              suspectedDuplicate={suspectedDuplicateKeys.has(entry.key)}
-              suggestedRemoval={reconcileSuggestion?.keysToRemove.includes(entry.key) ?? false}
-              wrongTickerHint={wrongTickerHints?.get(entry.key)}
-              dateMisreadHint={dateMisreadHints?.get(entry.key)}
-              crossSourceVerified={crossVerifiedKeys?.has(entry.key) ?? false}
-              aggregateConfirmed={aggregateConfirmedKeys?.has(entry.key) ?? false}
-              aggregateMatchDetail={aggregateGroupDetailByKey?.get(entry.key)}
-              orderConfirmed={orderConfirmedKeys?.has(entry.key) ?? false}
-              noMatchingOrder={highlightUnmatchedByOrders && !(orderConfirmedKeys?.has(entry.key) ?? false)}
-              error={rowErrors[entry.key]}
-              onDiscardPending={() => onDiscardPending(entry)}
-            />
-          );
-        })}
+        <TickerBuyRows
+          buys={group.buys}
+          skippedKeys={skippedKeys}
+          addedKeys={addedKeys}
+          dismissedKeys={dismissedKeys}
+          portfolioResolved={portfolioResolved}
+          matched={matched}
+          distributing={distributing}
+          rowErrors={rowErrors}
+          duplicateMatch={duplicateMatch}
+          addedTradeIds={addedTradeIds}
+          suspectedDuplicateKeys={suspectedDuplicateKeys}
+          reconcileSuggestion={reconcileSuggestion}
+          wrongTickerHints={wrongTickerHints}
+          dateMisreadHints={dateMisreadHints}
+          crossVerifiedKeys={crossVerifiedKeys}
+          aggregateConfirmedKeys={aggregateConfirmedKeys}
+          aggregateGroupDetailByKey={aggregateGroupDetailByKey}
+          orderConfirmedKeys={orderConfirmedKeys}
+          highlightUnmatchedByOrders={highlightUnmatchedByOrders}
+          onDeleteAutoAdded={onDeleteAutoAdded}
+          onDiscardPending={onDiscardPending}
+        />
+        <TickerSellRows
+          sells={group.sells}
+          skippedKeys={skippedKeys}
+          addedKeys={addedKeys}
+          matched={matched}
+          portfolioResolved={portfolioResolved}
+          rowErrors={rowErrors}
+          duplicateMatch={duplicateMatch}
+          addedAllocationIds={addedAllocationIds}
+          suspectedDuplicateKeys={suspectedDuplicateKeys}
+          reconcileSuggestion={reconcileSuggestion}
+          wrongTickerHints={wrongTickerHints}
+          dateMisreadHints={dateMisreadHints}
+          crossVerifiedKeys={crossVerifiedKeys}
+          aggregateConfirmedKeys={aggregateConfirmedKeys}
+          aggregateGroupDetailByKey={aggregateGroupDetailByKey}
+          orderConfirmedKeys={orderConfirmedKeys}
+          highlightUnmatchedByOrders={highlightUnmatchedByOrders}
+          onAllocateSell={onAllocateSell}
+          onSmartAllocate={onSmartAllocate}
+          onDiscardPending={onDiscardPending}
+        />
         {(() => {
           const skippedCount = [...group.buys, ...group.sells].filter((e) => skippedKeys.has(e.key)).length;
           return skippedCount > 0 ? (
