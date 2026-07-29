@@ -1,11 +1,11 @@
 {
-  "asOf": "2026-07-29T11:59:45.323Z",
+  "asOf": "2026-07-29T14:27:26.225Z",
   "prices": {
     "COMI": 140.3,
     "HRHO": 26.45,
     "TMGH": 97.59,
     "SWDY": 94.95,
-    "EAST": 36.76,
+    "EAST": 36.79,
     "ETEL": 106.8,
     "ABUK": 71.32,
     "AMOC": 8.33,
@@ -24,10 +24,10 @@
     "ORAS": 717.9,
     "ARCC": 56.66,
     "ORHD": 39.79,
-    "SUGR": 46.91,
+    "SUGR": 46.9,
     "MASR": 8,
     "RMDA": 5.22,
-    "FIRE": 4.69
+    "FIRE": 4.71
   },
   "quotes": {
     "COMI": {
@@ -51,7 +51,7 @@
       "source": "tradingview"
     },
     "EAST": {
-      "price": 36.76,
+      "price": 36.79,
       "quotedAt": "2026-07-29T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -146,7 +146,7 @@
       "source": "tradingview"
     },
     "SUGR": {
-      "price": 46.91,
+      "price": 46.9,
       "quotedAt": "2026-07-29T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -161,7 +161,7 @@
       "source": "tradingview"
     },
     "FIRE": {
-      "price": 4.69,
+      "price": 4.71,
       "quotedAt": "2026-07-29T07:00:00.000Z",
       "source": "tradingview"
     }
