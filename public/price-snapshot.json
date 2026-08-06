@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-08-06T12:01:50.808Z",
+  "asOf": "2026-08-06T14:53:16.910Z",
   "prices": {
     "COMI": 140.13,
     "HRHO": 27.43,
@@ -27,7 +27,7 @@
     "SUGR": 47.74,
     "MASR": 8.04,
     "RMDA": 6.31,
-    "FIRE": 4.41
+    "FIRE": 4.43
   },
   "quotes": {
     "COMI": {
@@ -161,7 +161,7 @@
       "source": "tradingview"
     },
     "FIRE": {
-      "price": 4.41,
+      "price": 4.43,
       "quotedAt": "2026-08-06T07:00:00.000Z",
       "source": "tradingview"
     }
