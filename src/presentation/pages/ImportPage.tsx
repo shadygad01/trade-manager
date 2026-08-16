@@ -103,6 +103,18 @@ export function isLotEligibleForSell(
   return lotMinutes === undefined || sellMinutes === undefined || lotMinutes <= sellMinutes;
 }
 
+/** Deterministic FIFO ordering for lots: dates first, then numeric broker time. */
+export function compareLotsForSell(a: Pick<Trade, "executionDate" | "executionTime" | "id">, b: Pick<Trade, "executionDate" | "executionTime" | "id">): number {
+  const dateOrder = a.executionDate.localeCompare(b.executionDate);
+  if (dateOrder !== 0) return dateOrder;
+  const aMinutes = parseTimeToMinutes(a.executionTime);
+  const bMinutes = parseTimeToMinutes(b.executionTime);
+  if (aMinutes !== undefined && bMinutes !== undefined && aMinutes !== bMinutes) return aMinutes - bMinutes;
+  if (aMinutes !== undefined && bMinutes === undefined) return -1;
+  if (aMinutes === undefined && bMinutes !== undefined) return 1;
+  return a.id.localeCompare(b.id);
+}
+
 /** Whether the verification gate has any real inventory left to evaluate. */
 export function hasSharesToReconcile(pendingRowCount: number, existingRemainingShares: number): boolean {
   return pendingRowCount > 0 || Math.abs(existingRemainingShares) >= 1e-6;
@@ -1188,7 +1200,7 @@ export function ImportPage() {
         const allTrades = await repos.trades.getByPortfolio(portfolioId);
         const openLots = allTrades
           .filter((t) => normalizeTicker(t.ticker) === normalizedTicker && t.remainingShares > 0 && isLotEligibleForSell(t, entry.candidate))
-          .sort((a, b) => a.executionDate.localeCompare(b.executionDate) || a.executionTime.localeCompare(b.executionTime));
+          .sort(compareLotsForSell);
 
         let remainingToSell = entry.candidate.shares;
         const lines: { tradeId: string; shares: number }[] = [];
@@ -1560,11 +1572,7 @@ export function ImportPage() {
               trade.remainingShares > 0 &&
               isLotEligibleForSell(trade, entry.candidate),
           )
-          .sort(
-            (a, b) =>
-              a.executionDate.localeCompare(b.executionDate) ||
-              a.executionTime.localeCompare(b.executionTime),
-          );
+          .sort(compareLotsForSell);
 
         let remainingToSell = sharesToAllocate;
         const lines: { tradeId: string; shares: number }[] = [];

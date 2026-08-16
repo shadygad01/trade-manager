@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { hasSharesToReconcile, isLotEligibleForSell, TickerGroupCard } from "./ImportPage";
+import { compareLotsForSell, hasSharesToReconcile, isLotEligibleForSell, TickerGroupCard } from "./ImportPage";
 
 import type { CandidateEntry, OrderEvidenceEntry } from "@presentation/lib/importSession";
 
@@ -35,6 +35,15 @@ function sellEntry(key: string): CandidateEntry {
     candidate: { ticker: "SKPC", side: "SELL", shares: 82, price: 15.49, date: "2026-01-27", confidence: "high" },
   };
 }
+
+describe("Smart Allocate lot ordering", () => {
+  it("orders 9:00AM before 11:00AM numerically", () => {
+    const early = { id: "early", executionDate: "2023-01-25", executionTime: "9:00AM" };
+    const late = { id: "late", executionDate: "2023-01-25", executionTime: "11:00AM" };
+    expect(compareLotsForSell(early, late)).toBeLessThan(0);
+    expect(compareLotsForSell(late, early)).toBeGreaterThan(0);
+  });
+});
 
 describe("Smart Allocate chronology", () => {
   const sell = { ticker: "ABUK", side: "SELL" as const, shares: 190, price: 57.5, date: "2024-08-20", time: "11:00AM", confidence: "high" as const };
