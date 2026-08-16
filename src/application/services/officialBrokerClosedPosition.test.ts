@@ -8,11 +8,12 @@ import {
   createFakeRepositories,
 } from "@application/testUtils/fakeRepositories";
 import { recordImportedRawTransactions } from "./importRecording";
-import { assignPortfolio, commitTicker, type CommitEngineRepos } from "./commitEngine";
-import { recordBuyBatch, recordSell } from "./TradeService";
+import { assignPortfolio, commitTicker, retractRawTransaction, type CommitEngineRepos } from "./commitEngine";
+import { recordBuy, recordBuyBatch, recordSell } from "./TradeService";
 import type { AppRepositories } from "./types";
 import { isRetracted } from "./rawTransactionFolds";
 import { getTrackingStartDate, setTrackingStartDate } from "@domain/value-objects/trackingWindow";
+import { computeCanonicalPositions } from "./canonicalHoldings";
 
 const portfolioId = "portfolio-elka";
 const ticker = "ELKA";
@@ -143,6 +144,47 @@ describe("official broker closed-position import", () => {
         0,
       ),
     ).toBe(6364);
+  });
+
+  it("automatically repairs an official sell when legacy allocation exists but its decision fact is missing", async () => {
+    const base = createFakeRepositories({
+      portfolios: [createPortfolio({ id: portfolioId, name: "Old School", kind: "Investment", initialCash: 100_000 })],
+    });
+    const repos = {
+      ...base,
+      rawTransactions: createFakeRawTransactionRepository(),
+      committedLedger: createFakeCommittedLedgerRepository(),
+    } as AppRepositories & CommitEngineRepos;
+    const { trade } = await recordBuy(repos, {
+      portfolioId,
+      ticker,
+      shares: 50,
+      entryPrice: 10,
+      executionDate: "2026-01-01",
+      executionTime: "10:00AM",
+      source: "official-broker-excel",
+      deferCommit: true,
+    });
+    await recordSell(repos, {
+      portfolioId,
+      ticker,
+      allocations: [{ tradeId: trade.id, shares: 50, exitPrice: 12 }],
+      executionDate: "2026-02-01",
+      executionTime: "10:00AM",
+      source: "official-broker-excel",
+      deferCommit: true,
+    });
+    const facts = await repos.rawTransactions.getAll();
+    const decision = facts.find((fact) => fact.kind === "SellAllocationDecision");
+    expect(decision).toBeDefined();
+    await retractRawTransaction(repos, decision!.id, "Regression setup: simulate missing allocation decision");
+
+    // No explicit repair option: the legacy allocation is enough evidence that
+    // the user completed lot allocation, so the normal commit self-heals it.
+    await commitTicker(repos, portfolioId, ticker);
+
+    const positions = await computeCanonicalPositions(repos, portfolioId, {});
+    expect(positions.find((item) => item.ticker === ticker)).toBeUndefined();
   });
 
   it("self-heals a completed import whose broker sells have no allocation decisions", async () => {

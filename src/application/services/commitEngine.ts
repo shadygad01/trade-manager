@@ -195,6 +195,36 @@ async function adoptUnassignedOfficialBrokerFacts(
   return unassignedOfficial.length;
 }
 
+async function hasCompleteLegacyAllocationsForOfficialSells(
+  repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
+  portfolioId: string,
+  ticker: string,
+): Promise<boolean> {
+  if (!repos.allocations) return false;
+  const normalized = normalizeTicker(ticker);
+  const all = await repos.rawTransactions.getAll();
+  const officialSells = all.filter((transaction): transaction is RawTransaction & { payload: SellExecutionPayload } => {
+    if (transaction.kind !== "SellExecution" || transaction.source !== "official-broker-excel" || isRetracted(all, transaction.id)) return false;
+    const resolvedTicker = resolveCurrentTicker(all, transaction);
+    return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === normalized && resolveCurrentPortfolioId(all, transaction) === portfolioId;
+  });
+  if (officialSells.length === 0) return false;
+  const allocations = await repos.allocations.getByPortfolio(portfolioId);
+  return officialSells.every((sell) => {
+    const payload = sell.payload;
+    const closedShares = allocations
+      .filter(
+        (allocation) =>
+          normalizeTicker(allocation.ticker) === normalized &&
+          allocation.executionDate === payload.executionDate &&
+          allocation.executionTime === payload.executionTime &&
+          Math.abs(allocation.exitPrice - payload.price) < 1e-9,
+      )
+      .reduce((sum, allocation) => sum + allocation.sharesClosed, 0);
+    return closedShares >= payload.shares;
+  });
+}
+
 export async function commitTicker(
   repos: CommitEngineRepos & Partial<LegacyLedgerRepos>,
   portfolioId: string,
@@ -227,7 +257,10 @@ export async function commitTicker(
     }
   }
 
-  if (options?.repairOfficialBrokerAllocations) {
+  const shouldRepairOfficialBrokerAllocations =
+    options?.repairOfficialBrokerAllocations === true ||
+    (await hasCompleteLegacyAllocationsForOfficialSells(repos, portfolioId, normalizedTicker));
+  if (shouldRepairOfficialBrokerAllocations) {
     await adoptUnassignedOfficialBrokerFacts(repos, portfolioId, normalizedTicker);
     const duplicateIds = await findOfficialBrokerDuplicateIds(repos, portfolioId, normalizedTicker);
     const repaired = await repairOfficialBrokerSellAllocations(
