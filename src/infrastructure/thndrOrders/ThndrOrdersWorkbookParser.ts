@@ -1,5 +1,6 @@
 import type { ParsedCancelledOrder, ParsedTradeCandidate } from "@domain/entities/Upload";
 import { parsePrice } from "../ocr/parsers/ThndrParser";
+import { safeReadOptions, validateSpreadsheetBuffer, validateWorkbookShape } from "../spreadsheetSecurity";
 
 /**
  * Parser for Thndr's native "Your Orders" screen exported directly to Excel
@@ -127,6 +128,7 @@ function parseSide(raw: string): "BUY" | "SELL" | null {
  */
 export async function parseThndrOrdersWorkbook(buffer: ArrayBuffer): Promise<ThndrOrdersWorkbookParseResult> {
   const notRecognized = (): ThndrOrdersWorkbookParseResult => ({ ok: false, candidates: [], cancelledOrders: [], warnings: [], rawText: "" });
+  if (validateSpreadsheetBuffer(buffer)) return notRecognized();
 
   // Dynamic import so the xlsx library only ever loads when an .xlsx file is
   // actually imported — mirroring StesWorkbookParser.ts.
@@ -134,10 +136,11 @@ export async function parseThndrOrdersWorkbook(buffer: ArrayBuffer): Promise<Thn
 
   let workbook: import("xlsx").WorkBook;
   try {
-    workbook = XLSX.read(buffer, { type: "array" });
+    workbook = XLSX.read(buffer, safeReadOptions());
   } catch {
     return notRecognized();
   }
+  if (validateWorkbookShape(workbook)) return notRecognized();
 
   const sheetName = workbook.SheetNames[0];
   const sheet = sheetName ? workbook.Sheets[sheetName] : undefined;

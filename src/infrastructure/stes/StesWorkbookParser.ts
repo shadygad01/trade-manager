@@ -1,5 +1,6 @@
 import type { ParsedDividendCandidate, ParsedTradeCandidate, ParsedCancelledOrder, ParseConfidence } from "@domain/entities/Upload";
 import { defaultTrackedSince, isWithinTrackedRange } from "../ocr/parsers/trackedDateRange";
+import { safeReadOptions, safeSheetToObjects, validateSpreadsheetBuffer, validateWorkbookShape } from "../spreadsheetSecurity";
 
 /**
  * Parser for the Standard Trading Exchange Schema (STES) v1.1 raw-extraction
@@ -170,6 +171,9 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
     observationCount: 0,
   });
 
+  const bufferError = validateSpreadsheetBuffer(buffer);
+  if (bufferError) return failed([bufferError]);
+
   // Dynamic import so the xlsx library only ever loads (its own lazy chunk)
   // when an .xlsx file is actually imported — mirroring how Tesseract/pdfjs
   // are isolated from the main bundle.
@@ -177,10 +181,12 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
 
   let workbook: import("xlsx").WorkBook;
   try {
-    workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+    workbook = XLSX.read(buffer, safeReadOptions());
   } catch {
     return failed(["This .xlsx file couldn't be read as a spreadsheet — re-export it and try again."]);
   }
+  const workbookError = validateWorkbookShape(workbook);
+  if (workbookError) return failed([workbookError]);
 
   const sheetByName = (name: string) => {
     const actual = workbook.SheetNames.find((n) => normalizeHeader(n) === normalizeHeader(name));
@@ -206,7 +212,7 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
     .join("\n\n");
 
   // --- Metadata: schema self-identification ---
-  const metadataRows = XLSX.utils.sheet_to_json<SheetRow>(metadataSheet!, { defval: null });
+  const metadataRows = safeSheetToObjects(XLSX, metadataSheet!) as SheetRow[];
   const metadata = new Map<string, string>();
   for (const row of metadataRows) {
     const key = asText(cell(row, "Key"));
@@ -236,7 +242,7 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
   const warnings: string[] = [];
 
   // --- Documents: one evidence source per row ---
-  const documentRows = XLSX.utils.sheet_to_json<SheetRow>(documentsSheet!, { defval: null });
+  const documentRows = safeSheetToObjects(XLSX, documentsSheet!) as SheetRow[];
   const documents = new Map<string, ParsedDocument>();
   for (let i = 0; i < documentRows.length; i++) {
     const row = documentRows[i];
@@ -263,7 +269,7 @@ export async function parseStesWorkbook(buffer: ArrayBuffer): Promise<StesParseR
   }
 
   // --- Observations ---
-  const observationRows = XLSX.utils.sheet_to_json<SheetRow>(observationsSheet!, { defval: null });
+  const observationRows = safeSheetToObjects(XLSX, observationsSheet!) as SheetRow[];
   const headerCells = (XLSX.utils.sheet_to_json<unknown[]>(observationsSheet!, { header: 1 })[0] ?? []) as unknown[];
   const presentHeaders = new Set(headerCells.filter((h): h is string => typeof h === "string").map(normalizeHeader));
   const requiredColumns = ["Observation ID", "Document ID", "Transaction Type", "Ticker", "Trade Date", "Quantity", "Price", "Dividend Amount"];
