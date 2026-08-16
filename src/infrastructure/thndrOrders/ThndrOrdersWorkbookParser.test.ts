@@ -42,6 +42,23 @@ describe("parseThndrOrdersWorkbook", () => {
     expect(result.candidates[1]).toMatchObject({ ticker: "ABUK", side: "SELL", shares: 14, price: 67.4, date: "2026-06-30" });
   });
 
+  it("imports a SETTLED sell as a completed official execution", async () => {
+    const buffer = buildWorkbook([
+      TITLE_ROW,
+      ["ESRS"],
+      ["20 Feb ’23 - 10:14 AM", "Sell Market", "Good Till Cancel", "24.30 EGP", "370/370", "SETTLED"],
+    ]);
+    const result = await parseThndrOrdersWorkbook(buffer);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      ticker: "ESRS",
+      side: "SELL",
+      shares: 370,
+      price: 24.3,
+      source: "official-broker-excel",
+    });
+  });
+
   it("never creates a trade for a cancelled, rejected, or expired order", async () => {
     const buffer = buildWorkbook([
       TITLE_ROW,

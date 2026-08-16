@@ -212,9 +212,12 @@ export async function parseThndrOrdersWorkbook(buffer: ArrayBuffer): Promise<Thn
       continue;
     }
 
-    if (status !== "FULFILLED" && status !== "PARTIALLY FILLED") {
+    const isExecutedStatus = status === "FULFILLED" || status === "PARTIALLY FILLED" || status === "SETTLED";
+    if (!isExecutedStatus) {
       // PENDING (not yet executed) and any other/unknown status never
-      // create a trade or a cancelled-order audit row.
+      // create a trade or a cancelled-order audit row. Thndr's native
+      // workbook uses SETTLED for completed sell orders in some exports;
+      // it is terminal execution evidence just like FULFILLED.
       continue;
     }
 
