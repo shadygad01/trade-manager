@@ -213,19 +213,24 @@ async function hasCompleteLegacyAllocationsForOfficialSells(
   });
   if (officialSells.length === 0) return false;
   const allocations = await repos.allocations.getByPortfolio(portfolioId);
-  return officialSells.every((sell) => {
-    const payload = sell.payload;
-    const closedShares = allocations
-      .filter(
-        (allocation) =>
-          normalizeTicker(allocation.ticker) === normalized &&
-          allocation.executionDate === payload.executionDate &&
-          allocation.executionTime === payload.executionTime &&
-          Math.abs(allocation.exitPrice - payload.price) < 1e-9,
-      )
-      .reduce((sum, allocation) => sum + allocation.sharesClosed, 0);
-    return closedShares >= payload.shares;
-  });
+  const officialSellShares = officialSells.reduce((sum, sell) => sum + sell.payload.shares, 0);
+  const allocatedOfficialSellShares = allocations
+    .filter(
+      (allocation) =>
+        normalizeTicker(allocation.ticker) === normalized &&
+        officialSells.some(
+          (sell) =>
+            sell.payload.executionDate === allocation.executionDate &&
+            Math.abs(sell.payload.price - allocation.exitPrice) < 1e-9,
+        ),
+    )
+    .reduce((sum, allocation) => sum + allocation.sharesClosed, 0);
+  // Importers and older clients normalize missing/variant execution times
+  // differently (undefined, 00:00, or broker-formatted text). Date + price
+  // plus the aggregate share total is the stable evidence that Smart Allocate
+  // completed; requiring exact time here incorrectly disabled repair for
+  // positions such as ADIB/HDBK.
+  return allocatedOfficialSellShares >= officialSellShares;
 }
 
 export async function commitTicker(
