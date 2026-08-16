@@ -25,6 +25,7 @@ import {
   findDurablyResolvedCandidateKeys,
   alreadyAllocatedSharesForSell,
   parseTimeToMinutes,
+  timesConflict,
 } from "@application/services/duplicateDetection";
 import { checkTickerMatch, isTickerFullyResolved, type TickerMatchStatus } from "@application/services/importVerification";
 import {
@@ -53,6 +54,7 @@ import { tickerForCompanyNameFallback } from "@domain/value-objects/knownTickers
 import { isBeforeTrackingStart } from "@domain/value-objects/trackingWindow";
 import { useTrackingStartDate, trackingStartDateStore } from "@presentation/lib/trackingStartDateStore";
 import type { ParsedTradeCandidate, ParsedOrderEvidence, Upload } from "@domain/entities/Upload";
+import type { SellExecutionPayload } from "@domain/entities/RawTransaction";
 import type { Trade } from "@domain/entities/Trade";
 import type { RecordSellInput } from "@presentation/lib/types";
 import {
@@ -618,18 +620,38 @@ export function ImportPage() {
   useEffect(() => {
     if (!initialDataLoaded || distributing || pendingCandidates.length === 0) return;
     const state = importSession.getState();
+    const reopenKeys = new Set(
+      state.pendingCandidates
+        .filter((entry) => entry.candidate.side === "SELL" && entry.candidate.source === "official-broker-excel")
+        .filter((entry) => {
+          const candidate = entry.candidate;
+          return findUnallocatedSellExecutions(existingRawTransactions, candidate.ticker).some((fact) => {
+            const payload = fact.payload as SellExecutionPayload;
+            return (
+              payload.executionDate === candidate.date &&
+              payload.shares === candidate.shares &&
+              Math.abs(payload.price - candidate.price) <= Math.max(0.0001, candidate.price * 0.01) &&
+              !timesConflict(candidate.time, payload.executionTime) &&
+              (!candidate.transactionNumber || !payload.transactionNumber || candidate.transactionNumber === payload.transactionNumber)
+            );
+          });
+        })
+        .map((entry) => entry.key),
+    );
     const resolved = new Set([...state.addedKeys, ...state.skippedKeys, ...state.dismissedKeys]);
     const durableKeys = findDurablyResolvedCandidateKeys(
-      state.pendingCandidates.filter((entry) => !resolved.has(entry.key)),
+      state.pendingCandidates.filter((entry) => !resolved.has(entry.key) && !reopenKeys.has(entry.key)),
       existingTrades,
       existingAllocations,
     );
-    if (durableKeys.length === 0) return;
+    if (reopenKeys.size === 0 && durableKeys.length === 0) return;
     importSession.update((prev) => ({
       ...prev,
-      addedKeys: [...new Set([...prev.addedKeys, ...durableKeys])],
+      addedKeys: [...new Set([...prev.addedKeys.filter((key) => !reopenKeys.has(key)), ...durableKeys])],
+      skippedKeys: prev.skippedKeys.filter((key) => !reopenKeys.has(key)),
+      addedAllocationIds: Object.fromEntries(Object.entries(prev.addedAllocationIds).filter(([key]) => !reopenKeys.has(key))),
     }));
-  }, [initialDataLoaded, pendingCandidates, existingTrades, existingAllocations, distributing]);
+  }, [initialDataLoaded, pendingCandidates, existingTrades, existingAllocations, existingRawTransactions, distributing]);
 
   // A repeated native broker Excel export can reach the persisted Import
   // session after its original rows have already been committed.  The
