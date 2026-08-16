@@ -63,6 +63,43 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
     expect(comi.totalShares).toBe(100);
   });
 
+  it("a fully official broker round-trip disappears even when the committed ledger is stale and has no allocation decision", async () => {
+    const portfolio = createPortfolio({ id: "p1", name: "Main", kind: "Investment", initialCash: 100_000 });
+    const base = createFakeRepositories({ portfolios: [portfolio] });
+    const rawTransactions = createFakeRawTransactionRepository();
+    const committedLedger = createFakeCommittedLedgerRepository();
+    const repos = { ...base, rawTransactions, committedLedger };
+
+    await rawTransactions.append(createRawTransaction({
+      id: "esrs-buy",
+      kind: "BuyExecution",
+      source: "official-broker-excel",
+      portfolioId: "p1",
+      ticker: "ESRS",
+      payload: { ticker: "ESRS", shares: 370, price: 33.44, executionDate: "2026-01-01", executionTime: "10:00" },
+    }));
+    await rawTransactions.append(createRawTransaction({
+      id: "esrs-sell",
+      kind: "SellExecution",
+      source: "official-broker-excel",
+      portfolioId: "p1",
+      ticker: "ESRS",
+      payload: { ticker: "ESRS", shares: 370, price: 33.44, executionDate: "2026-02-01", executionTime: "10:00" },
+    }));
+
+    // Simulate the known production failure: the buy reached the committed
+    // ledger, while the sell/allocation write did not.
+    await committedLedger.commitTicker({
+      portfolioId: "p1",
+      ticker: "ESRS",
+      events: [{ type: "LotOpened", eventId: "esrs-buy", executionDate: "2026-01-01", executionTime: "10:00", ticker: "ESRS", shares: 370, price: 33.44, sourceTransactionIds: ["esrs-buy"] }],
+      allocations: [],
+    });
+
+    const positions = await computeCanonicalPositions(repos, "p1", {});
+    expect(positions.find((position) => position.ticker === "ESRS")).toBeUndefined();
+  });
+
   it("a ticker where the canonical ledger DISAGREES with the recorded trades trusts the canonical ledger, not the recorded trades (root-cause fix)", async () => {
     // Isolates the reconciliation logic itself: a real Trade (50 shares) and
     // a directly-injected, already-committed ledgerCache entry that

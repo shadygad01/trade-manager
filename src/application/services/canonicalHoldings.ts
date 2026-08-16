@@ -3,6 +3,8 @@ import { computePositions, type PositionAggregate } from "./TradeService";
 import { computeHoldings } from "./holdingsEngine";
 import type { AppRepositories } from "./types";
 import type { CommittedLedgerRepository, RawTransactionRepository } from "@domain/repositories";
+import { isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
+import { isRetracted, resolveCurrentTicker } from "./rawTransactionFolds";
 
 /**
  * The production read cutover, made safe to run today instead of gated
@@ -99,6 +101,30 @@ async function tryComputeCanonicalByTicker(
     const rawForPortfolio = await repos.rawTransactions.getByPortfolio(portfolioId);
     const tickers = new Set(rawForPortfolio.filter((t) => t.ticker !== undefined).map((t) => normalizeTicker(t.ticker!)));
     for (const ticker of tickers) {
+      // An official broker workbook is the strongest execution evidence. If
+      // its live Buy/Sell facts net to zero while the materialized ledger is
+      // stale or incomplete, do not let a missing allocation/cache write keep
+      // a closed ticker visible. We deliberately require the existing central
+      // authority policy and sum only official facts to avoid counting a lower
+      // authority shadow copy twice.
+      if (isTickerFullyOfficialBrokerExcelSourced(rawForPortfolio, ticker)) {
+        const officialExecutions = rawForPortfolio.filter((t) => {
+            if ((t.kind !== "BuyExecution" && t.kind !== "SellExecution") || t.source !== "official-broker-excel" || isRetracted(rawForPortfolio, t.id)) return false;
+            const resolvedTicker = resolveCurrentTicker(rawForPortfolio, t);
+            return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === ticker;
+          });
+        if (officialExecutions.length > 0) {
+          const officialNetShares = officialExecutions.reduce((net, t) => {
+            const shares = (t.payload as { shares: number }).shares;
+            return net + (t.kind === "BuyExecution" ? shares : -shares);
+          }, 0);
+          if (officialNetShares <= SHARE_TOLERANCE) {
+            canonicalByTicker.set(ticker, CLOSED);
+            continue;
+          }
+        }
+      }
+
       const [events, allocations] = await Promise.all([
         repos.committedLedger.getLedgerEvents(portfolioId, ticker),
         repos.committedLedger.getAllocations(portfolioId, ticker),
