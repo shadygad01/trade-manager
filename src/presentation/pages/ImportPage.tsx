@@ -3650,7 +3650,7 @@ export function TickerGroupCard({
       ) : null}
 
       <div className="divide-y divide-slate-800">
-        {group.buys.filter((entry) => !skippedKeys.has(entry.key)).map((entry) => {
+        {group.buys.filter((entry) => !skippedKeys.has(entry.key) && !addedKeys.has(entry.key)).map((entry) => {
           const match = duplicateMatch(entry.candidate, addedTradeIds[entry.key]);
           return (
             <AutoCommitRow
@@ -3678,7 +3678,7 @@ export function TickerGroupCard({
             />
           );
         })}
-        {group.sells.filter((entry) => !skippedKeys.has(entry.key)).map((entry) => {
+        {group.sells.filter((entry) => !skippedKeys.has(entry.key) && !addedKeys.has(entry.key)).map((entry) => {
           const match = duplicateMatch(entry.candidate, undefined, addedAllocationIds?.[entry.key]);
           const added = addedKeys.has(entry.key);
           const disabled = !matched || !portfolioResolved;

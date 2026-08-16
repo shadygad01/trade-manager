@@ -1243,7 +1243,7 @@ describe("TickerGroupCard — reconciliation transparency and company-name-fallb
     expect(onRenameTicker).toHaveBeenCalledWith("SUGR");
   });
 
-  it("excludes a committed sell's own allocations from its duplicate check (the MEDINET Added+Duplicate case)", () => {
+  it("does not re-render a committed sell after re-import, so its own allocations cannot appear as a duplicate", () => {
     const duplicateMatch = vi.fn(() => undefined);
     const entry = sellEntry("s1");
     render(
@@ -1275,8 +1275,8 @@ describe("TickerGroupCard — reconciliation transparency and company-name-fallb
         mergeSuggestion={undefined}
       />,
     );
-    expect(duplicateMatch).toHaveBeenCalledWith(entry.candidate, undefined, ["alloc-1", "alloc-2"]);
-    expect(screen.getByText("Added")).toBeInTheDocument();
+    expect(duplicateMatch).not.toHaveBeenCalled();
+    expect(screen.queryByText("Added")).not.toBeInTheDocument();
     expect(screen.queryByText("Duplicate")).not.toBeInTheDocument();
   });
 });
@@ -1351,8 +1351,8 @@ describe("TickerGroupCard — per-ticker Confirm (the ORWE case: verified but bl
   });
 });
 
-describe("TickerGroupCard — an added Buy never shows a false self-duplicate badge", () => {
-  it("passes the row's own committed trade id to duplicateMatch, so a successful commit excludes itself from the comparison", () => {
+describe("TickerGroupCard — a committed Buy does not return as an Import row", () => {
+  it("hides the row after a successful commit instead of showing Added again", () => {
     const duplicateMatch = vi.fn(() => undefined);
     const added = buyEntry("added-1");
     render(
@@ -1383,8 +1383,8 @@ describe("TickerGroupCard — an added Buy never shows a false self-duplicate ba
         mergeSuggestion={undefined}
       />,
     );
-    expect(duplicateMatch).toHaveBeenCalledWith(added.candidate, "trade-abc");
-    expect(screen.getByText("Added")).toBeInTheDocument();
+    expect(duplicateMatch).not.toHaveBeenCalled();
+    expect(screen.queryByText("Added")).not.toBeInTheDocument();
     expect(screen.queryByText("Duplicate")).not.toBeInTheDocument();
   });
 });
