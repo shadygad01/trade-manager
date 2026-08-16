@@ -74,7 +74,7 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
       id: "esrs-buy",
       kind: "BuyExecution",
       source: "official-broker-excel",
-      portfolioId: "p1",
+      portfolioId: "legacy-import",
       ticker: "ESRS",
       payload: { ticker: "ESRS", shares: 370, price: 33.44, executionDate: "2026-01-01", executionTime: "10:00" },
     }));
@@ -82,9 +82,22 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
       id: "esrs-sell",
       kind: "SellExecution",
       source: "official-broker-excel",
-      portfolioId: "p1",
+      portfolioId: "legacy-import",
       ticker: "ESRS",
       payload: { ticker: "ESRS", shares: 370, price: 33.44, executionDate: "2026-02-01", executionTime: "10:00" },
+    }));
+
+    await rawTransactions.append(createRawTransaction({
+      id: "esrs-buy-assignment",
+      kind: "PortfolioAssignment",
+      source: "manual",
+      payload: { targetId: "esrs-buy", portfolioId: "p1" },
+    }));
+    await rawTransactions.append(createRawTransaction({
+      id: "esrs-sell-assignment",
+      kind: "PortfolioAssignment",
+      source: "manual",
+      payload: { targetId: "esrs-sell", portfolioId: "p1" },
     }));
 
     // Simulate the known production failure: the buy reached the committed

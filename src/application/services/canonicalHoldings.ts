@@ -1,6 +1,7 @@
 import { normalizeTicker } from "@domain/value-objects/Ticker";
 import { computePositions, type PositionAggregate } from "./TradeService";
 import { computeHoldings } from "./holdingsEngine";
+import { resolveCurrentPortfolioId } from "./commitEngine";
 import type { AppRepositories } from "./types";
 import type { CommittedLedgerRepository, RawTransactionRepository } from "@domain/repositories";
 import { isTickerFullyOfficialBrokerExcelSourced } from "./reconciliation";
@@ -98,7 +99,12 @@ async function tryComputeCanonicalByTicker(
 ): Promise<Map<string, PositionAggregate | typeof CLOSED>> {
   const canonicalByTicker = new Map<string, PositionAggregate | typeof CLOSED>();
   try {
-    const rawForPortfolio = await repos.rawTransactions.getByPortfolio(portfolioId);
+    // PortfolioId on an execution fact is immutable. Import can assign it
+    // later through a PortfolioAssignment fact, so getByPortfolio() can miss
+    // exactly the historical ESRS shape. Resolve assignments over the full
+    // fact log before discovering tickers and official net shares.
+    const allRawTransactions = await repos.rawTransactions.getAll();
+    const rawForPortfolio = allRawTransactions.filter((transaction) => resolveCurrentPortfolioId(allRawTransactions, transaction) === portfolioId);
     const tickers = new Set(rawForPortfolio.filter((t) => t.ticker !== undefined).map((t) => normalizeTicker(t.ticker!)));
     for (const ticker of tickers) {
       // An official broker workbook is the strongest execution evidence. If
