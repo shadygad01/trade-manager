@@ -14,6 +14,7 @@ import {
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
   findOfficialBrokerExcelReuploadDuplicateKeys,
+  findDurablyResolvedCandidateKeys,
   alreadyAllocatedSharesForSell,
 } from "./duplicateDetection";
 import { createTrade } from "@domain/entities/Trade";
@@ -1035,6 +1036,31 @@ describe("findDateMisreadDuplicateHints", () => {
     const pending = { key: "s1", candidate: buyCandidate({ ticker: "RMDA", side: "SELL" as const, shares: 500, price: 2.8, date: "2023-01-07" }) };
     const hints = findDateMisreadDuplicateHints([pending], [], [allocation]);
     expect(hints.get("s1")).toBe("2023-01-17");
+  });
+});
+
+describe("findDurablyResolvedCandidateKeys", () => {
+  it("resolves an exact committed buy and a fully allocated sell, but not a partial sell", () => {
+    const buy = buyCandidate({ ticker: "ESRS", side: "BUY", shares: 100, price: 24, date: "2023-01-01" });
+    const sell = buyCandidate({ ticker: "ESRS", side: "SELL", shares: 100, price: 25, date: "2023-01-25", time: "10:00AM" });
+    const trade = createTrade({ id: "esrs-buy", portfolioId: "p1", ticker: "ESRS", shares: 100, entryPrice: 24, executionDate: "2023-01-01", executionTime: "09:00" });
+    const allocation = createTradeAllocation({
+      id: "esrs-allocation",
+      sellGroupId: "esrs-sell-group",
+      portfolioId: "p1",
+      tradeId: trade.id,
+      ticker: "ESRS",
+      sharesClosed: 100,
+      exitPrice: 25,
+      executionDate: "2023-01-25",
+      executionTime: "10:00",
+    });
+
+    expect(findDurablyResolvedCandidateKeys([
+      { key: "buy", candidate: buy },
+      { key: "sell", candidate: sell },
+      { key: "partial", candidate: { ...sell, shares: 101 } },
+    ], [trade], [allocation])).toEqual(["buy", "sell"]);
   });
 });
 

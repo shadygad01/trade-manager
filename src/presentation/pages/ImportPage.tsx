@@ -22,6 +22,7 @@ import {
   findWrongTickerCandidateKeys,
   findDateMisreadDuplicateHints,
   findOfficialBrokerExcelReuploadDuplicateKeys,
+  findDurablyResolvedCandidateKeys,
   alreadyAllocatedSharesForSell,
   parseTimeToMinutes,
 } from "@application/services/duplicateDetection";
@@ -605,6 +606,30 @@ export function ImportPage() {
     sellCandidate,
     distributing,
   ]);
+
+  /**
+   * Reconcile the localStorage extraction pool against the durable ledger on
+   * every mount/reload. A candidate that was already committed (Buy) or fully
+   * allocated (Sell) must become terminal even when the old session was lost,
+   * its file sequence changed, or it was confirmed in a previous visit.
+   * Partial sells are deliberately not marked resolved: only the exact full
+   * allocation is safe to remove from the actionable Import pool.
+   */
+  useEffect(() => {
+    if (!initialDataLoaded || distributing || pendingCandidates.length === 0) return;
+    const state = importSession.getState();
+    const resolved = new Set([...state.addedKeys, ...state.skippedKeys, ...state.dismissedKeys]);
+    const durableKeys = findDurablyResolvedCandidateKeys(
+      state.pendingCandidates.filter((entry) => !resolved.has(entry.key)),
+      existingTrades,
+      existingAllocations,
+    );
+    if (durableKeys.length === 0) return;
+    importSession.update((prev) => ({
+      ...prev,
+      addedKeys: [...new Set([...prev.addedKeys, ...durableKeys])],
+    }));
+  }, [initialDataLoaded, pendingCandidates, existingTrades, existingAllocations, distributing]);
 
   // A repeated native broker Excel export can reach the persisted Import
   // session after its original rows have already been committed.  The

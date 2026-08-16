@@ -1,5 +1,6 @@
-import type { Trade } from "@domain/entities/Trade";
 import type { TradeAllocation } from "@domain/entities/TradeAllocation";
+import type { Trade } from "@domain/entities/Trade";
+
 import type { TimelineEvent } from "@domain/entities/TimelineEvent";
 import type { ParsedTradeCandidate } from "@domain/entities/Upload";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
@@ -895,6 +896,35 @@ export function alreadyAllocatedSharesForSell(
  * and their known times must agree.  Two real same-value fills minutes apart
  * therefore remain distinct lots.
  */
+export function findDurablyResolvedCandidateKeys(
+  entries: { key: string; candidate: ParsedTradeCandidate }[],
+  existingTrades: Trade[],
+  existingAllocations: TradeAllocation[],
+): string[] {
+  return entries
+    .filter((entry) => {
+      if (entry.candidate.side === "BUY") {
+        const match = findDuplicateBuyMatch(entry.candidate, existingTrades);
+        return match?.matchType === "exact";
+      }
+      const groups = [...groupSellAllocationsByOrder(existingAllocations, entry.candidate.ticker).values()];
+      const compatibleShares = groups
+        .filter((group) => {
+          if (entry.candidate.transactionNumber) {
+            return sameExecution(group.transactionNumber, entry.candidate.transactionNumber) === true;
+          }
+          return (
+            group.date === entry.candidate.date &&
+            !timesConflict(entry.candidate.time, group.executionTime) &&
+            Math.abs(group.price - entry.candidate.price) <= Math.max(0.0001, entry.candidate.price * 0.01)
+          );
+        })
+        .reduce((sum, group) => sum + group.totalShares, 0);
+      return compatibleShares >= entry.candidate.shares;
+    })
+    .map((entry) => entry.key);
+}
+
 export function findOfficialBrokerExcelReuploadDuplicateKeys(
   entries: { key: string; candidate: ParsedTradeCandidate }[],
   resolvedKeys: ReadonlySet<string>,
