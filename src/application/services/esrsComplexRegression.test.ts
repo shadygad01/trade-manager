@@ -5,7 +5,6 @@ import { createRawTransaction, type RawTransaction } from "@domain/entities/RawT
 import { createFakeRepositories, createFakeRawTransactionRepository, createFakeCommittedLedgerRepository } from "@application/testUtils/fakeRepositories";
 import { computeCanonicalPositions } from "./canonicalHoldings";
 import { findUnallocatedSellExecutions } from "./rawTransactionFolds";
-import { compareLotsForSell } from "@presentation/pages/ImportPage";
 
 function withSeq(...facts: Omit<RawTransaction, "seq">[]): RawTransaction[] {
   return facts.map((fact, index) => ({ ...fact, seq: index + 1 }));
@@ -75,13 +74,6 @@ describe("ESRS complex regression matrix", () => {
     expect(positions.find((position) => position.ticker === "ESRS")).toBeUndefined();
   });
 
-  it("orders same-day ESRS lots by numeric broker time and keeps the result deterministic", () => {
-    const early = { id: "lot-9am", executionDate: "2023-01-25", executionTime: "9:00AM" };
-    const late = { id: "lot-11am", executionDate: "2023-01-25", executionTime: "11:00AM" };
-    expect(compareLotsForSell(early, late)).toBeLessThan(0);
-    expect(compareLotsForSell(late, early)).toBeGreaterThan(0);
-    expect(compareLotsForSell(early, { ...early, id: "lot-zz" })).toBeLessThan(0);
-  });
 });
 
 // This file intentionally uses only the append-only facts and pure projection
