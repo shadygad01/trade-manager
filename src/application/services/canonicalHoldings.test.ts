@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { computeCanonicalPositions } from "./canonicalHoldings";
 import { recordBuy, moveTrade } from "./TradeService";
 import { createPortfolio } from "@domain/entities/Portfolio";
+import { createTrade } from "@domain/entities/Trade";
 import { createRawTransaction, type BuyExecutionPayload } from "@domain/entities/RawTransaction";
 import {
   createFakeRepositories,
@@ -61,6 +62,56 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
     const comi = positions.find((p) => p.ticker === "COMI")!;
     expect(comi.source).toBe("canonical");
     expect(comi.totalShares).toBe(100);
+  });
+
+  it("closes an assigned non-official round-trip by the live Buy − Sell invariant even when legacy Holdings is stale", async () => {
+    const portfolio = createPortfolio({ id: "p1", name: "Old School", kind: "Investment", initialCash: 100_000 });
+    const staleTrade = createTrade({
+      id: "stale-esrs-trade",
+      portfolioId: "p1",
+      ticker: "ESRS",
+      shares: 370,
+      entryPrice: 33.44,
+      executionDate: "2026-01-01",
+      executionTime: "10:00",
+    });
+    const base = createFakeRepositories({ portfolios: [portfolio], trades: [staleTrade] });
+    const rawTransactions = createFakeRawTransactionRepository();
+    const committedLedger = createFakeCommittedLedgerRepository();
+    const repos = { ...base, rawTransactions, committedLedger };
+
+    // Keep a stale legacy projection that still reports the buy as open.
+    await rawTransactions.append(createRawTransaction({
+      id: "esrs-invoice-buy",
+      kind: "BuyExecution",
+      source: "invoice",
+      portfolioId: "old-import",
+      ticker: "ESRS",
+      payload: { ticker: "ESRS", shares: 370, price: 33.44, executionDate: "2026-01-01", executionTime: "10:00" },
+    }));
+    await rawTransactions.append(createRawTransaction({
+      id: "esrs-invoice-sell",
+      kind: "SellExecution",
+      source: "invoice",
+      portfolioId: "old-import",
+      ticker: "ESRS",
+      payload: { ticker: "ESRS", shares: 370, price: 33.44, executionDate: "2026-02-01", executionTime: "10:00" },
+    }));
+    await rawTransactions.append(createRawTransaction({
+      id: "esrs-invoice-buy-assignment",
+      kind: "PortfolioAssignment",
+      source: "manual",
+      payload: { targetId: "esrs-invoice-buy", portfolioId: "p1" },
+    }));
+    await rawTransactions.append(createRawTransaction({
+      id: "esrs-invoice-sell-assignment",
+      kind: "PortfolioAssignment",
+      source: "manual",
+      payload: { targetId: "esrs-invoice-sell", portfolioId: "p1" },
+    }));
+
+    const positions = await computeCanonicalPositions(repos, "p1", {});
+    expect(positions.find((position) => position.ticker === "ESRS")).toBeUndefined();
   });
 
   it("a fully official broker round-trip disappears even when the committed ledger is stale and has no allocation decision", async () => {

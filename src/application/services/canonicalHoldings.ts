@@ -113,12 +113,31 @@ async function tryComputeCanonicalByTicker(
       // a closed ticker visible. We deliberately require the existing central
       // authority policy and sum only official facts to avoid counting a lower
       // authority shadow copy twice.
+      const liveExecutionFacts = rawForPortfolio.filter((t) => {
+        if (t.kind !== "BuyExecution" && t.kind !== "SellExecution") return false;
+        if (isRetracted(rawForPortfolio, t.id)) return false;
+        const resolvedTicker = resolveCurrentTicker(rawForPortfolio, t);
+        return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === ticker;
+      });
+      // Deterministic terminal rule: once the current fact log contains at
+      // least one buy and one sell for this portfolio/ticker and their live
+      // execution quantities net to zero, the position is closed regardless
+      // of source tier, missing allocation decisions, or a stale ledgerCache.
+      // This is the invariant the Holdings view must expose; an incomplete
+      // legacy projection must never resurrect a zero-share position.
+      const hasBuy = liveExecutionFacts.some((t) => t.kind === "BuyExecution");
+      const hasSell = liveExecutionFacts.some((t) => t.kind === "SellExecution");
+      const netShares = liveExecutionFacts.reduce((net, t) => {
+        const shares = (t.payload as { shares: number }).shares;
+        return net + (t.kind === "BuyExecution" ? shares : -shares);
+      }, 0);
+      if (hasBuy && hasSell && Math.abs(netShares) <= SHARE_TOLERANCE) {
+        canonicalByTicker.set(ticker, CLOSED);
+        continue;
+      }
+
       if (isTickerFullyOfficialBrokerExcelSourced(rawForPortfolio, ticker)) {
-        const officialExecutions = rawForPortfolio.filter((t) => {
-            if ((t.kind !== "BuyExecution" && t.kind !== "SellExecution") || t.source !== "official-broker-excel" || isRetracted(rawForPortfolio, t.id)) return false;
-            const resolvedTicker = resolveCurrentTicker(rawForPortfolio, t);
-            return resolvedTicker !== undefined && normalizeTicker(resolvedTicker) === ticker;
-          });
+        const officialExecutions = liveExecutionFacts.filter((t) => t.source === "official-broker-excel");
         if (officialExecutions.length > 0) {
           const officialNetShares = officialExecutions.reduce((net, t) => {
             const shares = (t.payload as { shares: number }).shares;
