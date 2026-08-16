@@ -63,6 +63,17 @@ describe("performanceCurve", () => {
     expect(curve[curve.length - 1].realizedReturnPct).toBe(10); // 100/1000, not 100/2000
   });
 
+  it("orders mixed 12-hour times chronologically and emits one final point per calendar day", () => {
+    const t1 = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
+    const a1 = makeAllocation({ tradeId: "t1", sharesClosed: 100, exitPrice: 11, executionDate: "2026-01-02", executionTime: "11:00AM" });
+    const t2 = makeTrade({ id: "t2", entryPrice: 10, shares: 100, executionDate: "2026-01-02", executionTime: "9:00AM" });
+
+    const curve = performanceCurve([t1, t2], [a1], [], "2026-01-02");
+
+    expect(curve.map((point) => point.date)).toEqual(["2026-01-01", "2026-01-02"]);
+    expect(curve.at(-1)?.realizedReturnPct).toBe(5); // 100 profit / 2000 peak capital, buy at 9AM before sell at 11AM
+  });
+
   it("does not append a duplicate point when a real event already lands on today", () => {
     const trade = makeTrade({ id: "t1", entryPrice: 10, shares: 100, executionDate: "2026-01-01" });
     const curve = performanceCurve([trade], [], [], "2026-01-01");

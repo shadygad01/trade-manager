@@ -44,6 +44,31 @@ interface DatedDelta {
  * closed lot (never a Sell's raw cash-in, which also returns the original
  * cost).
  */
+function timeToMinutes(raw: string): number | undefined {
+  const value = raw.trim();
+  const ampm = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(value);
+  if (ampm) {
+    let hour = Number(ampm[1]) % 12;
+    if (ampm[3].toUpperCase() === "PM") hour += 12;
+    return hour * 60 + Number(ampm[2]);
+  }
+  const plain = /^(\d{1,2}):(\d{2})$/.exec(value);
+  return plain ? Number(plain[1]) * 60 + Number(plain[2]) : undefined;
+}
+
+function compareDatedDeltas(a: DatedDelta, b: DatedDelta): number {
+  const dateCompare = a.date.slice(0, 10).localeCompare(b.date.slice(0, 10));
+  if (dateCompare !== 0) return dateCompare;
+  const aTime = a.date.slice(11);
+  const bTime = b.date.slice(11);
+  const aMinutes = timeToMinutes(aTime);
+  const bMinutes = timeToMinutes(bTime);
+  if (aMinutes !== undefined && bMinutes !== undefined && aMinutes !== bMinutes) return aMinutes - bMinutes;
+  if (aTime !== bTime) return aTime.localeCompare(bTime);
+  // On an exact timestamp tie, process cost releases before investments.
+  return (a.costReleased !== undefined ? 0 : 1) - (b.costReleased !== undefined ? 0 : 1);
+}
+
 function datedDeltas(trades: Trade[], allocations: TradeAllocation[], timelineEvents: TimelineEvent[]): DatedDelta[] {
   const tradesById = new Map(trades.map((t) => [t.id, t]));
   const deltas: DatedDelta[] = [];
@@ -71,15 +96,10 @@ function datedDeltas(trades: Trade[], allocations: TradeAllocation[], timelineEv
     }
   }
 
-  // On exact timestamp ties, process cost releases (sells) before investments
-  // (buys): a same-instant sell-then-buy is capital recycling, and counting the
-  // buy first would fabricate a moment where both positions were open at once,
-  // inflating the peak-capital denominator and understating return %s.
-  return deltas.sort(
-    (a, b) =>
-      a.date.localeCompare(b.date) ||
-      (a.costReleased !== undefined ? 0 : 1) - (b.costReleased !== undefined ? 0 : 1)
-  );
+  // Compare clock times numerically: lexical ordering puts "10:00AM" before
+  // "9:00AM", and mixing 12-hour broker times with 24-hour manual times can
+  // otherwise replay same-day events in the wrong order.
+  return deltas.sort(compareDatedDeltas);
 }
 
 /**
@@ -103,7 +123,11 @@ export function performanceCurve(
   let cumulativeDividend = 0;
   let openCost = 0;
   let peakCost = 0;
-  const points: PerformancePoint[] = [];
+  // Recharts uses a categorical X axis here. Multiple events on one calendar
+  // day therefore occupy the same X coordinate and draw artificial vertical
+  // spikes. Keep the final cumulative state for each day after replaying every
+  // event in its true chronological order.
+  const dailyPoints = new Map<string, PerformancePoint>();
 
   for (const delta of deltas) {
     if (delta.realizedPnl !== undefined) cumulativeRealized += delta.realizedPnl;
@@ -112,13 +136,14 @@ export function performanceCurve(
     if (delta.costReleased !== undefined) openCost -= delta.costReleased;
     peakCost = Math.max(peakCost, openCost);
 
-    points.push({
+    dailyPoints.set(delta.date.slice(0, 10), {
       date: delta.date.slice(0, 10),
       realizedReturnPct: peakCost > 0 ? (cumulativeRealized / peakCost) * 100 : 0,
       dividendReturnPct: peakCost > 0 ? (cumulativeDividend / peakCost) * 100 : 0,
     });
   }
 
+  const points = [...dailyPoints.values()];
   if (points.length === 0 || points[points.length - 1].date !== today) {
     points.push({
       date: today,
