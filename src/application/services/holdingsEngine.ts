@@ -1,20 +1,14 @@
 import { Money } from "@domain/value-objects/Money";
 import { normalizeTicker } from "@domain/value-objects/Ticker";
-import type { LedgerEvent, LotOpenedEvent } from "./ledgerEngine";
+import type { LedgerEvent, LotOpenedEvent, SellRecordedEvent } from "./ledgerEngine";
 import type { Allocation } from "./allocationEngine";
 
 /**
- * Holdings Engine: a per-ticker open-lot aggregate, computed fresh on every
- * call from the Ledger's LotOpened events and the Allocation Engine's
- * output — reusing TradeService.computePositions' exact formulas (cost
- * basis pro-rated by remaining/original shares, same Money arithmetic
- * throughout, same guarded division for avgCost/unrealizedPnlPct). No
- * persistence, no cache, by design (see the canonical-model spec's Holdings
- * Engine section): this reduce is O(open lots for one ticker), cheap enough
- * that caching it would just be duplicating work the Ledger/Allocation
- * caches already made cheap. If a measured bottleneck ever justifies a
- * cache later, it's a transparent, invalidate-on-commit read-through layer
- * added around this function — this function's contract never changes.
+ * Holdings Engine: a per-ticker open-lot aggregate, computed fresh from the
+ * canonical ledger. Explicit allocation decisions remain authoritative for
+ * lot choice. If a verified SellRecorded event has no usable allocation, the
+ * remaining shares are consumed deterministically FIFO so a closed position
+ * cannot survive merely because an allocation fact is missing or stale.
  */
 
 export interface OpenLot extends LotOpenedEvent {
@@ -33,17 +27,53 @@ export interface Holding {
   openLots: OpenLot[];
 }
 
-export function computeHoldings(ledgerEvents: LedgerEvent[], allocations: Allocation[], priceMap: Record<string, number>): Holding[] {
-  const closedByLot = new Map<string, number>();
-  for (const a of allocations) {
-    closedByLot.set(a.lotEventId, (closedByLot.get(a.lotEventId) ?? 0) + a.shares);
+function eventChronoKey(event: LedgerEvent): string {
+  return `${event.executionDate}T${event.executionTime ?? "00:00"}`;
+}
+
+function buildOpenLots(ledgerEvents: LedgerEvent[], allocations: Allocation[]): OpenLot[] {
+  const lots = ledgerEvents
+    .filter((event): event is LotOpenedEvent => event.type === "LotOpened")
+    .map((lot) => ({ ...lot, remainingShares: lot.shares }));
+  const lotById = new Map(lots.map((lot) => [lot.eventId, lot]));
+  const allocatedBySell = new Map<string, number>();
+
+  // Apply explicit decisions first. Clamp per-lot deductions so malformed or
+  // duplicated decisions cannot create negative inventory.
+  for (const allocation of allocations) {
+    const lot = lotById.get(allocation.lotEventId);
+    if (!lot) continue;
+    const deduction = Math.min(Math.max(allocation.shares, 0), lot.remainingShares);
+    lot.remainingShares -= deduction;
+    allocatedBySell.set(allocation.sellEventId, (allocatedBySell.get(allocation.sellEventId) ?? 0) + deduction);
   }
 
-  const openLots: OpenLot[] = ledgerEvents
-    .filter((e): e is LotOpenedEvent => e.type === "LotOpened")
-    .map((lot) => ({ ...lot, remainingShares: lot.shares - (closedByLot.get(lot.eventId) ?? 0) }))
-    .filter((lot) => lot.remainingShares > 0);
+  // Any verified sell not covered by a usable explicit decision is still an
+  // economic disposal. Consume only lots that existed when the sell happened,
+  // oldest first. This preserves explicit user choices while guaranteeing the
+  // invariant: open shares = max(0, buys - verified sells).
+  const sells = ledgerEvents
+    .filter((event): event is SellRecordedEvent => event.type === "SellRecorded")
+    .sort((a, b) => eventChronoKey(a).localeCompare(eventChronoKey(b)) || a.eventId.localeCompare(b.eventId));
+  for (const sell of sells) {
+    let remainingToAllocate = Math.max(0, sell.shares - (allocatedBySell.get(sell.eventId) ?? 0));
+    if (remainingToAllocate <= 0) continue;
+    const eligibleLots = lots
+      .filter((lot) => lot.remainingShares > 0 && eventChronoKey(lot) <= eventChronoKey(sell))
+      .sort((a, b) => eventChronoKey(a).localeCompare(eventChronoKey(b)) || a.eventId.localeCompare(b.eventId));
+    for (const lot of eligibleLots) {
+      if (remainingToAllocate <= 0) break;
+      const deduction = Math.min(lot.remainingShares, remainingToAllocate);
+      lot.remainingShares -= deduction;
+      remainingToAllocate -= deduction;
+    }
+  }
 
+  return lots.filter((lot) => lot.remainingShares > 1e-6);
+}
+
+export function computeHoldings(ledgerEvents: LedgerEvent[], allocations: Allocation[], priceMap: Record<string, number>): Holding[] {
+  const openLots = buildOpenLots(ledgerEvents, allocations);
   const byTicker = new Map<string, OpenLot[]>();
   for (const lot of openLots) {
     const ticker = normalizeTicker(lot.ticker);
@@ -54,16 +84,15 @@ export function computeHoldings(ledgerEvents: LedgerEvent[], allocations: Alloca
 
   const holdings: Holding[] = [];
   for (const [ticker, tickerLots] of byTicker) {
-    const totalShares = tickerLots.reduce((sum, l) => sum + l.remainingShares, 0);
+    const totalShares = tickerLots.reduce((sum, lot) => sum + lot.remainingShares, 0);
     const costBasis = Money.sum(
-      tickerLots.map((l) => Money.from(l.price * l.shares + (l.fees ?? 0) + (l.taxes ?? 0)).multiply(l.remainingShares / l.shares))
+      tickerLots.map((lot) => Money.from(lot.price * lot.shares + (lot.fees ?? 0) + (lot.taxes ?? 0)).multiply(lot.remainingShares / lot.shares))
     );
     const avgCost = totalShares > 0 ? costBasis.divide(totalShares).toNumber() : 0;
     const currentPrice = priceMap[ticker];
     const marketValue = currentPrice !== undefined ? totalShares * currentPrice : undefined;
     const unrealizedPnl = marketValue !== undefined ? marketValue - costBasis.toNumber() : undefined;
-    const unrealizedPnlPct =
-      unrealizedPnl !== undefined && costBasis.isPositive() ? (unrealizedPnl / costBasis.toNumber()) * 100 : undefined;
+    const unrealizedPnlPct = unrealizedPnl !== undefined && costBasis.isPositive() ? (unrealizedPnl / costBasis.toNumber()) * 100 : undefined;
 
     holdings.push({
       ticker,

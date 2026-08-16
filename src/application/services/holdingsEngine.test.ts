@@ -18,6 +18,19 @@ function lot(overrides: Partial<LotOpenedEvent> = {}): LotOpenedEvent {
   };
 }
 
+function sell(overrides: Partial<SellRecordedEvent> = {}): SellRecordedEvent {
+  return {
+    type: "SellRecorded",
+    eventId: "sell-1",
+    executionDate: "2026-02-01",
+    ticker: "COMI",
+    shares: 100,
+    price: 50,
+    sourceTransactionIds: ["raw-sell-1"],
+    ...overrides,
+  };
+}
+
 function allocation(overrides: Partial<Allocation> = {}): Allocation {
   return {
     id: "alloc-1",
@@ -49,6 +62,24 @@ describe("holdingsEngine.computeHoldings", () => {
   it("a fully closed lot (allocations consume every share) disappears from holdings entirely", () => {
     const holdings = computeHoldings([lot({ shares: 100 })], [allocation({ shares: 100 })], {});
     expect(holdings).toEqual([]);
+  });
+
+  it("guarantees a closed position disappears when verified sell shares equal buy shares even without an allocation decision", () => {
+    const holdings = computeHoldings([lot({ shares: 100 }), sell({ shares: 100 })], [], {});
+    expect(holdings).toEqual([]);
+  });
+
+  it("consumes an unallocated partial sell deterministically from the oldest eligible lot", () => {
+    const events: LedgerEvent[] = [
+      lot({ eventId: "lot-old", executionDate: "2026-01-01", shares: 60 }),
+      lot({ eventId: "lot-new", executionDate: "2026-01-10", shares: 60 }),
+      sell({ shares: 80, executionDate: "2026-02-01" }),
+    ];
+    const holdings = computeHoldings(events, [], {});
+    expect(holdings[0].totalShares).toBe(40);
+    expect(holdings[0].openLots).toHaveLength(1);
+    expect(holdings[0].openLots[0].eventId).toBe("lot-new");
+    expect(holdings[0].openLots[0].remainingShares).toBe(40);
   });
 
   it("pro-rates cost basis by remaining/original shares, including fees/taxes, exactly like TradeService.computePositions", () => {
