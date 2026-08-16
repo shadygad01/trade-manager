@@ -119,6 +119,7 @@ async function tryComputeCanonicalByTicker(
           unrealizedPnl: holding.unrealizedPnl,
           unrealizedPnlPct: holding.unrealizedPnlPct,
           openTrades: [],
+          openLotCount: holding.openLots.length,
         });
       } else {
         canonicalByTicker.set(ticker, CLOSED);
@@ -227,6 +228,7 @@ export async function computeCanonicalPositions(
         unrealizedPnl: canonical.unrealizedPnl,
         unrealizedPnlPct: canonical.unrealizedPnlPct,
         openTrades: [],
+        openLotCount: canonical.openLotCount,
         source: "canonical",
       });
     }

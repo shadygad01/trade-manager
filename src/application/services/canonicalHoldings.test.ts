@@ -96,7 +96,8 @@ describe("canonicalHoldings.computeCanonicalPositions — the production cutover
     const hrho = positions.find((p) => p.ticker === "HRHO")!;
     expect(hrho.source).toBe("canonical");
     expect(hrho.totalShares).toBe(80); // the canonical (fact-replay) number, trusted over the drifted legacy row
-    expect(hrho.openTrades).toEqual([]); // disclosed limitation: canonical has no Trade-shaped per-lot detail to offer
+    expect(hrho.openTrades).toEqual([]); // canonical has no Trade-shaped per-lot detail to offer
+    expect(hrho.openLotCount).toBe(1); // but canonical still knows the actual open-lot count
   });
 
   it("a PARTIALLY closed position shows the canonical partial share count, not the stale legacy one — the disagreement fix isn't just open-vs-closed", async () => {

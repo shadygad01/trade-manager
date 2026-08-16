@@ -434,7 +434,7 @@ export function PortfolioDetailPage() {
                         <span className="ms-1 text-xs opacity-80">({formatPercent(p.unrealizedPnlPct)})</span>
                       ) : null}
                     </td>
-                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-400">{p.openTrades.length}</td>
+                    <td className="px-4 py-2.5 text-end tabular-nums text-slate-400">{p.openLotCount ?? p.openTrades.length}</td>
                     <td className="px-4 py-2.5">
                       {pendingExecutionsByTicker.get(p.ticker)?.length ? (
                         <div className="flex flex-col gap-1.5">

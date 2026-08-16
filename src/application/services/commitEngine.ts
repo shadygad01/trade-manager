@@ -1,4 +1,4 @@
-import type { RawTransactionRepository, CommittedLedgerRepository, DiagnosticsRecorder } from "@domain/repositories";
+import type { RawTransactionRepository, CommittedLedgerRepository, DiagnosticsRecorder, PendingExecutionRepository } from "@domain/repositories";
 import type { Trade } from "@domain/entities/Trade";
 import {
   createRawTransaction,
@@ -44,6 +44,7 @@ import { parseTimeToMinutes, timesConflict } from "./duplicateDetection";
 export interface CommitEngineRepos {
   rawTransactions: RawTransactionRepository;
   committedLedger: CommittedLedgerRepository;
+  pendingExecutions?: PendingExecutionRepository;
 }
 
 /**
@@ -200,8 +201,10 @@ async function hasCompleteLegacyAllocationsForOfficialSells(
   portfolioId: string,
   ticker: string,
 ): Promise<boolean> {
-  if (!repos.allocations) return false;
+  if (!repos.allocations || !repos.pendingExecutions) return false;
   const normalized = normalizeTicker(ticker);
+  const pending = await repos.pendingExecutions.getByPortfolio(portfolioId);
+  if (pending.some((item) => normalizeTicker(item.ticker) === normalized && item.executionStatus !== "executed")) return false;
   const all = await repos.rawTransactions.getAll();
   const officialSells = all.filter((transaction): transaction is RawTransaction & { payload: SellExecutionPayload } => {
     if (transaction.kind !== "SellExecution" || transaction.source !== "official-broker-excel" || isRetracted(all, transaction.id)) return false;

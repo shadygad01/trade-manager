@@ -1424,6 +1424,8 @@ export interface PositionAggregate {
   unrealizedPnl?: number;
   unrealizedPnlPct?: number;
   openTrades: Trade[];
+  /** Number of open lots in the canonical replay when available; legacy positions derive it from openTrades. */
+  openLotCount?: number;
 }
 
 export async function computePositions(
@@ -1470,6 +1472,7 @@ export async function computePositions(
       unrealizedPnl,
       unrealizedPnlPct,
       openTrades: tickerTrades,
+      openLotCount: tickerTrades.length,
     });
   }
 
