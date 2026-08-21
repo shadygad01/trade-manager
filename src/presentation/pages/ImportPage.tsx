@@ -163,6 +163,53 @@ function retractRawTransactionKeys(keys: Iterable<string>) {
 }
 
 /**
+ * Same shadow-write discipline as retractRawTransactionKeys, but for a
+ * retraction (or provenance-upgrade swap) that belongs to a specific
+ * ticker and must never race that ticker's own in-flight commit. Real,
+ * reproduced bug this closes: the exact-duplicate auto-skip effect below
+ * reacts to `existingTrades` the instant commitTickerGroupLocked's own
+ * recordBuyBatch/recordSell writes land — several awaits before that same
+ * commit's trailing `commitTicker` call runs — so an UNRELATED pending
+ * candidate for the ticker just confirmed (one `inFlightKeys` never
+ * covered, because it was never part of that commit's own batch) could
+ * already look like a fresh duplicate and fire its own un-awaited
+ * `retractRawTransaction` right then. commitEngine.appendAndMaybeCommit's
+ * Retraction branch always reactively re-triggers `commitTicker` for the
+ * same ticker, unconditionally — landing concurrently with
+ * commitTickerGroupLocked's own explicit commit, both racing the SAME
+ * `ledgerProjection.ensureLegacyFactsExist` gap-backfill pass. Reproduced
+ * live (real Thndr "Your Orders" export, real browser session): two
+ * concurrent `commitTicker` calls for one ticker computed the same missing
+ * backfill fact, the loser's `rawTransactions.append` threw Dexie's "Key
+ * already exists in the object store" ConstraintError, and `commitTicker`
+ * silently skips legacy projection for that call on any such failure — the
+ * legacy Trade/TradeAllocation projection can then finish stale for that
+ * commit, exactly the "closed position still shows open" defect class this
+ * whole file has chased for multiple sprints (see docs/ROADMAP.md).
+ *
+ * Routed through the SAME per-(portfolio, ticker) `runSerialized` queue
+ * `commitTickerGroup` locks around its own commit: queued behind an
+ * in-flight commit for this ticker instead of firing during it, so the
+ * reactive re-commit it triggers always starts from state the ticker's own
+ * commit has already finished writing. `portfolioId` unresolved means
+ * nothing can be mid-commit for this ticker yet (commitTickerGroup itself
+ * requires a resolved portfolio), so it is safe to run immediately.
+ */
+function retractRawTransactionKeyForTicker(key: string, portfolioId: string | undefined, ticker: string): void {
+  const recordedRawFactKeys = new Set(importSession.getState().recordedRawFactKeys);
+  if (!recordedRawFactKeys.has(key)) return;
+  const run = () =>
+    retractRawTransaction(repos, key, undefined, diagnostics).catch((err) => {
+      console.error("retractRawTransaction failed (shadow write, non-fatal):", err);
+    });
+  if (portfolioId === undefined) {
+    void run();
+    return;
+  }
+  void runSerialized(`${portfolioId}|${normalizeTicker(ticker)}`, run);
+}
+
+/**
  * Guards the batch commit against a genuine race: two triggers (e.g. a
  * duplicate Confirm click, or a rename firing while a commit is already in
  * flight) could otherwise both see the same entry as "not yet added" and
@@ -549,7 +596,6 @@ export function ImportPage() {
     // kept reading "Needs broker screenshot" because the auto-skip always
     // retracted the newly-extracted, higher-authority fact and left the
     // older, lower-authority one as the ticker's only surviving evidence.
-    const plainRetractIds: string[] = [];
     for (const { e, m } of skipEntries) {
       const existingFact = findLiveExecutionFact(
         existingRawTransactions,
@@ -566,7 +612,10 @@ export function ImportPage() {
       const newSource = candidateSource(e.candidate);
       const upgrade = existingFact && higherAuthority(newSource, existingFact.source) === newSource;
       if (!upgrade) {
-        plainRetractIds.push(e.key);
+        // Ticker-scoped (not the bare retractRawTransactionKeys this file's
+        // OTHER skip/dismiss effects use) — see retractRawTransactionKeyForTicker's
+        // own doc comment for the exact race this closes.
+        retractRawTransactionKeyForTicker(e.key, resolvedPortfolioId(e.candidate.ticker), e.candidate.ticker);
         continue;
       }
       // The new fact must inherit the old one's CURRENT portfolio assignment
@@ -601,12 +650,17 @@ export function ImportPage() {
           await upgradeSellExecutionFact(repos, { oldFactId: existingFact!.id, newFactId: e.key });
         }
       };
-      upgradeFact().catch((err) => {
+      // Ticker-scoped for the same reason as the plain-retract branch above
+      // — an upgrade also ends with a retraction (or a decision re-point),
+      // which must never land mid-commit for this ticker either.
+      const upgradePortfolioId = resolvedPortfolioId(e.candidate.ticker);
+      const runUpgrade = () => upgradeFact().catch((err) => {
         console.error("provenance upgrade failed (shadow write, non-fatal):", err);
       });
+      if (upgradePortfolioId === undefined) void runUpgrade();
+      else void runSerialized(`${upgradePortfolioId}|${normalizeTicker(e.candidate.ticker)}`, runUpgrade);
     }
     importSession.update((prev) => ({ ...prev, skippedKeys: [...new Set([...prev.skippedKeys, ...keysToSkip])] }));
-    retractRawTransactionKeys(plainRetractIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     initialDataLoaded,
