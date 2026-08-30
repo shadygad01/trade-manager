@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-08-30T12:36:32.395Z",
+  "asOf": "2026-08-30T17:12:43.583Z",
   "prices": {
     "COMI": 138.1,
     "HRHO": 25.69,
@@ -21,7 +21,7 @@
     "CSAG": 39.84,
     "JUFO": 27.39,
     "EMFD": 12.7,
-    "ORAS": 843.89,
+    "ORAS": 840,
     "ARCC": 76.37,
     "ORHD": 42.1,
     "SUGR": 58.3,
@@ -131,7 +131,7 @@
       "source": "tradingview"
     },
     "ORAS": {
-      "price": 843.89,
+      "price": 840,
       "quotedAt": "2026-08-30T07:00:00.000Z",
       "source": "tradingview"
     },
