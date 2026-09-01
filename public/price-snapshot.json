@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-09-01T12:21:32.590Z",
+  "asOf": "2026-09-01T16:49:20.663Z",
   "prices": {
     "COMI": 139,
     "HRHO": 25.96,
@@ -11,7 +11,7 @@
     "AMOC": 13.25,
     "ORWE": 26.9,
     "EFIH": 22.98,
-    "CIEB": 25.12,
+    "CIEB": 25.38,
     "ADIB": 53.3,
     "SKPC": 17.8,
     "EKHO": 0.78,
@@ -81,7 +81,7 @@
       "source": "tradingview"
     },
     "CIEB": {
-      "price": 25.12,
+      "price": 25.38,
       "quotedAt": "2026-09-01T07:00:00.000Z",
       "source": "tradingview"
     },
