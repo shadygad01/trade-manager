@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-09-20T12:01:21.484Z",
+  "asOf": "2026-09-20T16:22:05.651Z",
   "prices": {
     "COMI": 133.69,
     "HRHO": 25.33,
@@ -11,19 +11,19 @@
     "AMOC": 14.09,
     "ORWE": 28.05,
     "EFIH": 23.25,
-    "CIEB": 25.49,
+    "CIEB": 25.56,
     "ADIB": 52.8,
     "SKPC": 18.55,
     "MFPC": 49.89,
     "ISPH": 12.12,
     "PHAR": 117.05,
     "CSAG": 38.33,
-    "JUFO": 26.9,
+    "JUFO": 26.99,
     "EMFD": 13.98,
     "ORAS": 855,
     "ARCC": 73.28,
     "ORHD": 42.5,
-    "SUGR": 59.62,
+    "SUGR": 59.88,
     "MASR": 7.73,
     "RMDA": 6.1,
     "FIRE": 4.72
@@ -80,7 +80,7 @@
       "source": "tradingview"
     },
     "CIEB": {
-      "price": 25.49,
+      "price": 25.56,
       "quotedAt": "2026-09-20T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -115,7 +115,7 @@
       "source": "tradingview"
     },
     "JUFO": {
-      "price": 26.9,
+      "price": 26.99,
       "quotedAt": "2026-09-20T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -140,7 +140,7 @@
       "source": "tradingview"
     },
     "SUGR": {
-      "price": 59.62,
+      "price": 59.88,
       "quotedAt": "2026-09-20T07:00:00.000Z",
       "source": "tradingview"
     },
