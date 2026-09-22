@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-09-22T12:21:23.298Z",
+  "asOf": "2026-09-22T17:08:18.410Z",
   "prices": {
     "COMI": 131.5,
     "HRHO": 24.6,
@@ -17,7 +17,7 @@
     "MFPC": 48.99,
     "ISPH": 12.2,
     "PHAR": 115.5,
-    "CSAG": 38.39,
+    "CSAG": 38.23,
     "JUFO": 27.01,
     "EMFD": 13.48,
     "ORAS": 841,
@@ -110,7 +110,7 @@
       "source": "tradingview"
     },
     "CSAG": {
-      "price": 38.39,
+      "price": 38.23,
       "quotedAt": "2026-09-22T07:00:00.000Z",
       "source": "tradingview"
     },
