@@ -1,162 +1,162 @@
 {
-  "asOf": "2026-09-24T17:44:45.616Z",
+  "asOf": "2026-09-27T12:46:21.806Z",
   "prices": {
-    "COMI": 128.2,
-    "HRHO": 24.3,
-    "TMGH": 91.8,
-    "SWDY": 118.5,
-    "EAST": 31.68,
-    "ETEL": 135.99,
-    "ABUK": 90.5,
-    "AMOC": 13.4,
-    "ORWE": 26.99,
-    "EFIH": 22.98,
-    "CIEB": 24.07,
-    "ADIB": 51,
-    "SKPC": 17.15,
-    "MFPC": 47,
-    "ISPH": 11.67,
-    "PHAR": 110.5,
-    "CSAG": 37.53,
-    "JUFO": 25.98,
-    "EMFD": 13.4,
-    "ORAS": 824,
-    "ARCC": 67,
-    "ORHD": 40.67,
-    "SUGR": 57.05,
-    "MASR": 7.45,
-    "RMDA": 5.77,
-    "FIRE": 4.29
+    "COMI": 128.74,
+    "HRHO": 23.65,
+    "TMGH": 90.4,
+    "SWDY": 113.45,
+    "EAST": 30.52,
+    "ETEL": 133,
+    "ABUK": 87.63,
+    "AMOC": 12.9,
+    "ORWE": 27.09,
+    "EFIH": 22.92,
+    "CIEB": 24.01,
+    "ADIB": 51.9,
+    "SKPC": 16.34,
+    "MFPC": 45,
+    "ISPH": 11.64,
+    "PHAR": 107,
+    "CSAG": 36.29,
+    "JUFO": 25.52,
+    "EMFD": 12.79,
+    "ORAS": 809,
+    "ARCC": 63.31,
+    "ORHD": 39.5,
+    "SUGR": 55.24,
+    "MASR": 7.15,
+    "RMDA": 5.41,
+    "FIRE": 4.18
   },
   "quotes": {
     "COMI": {
-      "price": 128.2,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 128.74,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "HRHO": {
-      "price": 24.3,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 23.65,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "TMGH": {
-      "price": 91.8,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 90.4,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "SWDY": {
-      "price": 118.5,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 113.45,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "EAST": {
-      "price": 31.68,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 30.52,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "ETEL": {
-      "price": 135.99,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 133,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "ABUK": {
-      "price": 90.5,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 87.63,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "AMOC": {
-      "price": 13.4,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 12.9,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "ORWE": {
-      "price": 26.99,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 27.09,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "EFIH": {
-      "price": 22.98,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 22.92,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "CIEB": {
-      "price": 24.07,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 24.01,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "ADIB": {
-      "price": 51,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 51.9,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "SKPC": {
-      "price": 17.15,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 16.34,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "MFPC": {
-      "price": 47,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 45,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "ISPH": {
-      "price": 11.67,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 11.64,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "PHAR": {
-      "price": 110.5,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 107,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "CSAG": {
-      "price": 37.53,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 36.29,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "JUFO": {
-      "price": 25.98,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 25.52,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "EMFD": {
-      "price": 13.4,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 12.79,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "ORAS": {
-      "price": 824,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 809,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "ARCC": {
-      "price": 67,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 63.31,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "ORHD": {
-      "price": 40.67,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 39.5,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "SUGR": {
-      "price": 57.05,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 55.24,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "MASR": {
-      "price": 7.45,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 7.15,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "RMDA": {
-      "price": 5.77,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 5.41,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     },
     "FIRE": {
-      "price": 4.29,
-      "quotedAt": "2026-09-24T07:00:00.000Z",
+      "price": 4.18,
+      "quotedAt": "2026-09-27T07:00:00.000Z",
       "source": "tradingview"
     }
   }
