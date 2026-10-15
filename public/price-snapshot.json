@@ -1,162 +1,162 @@
 {
-  "asOf": "2026-10-14T17:47:11.876Z",
+  "asOf": "2026-10-15T12:27:42.065Z",
   "prices": {
-    "COMI": 122,
-    "HRHO": 25.36,
-    "TMGH": 83.94,
-    "SWDY": 114,
-    "EAST": 27.77,
-    "ETEL": 145,
-    "ABUK": 84.34,
-    "AMOC": 13.56,
-    "ORWE": 27.26,
-    "EFIH": 23.84,
-    "CIEB": 22.98,
-    "ADIB": 46.76,
-    "SKPC": 15.27,
-    "MFPC": 44.01,
-    "ISPH": 11.13,
-    "PHAR": 107.24,
-    "CSAG": 35.86,
-    "JUFO": 24.27,
-    "EMFD": 11.97,
-    "ORAS": 907,
-    "ARCC": 66.95,
-    "ORHD": 11,
-    "SUGR": 54.65,
-    "MASR": 7.3,
-    "RMDA": 5.21,
-    "FIRE": 4.12
+    "COMI": 125,
+    "HRHO": 25.79,
+    "TMGH": 84.75,
+    "SWDY": 113.08,
+    "EAST": 29.3,
+    "ETEL": 145.4,
+    "ABUK": 87.68,
+    "AMOC": 13.48,
+    "ORWE": 27.71,
+    "EFIH": 24.34,
+    "CIEB": 22.99,
+    "ADIB": 47.02,
+    "SKPC": 15.26,
+    "MFPC": 43.91,
+    "ISPH": 11.27,
+    "PHAR": 107.6,
+    "CSAG": 36.17,
+    "JUFO": 24.43,
+    "EMFD": 12.09,
+    "ORAS": 895,
+    "ARCC": 66.92,
+    "ORHD": 10.71,
+    "SUGR": 58.5,
+    "MASR": 7.46,
+    "RMDA": 5.14,
+    "FIRE": 3.97
   },
   "quotes": {
     "COMI": {
-      "price": 122,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 125,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "HRHO": {
-      "price": 25.36,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 25.79,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "TMGH": {
-      "price": 83.94,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 84.75,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "SWDY": {
-      "price": 114,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 113.08,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "EAST": {
-      "price": 27.77,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 29.3,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "ETEL": {
-      "price": 145,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 145.4,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "ABUK": {
-      "price": 84.34,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 87.68,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "AMOC": {
-      "price": 13.56,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 13.48,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "ORWE": {
-      "price": 27.26,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 27.71,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "EFIH": {
-      "price": 23.84,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 24.34,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "CIEB": {
-      "price": 22.98,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 22.99,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "ADIB": {
-      "price": 46.76,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 47.02,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "SKPC": {
-      "price": 15.27,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 15.26,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "MFPC": {
-      "price": 44.01,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 43.91,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "ISPH": {
-      "price": 11.13,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 11.27,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "PHAR": {
-      "price": 107.24,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 107.6,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "CSAG": {
-      "price": 35.86,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 36.17,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "JUFO": {
-      "price": 24.27,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 24.43,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "EMFD": {
-      "price": 11.97,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 12.09,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "ORAS": {
-      "price": 907,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 895,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "ARCC": {
-      "price": 66.95,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 66.92,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "ORHD": {
-      "price": 11,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 10.71,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "SUGR": {
-      "price": 54.65,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 58.5,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "MASR": {
-      "price": 7.3,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 7.46,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "RMDA": {
-      "price": 5.21,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 5.14,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     },
     "FIRE": {
-      "price": 4.12,
-      "quotedAt": "2026-10-14T07:00:00.000Z",
+      "price": 3.97,
+      "quotedAt": "2026-10-15T07:00:00.000Z",
       "source": "tradingview"
     }
   }
