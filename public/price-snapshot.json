@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-10-20T12:32:13.285Z",
+  "asOf": "2026-10-20T17:46:39.291Z",
   "prices": {
     "COMI": 125.9,
     "HRHO": 25.01,
@@ -23,10 +23,10 @@
     "ORAS": 870,
     "ARCC": 67.39,
     "ORHD": 10.3,
-    "SUGR": 56.99,
+    "SUGR": 56.21,
     "MASR": 7.11,
     "RMDA": 5.2,
-    "FIRE": 4.1
+    "FIRE": 4.13
   },
   "quotes": {
     "COMI": {
@@ -140,7 +140,7 @@
       "source": "tradingview"
     },
     "SUGR": {
-      "price": 56.99,
+      "price": 56.21,
       "quotedAt": "2026-10-20T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -155,7 +155,7 @@
       "source": "tradingview"
     },
     "FIRE": {
-      "price": 4.1,
+      "price": 4.13,
       "quotedAt": "2026-10-20T07:00:00.000Z",
       "source": "tradingview"
     }
