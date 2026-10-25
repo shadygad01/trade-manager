@@ -1,5 +1,5 @@
 {
-  "asOf": "2026-10-25T12:20:40.455Z",
+  "asOf": "2026-10-25T16:41:12.750Z",
   "prices": {
     "COMI": 122.03,
     "HRHO": 23.99,
@@ -11,7 +11,7 @@
     "AMOC": 12.94,
     "ORWE": 23.71,
     "EFIH": 20.75,
-    "CIEB": 21.41,
+    "CIEB": 21.42,
     "ADIB": 45.1,
     "SKPC": 14.26,
     "MFPC": 47.2,
@@ -26,7 +26,7 @@
     "SUGR": 51,
     "MASR": 5.9,
     "RMDA": 4.65,
-    "FIRE": 4.11
+    "FIRE": 4.09
   },
   "quotes": {
     "COMI": {
@@ -80,7 +80,7 @@
       "source": "tradingview"
     },
     "CIEB": {
-      "price": 21.41,
+      "price": 21.42,
       "quotedAt": "2026-10-25T07:00:00.000Z",
       "source": "tradingview"
     },
@@ -155,7 +155,7 @@
       "source": "tradingview"
     },
     "FIRE": {
-      "price": 4.11,
+      "price": 4.09,
       "quotedAt": "2026-10-25T07:00:00.000Z",
       "source": "tradingview"
     }
