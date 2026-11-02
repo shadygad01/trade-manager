@@ -1,162 +1,162 @@
 {
-  "asOf": "2026-11-01T14:02:41.230Z",
+  "asOf": "2026-11-02T16:49:48.022Z",
   "prices": {
-    "COMI": 118,
-    "HRHO": 23.15,
-    "TMGH": 79.5,
-    "SWDY": 110.41,
-    "EAST": 31.99,
-    "ETEL": 117.82,
-    "ABUK": 84.55,
-    "AMOC": 14.31,
-    "ORWE": 25,
+    "COMI": 121.4,
+    "HRHO": 22.36,
+    "TMGH": 78,
+    "SWDY": 108.4,
+    "EAST": 30.15,
+    "ETEL": 121.45,
+    "ABUK": 80.6,
+    "AMOC": 13.65,
+    "ORWE": 24.2,
     "EFIH": 23,
-    "CIEB": 22.64,
-    "ADIB": 47.9,
-    "SKPC": 15.01,
-    "MFPC": 44,
-    "ISPH": 9.5,
-    "PHAR": 99.5,
-    "CSAG": 33.49,
-    "JUFO": 22.52,
+    "CIEB": 21.97,
+    "ADIB": 46.25,
+    "SKPC": 14.61,
+    "MFPC": 41.3,
+    "ISPH": 9.14,
+    "PHAR": 95.11,
+    "CSAG": 33.22,
+    "JUFO": 22.77,
     "EMFD": 11.92,
-    "ORAS": 811.02,
-    "ARCC": 63.61,
-    "ORHD": 9.67,
-    "SUGR": 48.58,
-    "MASR": 6.7,
-    "RMDA": 5.02,
-    "FIRE": 4.02
+    "ORAS": 781,
+    "ARCC": 62.6,
+    "ORHD": 9.5,
+    "SUGR": 48,
+    "MASR": 6.48,
+    "RMDA": 5,
+    "FIRE": 3.96
   },
   "quotes": {
     "COMI": {
-      "price": 118,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 121.4,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "HRHO": {
-      "price": 23.15,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 22.36,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "TMGH": {
-      "price": 79.5,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 78,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "SWDY": {
-      "price": 110.41,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 108.4,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "EAST": {
-      "price": 31.99,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 30.15,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "ETEL": {
-      "price": 117.82,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 121.45,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "ABUK": {
-      "price": 84.55,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 80.6,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "AMOC": {
-      "price": 14.31,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 13.65,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "ORWE": {
-      "price": 25,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 24.2,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "EFIH": {
       "price": 23,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "CIEB": {
-      "price": 22.64,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 21.97,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "ADIB": {
-      "price": 47.9,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 46.25,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "SKPC": {
-      "price": 15.01,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 14.61,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "MFPC": {
-      "price": 44,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 41.3,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "ISPH": {
-      "price": 9.5,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 9.14,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "PHAR": {
-      "price": 99.5,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 95.11,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "CSAG": {
-      "price": 33.49,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 33.22,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "JUFO": {
-      "price": 22.52,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 22.77,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "EMFD": {
       "price": 11.92,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "ORAS": {
-      "price": 811.02,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 781,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "ARCC": {
-      "price": 63.61,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 62.6,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "ORHD": {
-      "price": 9.67,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 9.5,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "SUGR": {
-      "price": 48.58,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 48,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "MASR": {
-      "price": 6.7,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 6.48,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "RMDA": {
-      "price": 5.02,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 5,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     },
     "FIRE": {
-      "price": 4.02,
-      "quotedAt": "2026-11-01T08:00:00.000Z",
+      "price": 3.96,
+      "quotedAt": "2026-11-02T08:00:00.000Z",
       "source": "tradingview"
     }
   }
